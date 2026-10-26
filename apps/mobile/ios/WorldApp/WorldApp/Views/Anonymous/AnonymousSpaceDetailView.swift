@@ -311,21 +311,6 @@ struct AnonymousSpaceDetailView: View {
     }
 }
 
-private struct AnonymousPhotoClipModifier: ViewModifier {
-    var clip: Bool
-    var cornerRadius: CGFloat
-
-    func body(content: Content) -> some View {
-        if clip {
-            content
-                .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        } else {
-            content
-        }
-    }
-}
-
 /// Full-width Reddit-scale post card — Matterya paper/serif + heart engagement.
 struct AnonymousPostCard: View {
     enum Style {
@@ -387,7 +372,7 @@ struct AnonymousPostCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Meta · title · body — padded. Media is full-bleed so sides never crop.
+            // Meta · title · body — padded. Media is full-bleed width-fit (never side-crop).
             VStack(alignment: .leading, spacing: 12) {
                 // Meta row — community · author · time · ⋯
                 // Only official Matterya keeps an avatar in Masquerade; everyone else is @username.
@@ -402,13 +387,17 @@ struct AnonymousPostCard: View {
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(Theme.ink)
                                     .lineLimit(1)
+                                    .truncationMode(.tail)
                             }
                             .buttonStyle(.plain)
+                            .layoutPriority(1)
                         } else {
                             Text(space)
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(Theme.ink)
                                 .lineLimit(1)
+                                .truncationMode(.tail)
+                                .layoutPriority(1)
                         }
                         Text("·")
                             .font(.caption)
@@ -428,23 +417,27 @@ struct AnonymousPostCard: View {
                                 .font(.subheadline)
                                 .foregroundStyle(Theme.inkMuted)
                                 .lineLimit(1)
+                                .truncationMode(.tail)
                         }
                         .buttonStyle(.plain)
+                        .layoutPriority(1)
                         .accessibilityLabel("Open @\(post.authorUsername)")
                     }
                     Spacer(minLength: 4)
                     Text(RelativeTime.format(post.createdAt))
                         .font(.caption)
                         .foregroundStyle(Theme.inkMuted)
+                        .layoutPriority(2)
                     postOverflowMenu
                 }
+                .frame(minWidth: 0, maxWidth: .infinity)
 
                 if let title = post.displayTitle, !title.isEmpty {
                     Text(title)
                         .font(.system(size: 22, weight: .regular, design: .serif))
                         .foregroundStyle(Theme.ink)
                         .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -455,7 +448,7 @@ struct AnonymousPostCard: View {
                         color: Theme.inkSecondary,
                         lineLimit: style == .thread ? nil : Self.feedLineLimit
                     )
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
 
                     if showsSeeMore {
@@ -472,9 +465,11 @@ struct AnonymousPostCard: View {
                 }
             }
             .padding(.horizontal, Theme.pagePadding)
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
 
             mediaBlock
                 .padding(.horizontal, style == .feed ? 0 : Theme.pagePadding)
+                .frame(minWidth: 0, maxWidth: .infinity)
                 .onAppear {
                     // Tease only — feed list owns comment prefetch (keeps scroll light).
                     refreshCommentTease()
@@ -556,9 +551,10 @@ struct AnonymousPostCard: View {
             }
         }
         .padding(.vertical, 16)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // LazyVStack can propose unbounded width — without minWidth:0 the card
+        // grows past the screen and a parent clip cuts text + photos from the sides.
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .background(Theme.surface)
-        .clipped()
         .zIndex(isPhotoPinching ? 80 : 0)
         .fullScreenCover(isPresented: $showPhotoLightbox) {
             if let url = post.mediaURLValue {
@@ -641,37 +637,41 @@ struct AnonymousPostCard: View {
     @ViewBuilder
     private var mediaBlock: some View {
         if post.hasImage, let url = post.mediaURLValue {
-            // Feed-list decode budget — pinch + lightbox use sharper decode.
+            // Full-bleed width + .fit inside a height-capped box — letterbox top/bottom
+            // on tall shots; never crop left/right (maxHeight+.clipped was the side crop).
             let listPx: CGFloat = style == .thread ? 900 : 720
-            FeedPinchZoomPhoto(
-                url: url,
-                maxPixelSize: listPx,
-                contentMode: .fit,
-                placeholder: AnyView(
-                    Rectangle()
-                        .fill(Theme.canvasMuted)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 180)
-                        .overlay {
-                            ProgressView()
-                                .tint(Theme.inkMuted)
-                        }
-                ),
-                onZoomingChanged: { zooming in
-                    isPhotoPinching = zooming
-                },
-                onTap: {
-                    showPhotoLightbox = true
-                }
-            )
+            let maxH: CGFloat = style == .thread ? 560 : FacebookMediaLayout.maxFeedMediaHeight
+            let corner: CGFloat = style == .feed ? 0 : 10
+            GeometryReader { geo in
+                let w = max(1, geo.size.width)
+                let h = max(1, geo.size.height)
+                FeedPinchZoomPhoto(
+                    url: url,
+                    maxPixelSize: listPx,
+                    contentMode: .fit,
+                    placeholder: AnyView(
+                        Rectangle()
+                            .fill(Theme.canvasMuted)
+                            .overlay {
+                                ProgressView()
+                                    .tint(Theme.inkMuted)
+                            }
+                    ),
+                    onZoomingChanged: { zooming in
+                        isPhotoPinching = zooming
+                    },
+                    onTap: {
+                        showPhotoLightbox = true
+                    }
+                )
+                .frame(width: w, height: h)
+            }
             .frame(maxWidth: .infinity)
-            .frame(maxHeight: isPhotoPinching ? nil : (style == .thread ? 520 : 440), alignment: .center)
-            .modifier(AnonymousPhotoClipModifier(
-                clip: !isPhotoPinching,
-                cornerRadius: style == .feed ? 0 : 10
-            ))
+            .frame(height: isPhotoPinching ? maxH + 80 : maxH)
+            .background(Theme.canvasMuted)
+            .clipShape(RoundedRectangle(cornerRadius: isPhotoPinching ? 0 : corner, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: style == .feed ? 0 : 10, style: .continuous)
+                RoundedRectangle(cornerRadius: corner, style: .continuous)
                     .stroke(Theme.border.opacity(style == .feed ? 0 : 0.7), lineWidth: 0.5)
             )
         } else if post.hasVideo, let url = post.mediaURLValue {

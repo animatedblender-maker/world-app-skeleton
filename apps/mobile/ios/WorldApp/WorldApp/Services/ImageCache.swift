@@ -203,9 +203,13 @@ final class ImageCache: @unchecked Sendable {
             let isPhoto = PlayPlatformBridge.isWrittenHomePost(post)
                 && !post.hasVideo
                 && post.feedImageURL != nil
-            if isPhoto, let url = post.feedImageURL, MediaURLResolver.isUsablePosterURL(url) {
-                photoURLs.append(url)
-                continue
+            if isPhoto {
+                let gallery = post.feedImageURLs.filter { MediaURLResolver.isUsablePosterURL($0) }
+                if !gallery.isEmpty {
+                    // Prefetch first few gallery pages so swipe feels instant.
+                    photoURLs.append(contentsOf: gallery.prefix(4))
+                    continue
+                }
             }
             let candidates = [
                 MediaURLResolver.hubsListPosterURL(for: post),
@@ -662,6 +666,9 @@ struct FeedPinchZoomPhoto: View {
                 contentMode: contentMode,
                 placeholder: placeholder
             )
+            // Lock to the proposed box so .fit letterboxes instead of overflowing
+            // and getting side-clipped by a parent.
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .scaleEffect(scale)
             .offset(offset)
             .allowsHitTesting(false)
