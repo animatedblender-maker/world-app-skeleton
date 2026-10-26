@@ -55,6 +55,8 @@ final class AnonymousStore {
     var feedHasMore = true
     /// Posts already painted this Masquerade session — refresh/load-more prefer unseen.
     private var sessionSeenFeedIds: Set<String> = []
+    /// Last open's For you head — demoted on the next refresh so viral cards don't stick.
+    private let lastFeedHeadKey = "matterya.anonymous.feed.lastHead.v1"
     /// Coalesce bootstrap + Feed tab `.task` so Masquerade doesn't double-hit `/feed`.
     private var feedLoadTask: Task<Void, Never>?
 
@@ -696,9 +698,29 @@ final class AnonymousStore {
             for item in page.items {
                 postById[item.id] = item
             }
-            // Prefer never-seen this session; fall back to full page when inventory is thin.
-            let fresh = page.items.filter { !sessionSeenFeedIds.contains($0.id) }
-            let preferred = fresh.count >= min(8, page.items.count) ? fresh : page.items
+            // Prefer never-seen this session / last open's head. Falling back to the full
+            // page re-stuck the same 98k-upvote viral card at index 0 every refresh.
+            let lastHead = Set(UserDefaults.standard.stringArray(forKey: lastFeedHeadKey) ?? [])
+            let suppress = sessionSeenFeedIds.union(lastHead)
+            let fresh = page.items.filter { !suppress.contains($0.id) }
+            let preferred: [AnonymousPost]
+            if fresh.count >= min(6, max(1, page.items.count / 2)) {
+                preferred = fresh
+            } else if !fresh.isEmpty {
+                // Keep fresh at the front; top up from session-unseen only.
+                var seen = Set(fresh.map(\.id))
+                var mixed = fresh
+                for item in page.items where !sessionSeenFeedIds.contains(item.id) && seen.insert(item.id).inserted {
+                    mixed.append(item)
+                    if mixed.count >= page.items.count { break }
+                }
+                preferred = mixed.isEmpty ? page.items : mixed
+            } else {
+                // Everything already seen — still demote last head to the tail.
+                let head = page.items.filter { lastHead.contains($0.id) }
+                let rest = page.items.filter { !lastHead.contains($0.id) }
+                preferred = rest + head
+            }
             var merged = mergeOwnRecentPosts(into: preferred)
             // Never let a thin ranked page wipe a healthy feed (ledger exhaustion).
             if merged.count < 6, feed.count > merged.count {
@@ -712,6 +734,7 @@ final class AnonymousStore {
             for item in merged {
                 sessionSeenFeedIds.insert(item.id)
             }
+            rememberFeedHead(merged)
             withAnimation(MatteryaMotion.insert) {
                 feed = merged
                 feedCursor = page.nextCursor
@@ -985,12 +1008,28 @@ final class AnonymousStore {
         return posts
     }
 
-    /// Keep the viewer's freshly published posts at the top after a ranked refresh.
+    /// Keep the viewer's freshly published posts near the top for a short window only.
+    /// Longer sticky own-posts were freezing For you under the algorithm.
+    private static let ownRecentPinMaxAge: TimeInterval = 2 * 60 * 60
+
+    private func rememberFeedHead(_ posts: [AnonymousPost]) {
+        let ids = Array(posts.prefix(12).map(\.id))
+        guard !ids.isEmpty else { return }
+        var merged = ids
+        for old in UserDefaults.standard.stringArray(forKey: lastFeedHeadKey) ?? [] where !merged.contains(old) {
+            merged.append(old)
+            if merged.count >= 48 { break }
+        }
+        UserDefaults.standard.set(Array(merged.prefix(48)), forKey: lastFeedHeadKey)
+    }
+
     private func mergeOwnRecentPosts(into items: [AnonymousPost]) -> [AnonymousPost] {
         let ownIds = Set(ownRecentPostIds())
         guard !ownIds.isEmpty else { return items }
         let blobs = Dictionary(uniqueKeysWithValues: loadOwnRecentPostBlobs().map { ($0.id, $0) })
+        let now = Date()
         var kept: [AnonymousPost] = []
+        var expiredIds: [String] = []
         for id in ownRecentPostIds() {
             let hit =
                 postById[id]
@@ -998,7 +1037,15 @@ final class AnonymousStore {
                 ?? spacePosts.first(where: { $0.id == id })
                 ?? items.first(where: { $0.id == id })
                 ?? blobs[id]
-            guard var post = hit else { continue }
+            guard var post = hit else {
+                expiredIds.append(id)
+                continue
+            }
+            if let created = RelativeTime.parseDate(post.createdAt),
+               now.timeIntervalSince(created) > Self.ownRecentPinMaxAge {
+                expiredIds.append(id)
+                continue
+            }
             // Prefer any non-empty media we still hold locally.
             if (post.mediaURL == nil || post.mediaURL?.isEmpty == true),
                let blob = blobs[id],
@@ -1009,8 +1056,19 @@ final class AnonymousStore {
             }
             postById[post.id] = post
             kept.append(post)
+            if kept.count >= 1 { break }
         }
-        let rest = items.filter { !ownIds.contains($0.id) }
+        if !expiredIds.isEmpty {
+            var ids = ownRecentPostIds().filter { !expiredIds.contains($0) }
+            UserDefaults.standard.set(ids, forKey: ownRecentPostIdsKey)
+            let alive = Set(ids)
+            let pruned = loadOwnRecentPostBlobs().filter { alive.contains($0.id) }
+            if let data = try? JSONEncoder().encode(pruned) {
+                UserDefaults.standard.set(data, forKey: ownRecentPostsBlobKey)
+            }
+        }
+        let pinnedIds = Set(kept.map(\.id))
+        let rest = items.filter { !pinnedIds.contains($0.id) }
         return kept + rest
     }
 

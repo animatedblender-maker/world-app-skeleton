@@ -362,87 +362,94 @@ struct AnonymousPostCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Meta row — community · author · time · ⋯
-            // Only official Matterya keeps an avatar in Masquerade; everyone else is @username.
-            HStack(spacing: 6) {
-                if isOfficialMatteryaAuthor {
-                    AvatarView(url: nil, seed: "matterya", size: 22)
-                }
-                if let space = spaceLabel {
-                    if let onOpenSpace {
-                        Button(action: onOpenSpace) {
+            // Meta · title · body — padded. Media is full-bleed so sides never crop.
+            VStack(alignment: .leading, spacing: 12) {
+                // Meta row — community · author · time · ⋯
+                // Only official Matterya keeps an avatar in Masquerade; everyone else is @username.
+                HStack(spacing: 6) {
+                    if isOfficialMatteryaAuthor {
+                        AvatarView(url: nil, seed: "matterya", size: 22)
+                    }
+                    if let space = spaceLabel {
+                        if let onOpenSpace {
+                            Button(action: onOpenSpace) {
+                                Text(space)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(Theme.ink)
+                                    .lineLimit(1)
+                            }
+                            .buttonStyle(.plain)
+                        } else {
                             Text(space)
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(Theme.ink)
                                 .lineLimit(1)
                         }
-                        .buttonStyle(.plain)
-                    } else {
-                        Text(space)
+                        Text("·")
+                            .font(.caption)
+                            .foregroundStyle(Theme.inkMuted)
+                    }
+                    if isOfficialMatteryaAuthor {
+                        Text("Matterya")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Theme.ink)
                             .lineLimit(1)
+                        MatteryaVerifiedBadge(size: 13)
+                    } else {
+                        Button {
+                            store.pushProfile(username: post.authorUsername)
+                        } label: {
+                            Text("@\(post.authorUsername)")
+                                .font(.subheadline)
+                                .foregroundStyle(Theme.inkMuted)
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Open @\(post.authorUsername)")
                     }
-                    Text("·")
+                    Spacer(minLength: 4)
+                    Text(RelativeTime.format(post.createdAt))
                         .font(.caption)
                         .foregroundStyle(Theme.inkMuted)
+                    postOverflowMenu
                 }
-                if isOfficialMatteryaAuthor {
-                    Text("Matterya")
-                        .font(.subheadline.weight(.semibold))
+
+                if let title = post.displayTitle, !title.isEmpty {
+                    Text(title)
+                        .font(.system(size: 22, weight: .regular, design: .serif))
                         .foregroundStyle(Theme.ink)
-                        .lineLimit(1)
-                    MatteryaVerifiedBadge(size: 13)
-                } else {
-                    Button {
-                        store.pushProfile(username: post.authorUsername)
-                    } label: {
-                        Text("@\(post.authorUsername)")
-                            .font(.subheadline)
-                            .foregroundStyle(Theme.inkMuted)
-                            .lineLimit(1)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Open @\(post.authorUsername)")
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer(minLength: 4)
-                Text(RelativeTime.format(post.createdAt))
-                    .font(.caption)
-                    .foregroundStyle(Theme.inkMuted)
-                postOverflowMenu
-            }
 
-            if let title = post.displayTitle, !title.isEmpty {
-                Text(title)
-                    .font(.system(size: 22, weight: .regular, design: .serif))
-                    .foregroundStyle(Theme.ink)
-                    .multilineTextAlignment(.leading)
+                if !bodyText.isEmpty {
+                    MatteryaRichText(
+                        text: bodyText,
+                        font: .body,
+                        color: Theme.inkSecondary,
+                        lineLimit: style == .thread ? nil : Self.feedLineLimit
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
-            }
 
-            if !bodyText.isEmpty {
-                MatteryaRichText(
-                    text: bodyText,
-                    font: .body,
-                    color: Theme.inkSecondary,
-                    lineLimit: style == .thread ? nil : Self.feedLineLimit
-                )
-                .fixedSize(horizontal: false, vertical: true)
-
-                if showsSeeMore {
-                    Button {
-                        onOpenPost?()
-                    } label: {
-                        Text("See more")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Theme.ink)
+                    if showsSeeMore {
+                        Button {
+                            onOpenPost?()
+                        } label: {
+                            Text("See more")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.ink)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, -4)
                     }
-                    .buttonStyle(.plain)
-                    .padding(.top, -4)
                 }
             }
+            .padding(.horizontal, Theme.pagePadding)
 
             mediaBlock
+                .padding(.horizontal, style == .feed ? 0 : Theme.pagePadding)
                 .onAppear {
                     // Prefetch first page so opening the post never shows a comments spinner.
                     AnonymousCommentsWarmCache.shared.warm(post.id)
@@ -486,11 +493,12 @@ struct AnonymousPostCard: View {
                         .foregroundStyle(Theme.inkMuted)
                 }
             }
+            .padding(.horizontal, Theme.pagePadding)
         }
-        .padding(.horizontal, Theme.pagePadding)
         .padding(.vertical, 18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.surface)
+        .clipped()
         .overlay(alignment: .bottom) {
             if style == .feed {
                 Theme.divider.frame(height: 0.5)
@@ -548,6 +556,8 @@ struct AnonymousPostCard: View {
         if post.hasImage, let url = post.mediaURLValue {
             // Feed-list decode budget — 1080px bitmaps made Masquerade scroll laggy.
             let listPx: CGFloat = style == .thread ? 900 : 540
+            // Width-first fit — maxHeight+clip was cropping landscape photos from the sides.
+            // Button labels often ignore flexible width; use plain tap instead.
             let image = CachedAsyncImage(
                 url: url,
                 maxPixelSize: listPx,
@@ -555,6 +565,7 @@ struct AnonymousPostCard: View {
                 placeholder: AnyView(
                     Rectangle()
                         .fill(Theme.canvasMuted)
+                        .frame(maxWidth: .infinity)
                         .frame(height: 180)
                         .overlay {
                             ProgressView()
@@ -567,16 +578,18 @@ struct AnonymousPostCard: View {
                 }
             )
             .frame(maxWidth: .infinity)
-            .frame(maxHeight: style == .thread ? 440 : 360)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .frame(maxHeight: style == .thread ? 480 : 420, alignment: .center)
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: style == .feed ? 0 : 10, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Theme.border.opacity(0.7), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: style == .feed ? 0 : 10, style: .continuous)
+                    .stroke(Theme.border.opacity(style == .feed ? 0 : 0.7), lineWidth: 0.5)
             )
 
             if let onOpenPost, style == .feed {
-                Button(action: onOpenPost) { image }
-                    .buttonStyle(.plain)
+                image
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onOpenPost)
             } else {
                 image
             }

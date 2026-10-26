@@ -136,28 +136,38 @@ export async function getFeed(opts: {
   );
 
   // First For you page: also sample older inventory so ledger can serve beyond the newest slice.
+  // Do NOT order explore by raw Reddit score — 50k–100k viral posts otherwise re-flood every page.
   let rows = recentRows as any[];
   if (isForYou && !cursorCreatedAt && recentRows.length) {
     const oldest = recentRows[recentRows.length - 1]?.created_at;
     if (oldest) {
       const exploreLimit = Math.min(240, fetchLimit);
+      const half = Math.max(40, Math.floor(exploreLimit / 2));
       try {
-        const { rows: older } = await pool.query<any>(
+        const { rows: olderHot } = await pool.query<any>(
           `
           ${FEED_SELECT}
             and p.created_at < $2::timestamptz
-          order by (p.score + coalesce(p.comment_count, 0) * 2) desc, p.created_at desc
+          order by ln(2 + greatest(p.score, 0)) desc, p.created_at desc
           limit $3
           `,
-          [opts.profile.id, oldest, exploreLimit]
+          [opts.profile.id, oldest, half]
         );
-        if (older.length) {
-          const seen = new Set(rows.map((r: any) => String(r.id)));
-          for (const r of older) {
-            if (seen.has(String(r.id))) continue;
-            seen.add(String(r.id));
-            rows.push(r);
-          }
+        // TABLESAMPLE-ish via random offset into older inventory (avoids same viral head).
+        const { rows: olderRand } = await pool.query<any>(
+          `
+          ${FEED_SELECT}
+            and p.created_at < $2::timestamptz
+          order by random()
+          limit $3
+          `,
+          [opts.profile.id, oldest, half]
+        );
+        const seen = new Set(rows.map((r: any) => String(r.id)));
+        for (const r of [...olderRand, ...olderHot]) {
+          if (seen.has(String(r.id))) continue;
+          seen.add(String(r.id));
+          rows.push(r);
         }
       } catch {
         /* keep recent-only pool */
@@ -170,13 +180,14 @@ export async function getFeed(opts: {
   if (useSocial && rows.length) {
     const now = Date.now();
     const viewerId = String(opts.profile.id);
-    // Keep the viewer's own posts at the top for ~3 days — Hot/ledger was wiping
-    // brand-new score-0 posts on the next soft refresh (showed once, then gone).
+    // Brief own-post sticky (≤2h, max 1) so a brand-new post isn't wiped by Hot —
+    // never pin for days (that froze a real user's own card on top of For you).
+    const ownPinHours = isForYou ? 2 : 6;
     const ownRows = rows.filter((r: any) => {
       if (String(r.author_id) !== viewerId) return false;
       const created = r.created_at instanceof Date ? r.created_at : new Date(r.created_at);
       const ageHours = Math.max(0, (now - created.getTime()) / 3600_000);
-      return ageHours <= 72;
+      return ageHours <= ownPinHours;
     });
     const ownIds = new Set(ownRows.map((r: any) => String(r.id)));
 
@@ -202,9 +213,11 @@ export async function getFeed(opts: {
           membershipBoost,
           halfLifeHours,
         });
-        // Per-request jitter so refresh/load-more rotate when scores cluster.
+        // Tiny log boost from raw score — never let 98k-upvote Reddit posts own the page.
         if (isForYou) {
-          score *= 0.88 + 0.24 * forYouJitter(requestId, String(r.id));
+          score += 0.04 * Math.log1p(ups);
+          // Per-request jitter so refresh/load-more rotate when scores cluster.
+          score *= 0.82 + 0.36 * forYouJitter(requestId, String(r.id));
         }
         return {
           row: r,
@@ -225,7 +238,8 @@ export async function getFeed(opts: {
     // Prefer never-seen keys, but always fill a full page.
     // Soft recycle only when unviewed inventory is short — seen cards get a
     // hard score penalty so fresh content still wins MMR (MIND §2 / §11).
-    const rankedSlots = Math.max(1, limit + 1 - Math.min(ownRows.length, 3));
+    const ownPinCount = isForYou ? 1 : 2;
+    const rankedSlots = Math.max(1, limit + 1 - Math.min(ownRows.length, ownPinCount));
     // Always ledger — fall back to anon profile id when account link is missing
     // (seeded personas / older claims left 5k+ profiles with only ~1 link).
     const ledgerUser =
@@ -255,7 +269,7 @@ export async function getFeed(opts: {
       }
     }
     candidateMix = [
-      { lane: 'masquerade_own', count: Math.min(ownRows.length, 3) },
+      { lane: 'masquerade_own', count: Math.min(ownRows.length, ownPinCount) },
       { lane: 'masquerade_fresh', count: freshCount },
       { lane: 'masquerade_soft_recycle', count: recycleCount },
     ];
@@ -309,13 +323,13 @@ export async function getFeed(opts: {
       }
     }
 
-    // Newest own posts first, then ranked feed (dedupe).
+    // Newest own posts first (brief window), then ranked feed (dedupe).
     const ownSorted = [...ownRows].sort((a: any, b: any) => {
       const ta = a.created_at instanceof Date ? a.created_at.getTime() : new Date(a.created_at).getTime();
       const tb = b.created_at instanceof Date ? b.created_at.getTime() : new Date(b.created_at).getTime();
       return tb - ta;
     });
-    selected = [...ownSorted.slice(0, 3), ...rankedRows];
+    selected = [...ownSorted.slice(0, ownPinCount), ...rankedRows];
   }
 
   const page = selected.slice(0, limit);
