@@ -412,11 +412,11 @@ final class YouTubeCatalogService {
         UserDefaults.standard.set(Array(history.prefix(120)), forKey: historyKey(for: userID))
     }
 
-    /// **For you** order — slug-shelf algorithm (YouTube-style, light):
+    /// **For you** order — slug-shelf algorithm (YouTube-style, personalized):
     /// 1) Bucket by hub parent slug (social / travel / …)
-    /// 2) Within each slug: unviewed first, then following, then rest
-    /// 3) Round-robin across slugs so no category floods the list
-    /// Cheap O(n) — never re-sorts a giant flat pool mid-scroll.
+    /// 2) Prefer categories + creators from the viewer's watch history
+    /// 3) Within each slug: unviewed first, affinity, following, then rest
+    /// 4) Round-robin across slugs so no category floods the list
     func rankForYou(
         _ videos: [CountryPost],
         followingIDs: Set<String>,
@@ -428,7 +428,8 @@ final class YouTubeCatalogService {
             followingIDs: followingIDs,
             myUserID: myUserID,
             sessionSeed: sessionSeed,
-            focusSlug: nil
+            focusSlug: nil,
+            affinity: watchAffinity(from: videos)
         )
     }
 
@@ -449,20 +450,62 @@ final class YouTubeCatalogService {
         )
     }
 
+    /// Watch-history affinity for Hubs ranking + shelf order (recency-weighted).
+    struct HubsWatchAffinity: Sendable {
+        var slugScore: [String: Double]
+        var authorScore: [String: Double]
+
+        static let empty = HubsWatchAffinity(slugScore: [:], authorScore: [:])
+
+        var isEmpty: Bool { slugScore.isEmpty && authorScore.isEmpty }
+
+        nonisolated func score(for post: CountryPost) -> Double {
+            let slug = YouTubeCatalogService.parentHubSlug(for: post)
+            return (slugScore[slug] ?? 0) * 2.2 + (authorScore[post.authorID] ?? 0) * 3.4
+        }
+
+        nonisolated func slugWeight(_ slug: String) -> Double {
+            slugScore[slug] ?? 0
+        }
+
+        /// Build from recent Continue-watching trail (newest first).
+        nonisolated static func from(history: [CountryPost]) -> HubsWatchAffinity {
+            var slug: [String: Double] = [:]
+            var author: [String: Double] = [:]
+            for (i, post) in history.prefix(48).enumerated() {
+                guard PlayPlatformBridge.isHubsForYouLongForm(post) else { continue }
+                let w = 1.0 / (1.0 + Double(i) * 0.12)
+                let s = YouTubeCatalogService.parentHubSlug(for: post)
+                slug[s, default: 0] += w
+                author[post.authorID, default: 0] += w
+            }
+            return HubsWatchAffinity(slugScore: slug, authorScore: author)
+        }
+    }
+
+    /// Affinity from this user's persisted watch trail against a catalog.
+    func watchAffinity(from catalog: [CountryPost]) -> HubsWatchAffinity {
+        let history = historyVideos(from: catalog)
+        guard !history.isEmpty else { return .empty }
+        return HubsWatchAffinity.from(history: history)
+    }
+
     /// Slug-first ranking. `focusSlug` non-nil → single shelf (chip), still unviewed-first.
     func rankForYouBySlugs(
         _ videos: [CountryPost],
         followingIDs: Set<String>,
         myUserID: String?,
         sessionSeed: UInt64,
-        focusSlug: String?
+        focusSlug: String?,
+        affinity: HubsWatchAffinity? = nil
     ) -> [CountryPost] {
         Self.rankForYouBySlugsPure(
             videos,
             followingIDs: followingIDs,
             myUserID: myUserID,
             sessionSeed: sessionSeed,
-            focusSlug: focusSlug
+            focusSlug: focusSlug,
+            affinity: affinity ?? watchAffinity(from: videos)
         )
     }
 
@@ -472,7 +515,8 @@ final class YouTubeCatalogService {
         followingIDs: Set<String>,
         myUserID: String?,
         sessionSeed: UInt64,
-        focusSlug: String?
+        focusSlug: String?,
+        affinity: HubsWatchAffinity = .empty
     ) -> [CountryPost] {
         let longForm = videos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
         guard !longForm.isEmpty else { return [] }
@@ -491,8 +535,7 @@ final class YouTubeCatalogService {
             buckets[slug, default: []].append(post)
         }
 
-        /// Unviewed first; watched of this slug park at the end (endless For you).
-        /// Within each bucket, round-robin creators so one archive channel cannot own the rail.
+        /// Unviewed first; within-band sort by watch affinity then freshness; creators diversified.
         func rankSlugFresh(_ items: [CountryPost], salt: UInt64) -> [CountryPost] {
             var followFresh: [CountryPost] = []
             var mineFresh: [CountryPost] = []
@@ -507,17 +550,19 @@ final class YouTubeCatalogService {
                 else if isFollow(p) { followFresh.append(p) }
                 else { otherFresh.append(p) }
             }
-            func newest(_ a: [CountryPost]) -> [CountryPost] {
-                a.sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
+            func byAffinityThenNew(_ a: [CountryPost]) -> [CountryPost] {
+                a.sorted { lhs, rhs in
+                    let sa = affinity.score(for: lhs)
+                    let sb = affinity.score(for: rhs)
+                    if abs(sa - sb) > 0.05 { return sa > sb }
+                    return (lhs.createdDate ?? .distantPast) > (rhs.createdDate ?? .distantPast)
+                }
             }
-            let others = salt == 0
-                ? diversifyByCreatorPure(newest(otherFresh), seed: 0)
-                : diversifyByCreatorPure(newest(otherFresh), seed: salt)
-            // Watched last within the slug so For you stays endless after unviewed.
-            return newest(mineFresh)
-                + diversifyByCreatorPure(newest(followFresh), seed: salt &+ 17)
+            let others = diversifyByCreatorPure(byAffinityThenNew(otherFresh), seed: salt)
+            return byAffinityThenNew(mineFresh)
+                + diversifyByCreatorPure(byAffinityThenNew(followFresh), seed: salt &+ 17)
                 + others
-                + newest(viewed)
+                + byAffinityThenNew(viewed)
         }
 
         let slugOrder: [String]
@@ -525,11 +570,21 @@ final class YouTubeCatalogService {
             slugOrder = [HubCategoryClassifier.parentCategory(of: focus)]
         } else {
             var order = HubVideoSeedService.hubOrder
-            if sessionSeed != 0, order.count > 1 {
+            // Personalize: categories you've been watching float to the front.
+            if !affinity.isEmpty {
+                order.sort { a, b in
+                    let wa = affinity.slugWeight(a)
+                    let wb = affinity.slugWeight(b)
+                    if abs(wa - wb) > 0.01 { return wa > wb }
+                    return a < b
+                }
+            } else if sessionSeed != 0, order.count > 1 {
                 let rot = Int(sessionSeed % UInt64(order.count))
                 order = Array(order[rot...]) + Array(order[..<rot])
             }
-            let extras = buckets.keys.filter { !order.contains($0) }.sorted()
+            let extras = buckets.keys.filter { !order.contains($0) }.sorted { a, b in
+                affinity.slugWeight(a) > affinity.slugWeight(b)
+            }
             slugOrder = order + extras
         }
 
@@ -539,33 +594,47 @@ final class YouTubeCatalogService {
             queues[slug] = rankSlugFresh(raw, salt: sessionSeed &+ UInt64(i) &* 0x9E37)
         }
 
+        // Affinity-weighted round-robin: pick more often from slugs you watch.
         var out: [CountryPost] = []
         out.reserveCapacity(longForm.count)
         var seen = Set<String>()
         var progressed = true
+        var turn = 0
         while progressed {
             progressed = false
             for slug in slugOrder {
-                guard var q = queues[slug], let next = q.first else { continue }
-                q.removeFirst()
-                queues[slug] = q
-                if seen.insert(next.id).inserted {
-                    out.append(next)
-                    progressed = true
+                guard var q = queues[slug], !q.isEmpty else { continue }
+                // Extra pull for high-affinity slugs (still capped so one genre can't own For you).
+                let pulls = affinity.slugWeight(slug) >= 1.2 ? 2 : 1
+                for _ in 0..<pulls {
+                    guard !q.isEmpty else { break }
+                    let next = q.removeFirst()
+                    if seen.insert(next.id).inserted {
+                        out.append(next)
+                        progressed = true
+                    }
                 }
+                queues[slug] = q
             }
+            turn += 1
+            if turn > longForm.count + 8 { break }
         }
         // HARD: never mix viewed ahead of unviewed. Keep watched at the end for endless For you.
         if out.isEmpty {
             let viewed = longForm.filter { SparkDiscoveryEngine.isViewed($0) }
             return viewed.sorted {
-                ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast)
+                affinity.score(for: $0) > affinity.score(for: $1)
             }
         }
         var seenOut = Set(out.map(\.id))
         let viewedTail = longForm
             .filter { SparkDiscoveryEngine.isViewed($0) && seenOut.insert($0.id).inserted }
-            .sorted { ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast) }
+            .sorted {
+                let sa = affinity.score(for: $0)
+                let sb = affinity.score(for: $1)
+                if abs(sa - sb) > 0.05 { return sa > sb }
+                return ($0.createdDate ?? .distantPast) > ($1.createdDate ?? .distantPast)
+            }
         return out + viewedTail
     }
 
