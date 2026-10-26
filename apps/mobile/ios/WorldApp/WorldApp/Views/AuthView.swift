@@ -47,7 +47,7 @@ struct AuthView: View {
                                 .labelsHidden()
                                 .datePickerStyle(.compact)
                                 .tint(Theme.ink)
-                                Text("Required. Under-18 experience comes later — you can still join for now.")
+                                Text("Required.")
                                     .font(.caption2)
                                     .foregroundStyle(Theme.inkMuted)
                             }

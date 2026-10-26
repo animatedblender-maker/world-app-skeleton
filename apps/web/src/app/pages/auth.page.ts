@@ -53,7 +53,7 @@ import {
             [attr.max]="todayISO"
             required
           />
-          <span class="field-hint">Required. Under-18 experience comes later — you can still join for now.</span>
+          <span class="field-hint">Required.</span>
         </label>
 
         <div class="error" *ngIf="errorMsg">{{ errorMsg }}</div>

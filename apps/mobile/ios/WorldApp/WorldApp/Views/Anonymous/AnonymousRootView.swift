@@ -404,6 +404,10 @@ struct AnonymousRootView: View {
             AnonymousAgeGateView(mode: .attest)
         case .needUsername:
             AnonymousUsernameClaimView()
+        case .welcomeLetter:
+            AnonymousWelcomeLetterView()
+        case .pickSpaces:
+            AnonymousSpacesOnboardingView()
         case .suspended:
             AnonymousEmptyState(
                 title: MatteryaCopy.anonymousSuspendedTitle,

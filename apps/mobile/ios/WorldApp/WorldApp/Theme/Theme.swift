@@ -324,6 +324,34 @@ enum MatteryaCopy {
         "Usernames can’t be changed later. Pick carefully."
     static let anonymousClaimGeneratedOnly =
         "v1 usernames are generated for you — custom real-name handles aren’t allowed."
+    static let anonymousWelcomeLetterTitle = "Welcome to Masquerade"
+    /// Same letter as the Masquerade inbox welcome from @matterya.
+    static let anonymousWelcomeLetterBody = """
+**Well, look who wandered in.**
+
+Welcome to Masquerade.
+
+It's a little different on this side of Matterya, isn't it?
+
+Out there, the world knows your name, your face, and perhaps the person you've spent years becoming. But in here, none of that matters.
+
+There's something rather fascinating about strangers behind masks. The stories they carry, the secrets they keep, and the things that only come to light when nobody knows who's speaking.
+
+We all have a side of ourselves the world rarely gets to meet. Perhaps you'll find yours here. Or perhaps you'll discover something entirely unexpected in someone else's shadows.
+
+We've given you a new name. What you do with it is entirely up to you.
+
+Now, go on. Have a look around, find a room that catches your interest, and see where the conversations take you.
+
+Just remember, not everything hidden is meant to be feared.
+
+**Enjoy the Masquerade.**
+
+**Matterya Team**
+"""
+    static let anonymousSpacesOnboardingTitle = "Find a few Spaces"
+    static let anonymousSpacesOnboardingBody =
+        "Join rooms that look interesting. You can always find more later — or skip for now."
     static let anonymousNoSpaces = "No Spaces yet"
     static let anonymousNoSpacesBody = "Create a free Space or pull to refresh when more appear."
     static let anonymousNoJoinedSpaces = "No joined Spaces"

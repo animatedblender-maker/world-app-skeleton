@@ -22,7 +22,7 @@ import { ProfileService } from '../core/services/profile.service';
 
       <ng-container *ngIf="birthdateOnly; else fullSetup">
         <div class="title">Date of birth</div>
-        <div class="sub">Your profile stays as it is — we only need your birthday.</div>
+        <div class="sub">We need your date of birth!</div>
 
         <div class="existing" *ngIf="displayName || avatarPreviewUrl || avatarUrl || bio">
           <div class="existing-row">
@@ -48,7 +48,7 @@ import { ProfileService } from '../core/services/profile.service';
             [attr.max]="todayISO"
             required
           />
-          <small class="muted">Required. Private — only you can see this. Under-18 experience comes later.</small>
+          <small class="muted">Required. Private — only you can see this.</small>
         </div>
 
         <div class="row" style="margin-top:16px;">
@@ -77,7 +77,7 @@ import { ProfileService } from '../core/services/profile.service';
             [attr.max]="todayISO"
             required
           />
-          <small class="muted">Required. Private — only you can see this. Under-18 experience comes later.</small>
+          <small class="muted">Required. Private — only you can see this.</small>
         </div>
 
         <div class="field">

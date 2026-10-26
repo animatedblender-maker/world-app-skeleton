@@ -81,7 +81,7 @@ struct EditProfileView: View {
                         .labelsHidden()
                         .datePickerStyle(.compact)
                         .tint(Theme.ink)
-                        Text("Private — only you can see this. Under-18 experience comes later.")
+                        Text("Private — only you can see this.")
                             .font(.caption2)
                             .foregroundStyle(Theme.inkMuted)
                     }

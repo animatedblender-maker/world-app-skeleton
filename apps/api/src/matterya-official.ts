@@ -23,44 +23,46 @@ const DEFAULT_DISPLAY = 'Matterya';
 
 /** Normal Messages welcome from @matterya after account creation. */
 export const WELCOME_MESSAGE = [
-  '**Well, hello there. Welcome to Matterya!**',
+  '**Hey, welcome to Matterya!**',
   '',
-  'We know, another social media platform. As if there weren\'t enough already, right?',
+  "We're really glad you're here.",
   '',
-  'But we wanted to try something different.',
+  'We built Matterya with a simple idea in mind: everyone deserves a place to speak freely, question things, and form their own opinions without being told what to think.',
   '',
-  'We believe the internet should be a place where people can speak their minds, question things, disagree, and still get along. You shouldn\'t have to follow the crowd or ask for permission to have an opinion.',
+  "We don't belong to any political party, religious institution, or ideological movement, and we intend to keep it that way. With your help, we hope to make this a place where even the most unpopular opinions can find room for discussion.",
   '',
-  'Of course, freedom comes with responsibility. Disagree with ideas, challenge opinions, but remember there\'s a person behind every screen.',
+  "Whether you're here to share your thoughts, explore the world, meet new people, or just see what everyone else is up to, make yourself at home.",
   '',
-  'We\'re still growing, and we\'d rather build this place with you than decide everything for you.',
+  "We're still growing, and we'd love for you to help shape what Matterya becomes.",
   '',
-  'So, look around, make some friends, speak your mind, and make yourself at home.',
-  '',
-  '**This place is as much yours as it is ours.**',
+  '**Thanks for being part of the beginning.**',
   '',
   '**Matterya Team**',
 ].join('\n');
 
-/** First live @matterya feed post. */
+/** First live @matterya feed post — every user should see once at the top of Home. */
 export const OFFICIAL_POST_BODY = [
-  '**A few words about Matterya.**',
+  '**Well, hello there. Welcome to Matterya!**',
   '',
-  'We didn\'t build Matterya because the internet needed another social media platform.',
+  "We know, another social media platform. As if there weren't enough already, right?",
   '',
-  'We built it because we missed what the internet was supposed to be. A place where people could speak their minds, disagree, share things that matter to them, and meet others without constantly worrying about saying the wrong thing.',
+  'But we wanted to try something different.',
   '',
-  'We don\'t expect everyone here to think alike. In fact, we hope they don\'t. Some conversations will be uncomfortable, some opinions unpopular, and some discussions will get heated. That\'s part of having a voice. Just don\'t forget that the person you\'re arguing with has one too.',
+  'We believe the internet should be a place where people can speak their minds without having to follow the crowd or ask for permission to have an opinion.',
   '',
-  'We also don\'t believe a handful of people should get to decide what everyone else is allowed to think.',
+  'Matterya is independent of political parties, religious institutions, and ideological movements. We have no interest in telling you what to believe, which side to take, or what opinions you should hold. That\'s entirely up to you.',
   '',
-  'Matterya is ours to build, but it\'s yours to make something of.',
+  "We welcome disagreement, unpopular opinions, uncomfortable questions, and conversations that others might prefer to avoid. After all, you'd be surprised how much we have in common, even in those parts of ourselves we'd rather keep in the shadows.",
   '',
-  'We\'re just getting started, and we\'ll probably get a few things wrong along the way. When we do, tell us.',
+  "We won't always agree with what you say, and that's precisely the point. Freedom of speech means very little if it only applies to things everyone already agrees with.",
   '',
-  'Anyway, welcome. We\'re glad you found us.',
+  "We're still growing, and with your help, we intend to stay true to that principle. We want Matterya to remain a place where ideas can be expressed freely, challenged openly, and judged on their own merits, not on how popular they happen to be.",
   '',
-  '— Matterya Team',
+  "So, look around, make some friends, question things, and don't be afraid to be yourself.",
+  '',
+  '**This place is as much yours as it is ours. And we\'d like to keep it that way.**',
+  '',
+  '**Matterya Team**',
 ].join('\n');
 
 /**
@@ -72,19 +74,23 @@ export const MASQUERADE_WELCOME_MESSAGE = [
   '',
   'Welcome to Masquerade.',
   '',
-  'Out there, you have a name, a face, and a reputation. In here, you leave all that behind.',
+  "It's a little different on this side of Matterya, isn't it?",
   '',
-  "You'll find rooms filled with curious minds, untold stories, unusual questions, and strangers with plenty to say.",
+  "Out there, the world knows your name, your face, and perhaps the person you've spent years becoming. But in here, none of that matters.",
   '',
-  'You have a new name here, one that belongs only to this side of Matterya. Make it your own.',
+  "There's something rather fascinating about strangers behind masks. The stories they carry, the secrets they keep, and the things that only come to light when nobody knows who's speaking.",
   '',
-  "Just remember, there's a real person behind every mask. Treat them accordingly.",
+  "We all have a side of ourselves the world rarely gets to meet. Perhaps you'll find yours here. Or perhaps you'll discover something entirely unexpected in someone else's shadows.",
   '',
-  'Now, go on. There are plenty of doors waiting to be opened.',
+  "We've given you a new name. What you do with it is entirely up to you.",
+  '',
+  'Now, go on. Have a look around, find a room that catches your interest, and see where the conversations take you.',
+  '',
+  'Just remember, not everything hidden is meant to be feared.',
   '',
   '**Enjoy the Masquerade.**',
   '',
-  '**Masquerade Team**',
+  '**Matterya Team**',
   '',
   '*“Give him a mask, and he will tell you the truth.” — Oscar Wilde*',
 ].join('\n');
@@ -432,6 +438,108 @@ async function startOfficialConversation(
   } finally {
     client.release();
   }
+}
+
+/**
+ * Ensure the canonical @matterya Home feed welcome post exists and matches OFFICIAL_POST_BODY.
+ * Returns the post id (for client one-time pin).
+ */
+export async function ensureOfficialWelcomePost(): Promise<string> {
+  const officialId = await ensureMatteryaOfficialUser();
+  const { rows: existing } = await pool.query<{ id: string; body: string | null }>(
+    `
+    select id::text as id, body
+    from public.posts
+    where author_id = $1::uuid
+      and (
+        ltrim(coalesce(body, '')) like '**Well, hello there. Welcome to Matterya!**%'
+        or ltrim(coalesce(body, '')) like 'Well, hello there. Welcome to Matterya!%'
+        or ltrim(coalesce(body, '')) like '**A few words about Matterya.**%'
+        or ltrim(coalesce(body, '')) like 'A few words about Matterya.%'
+      )
+    order by created_at asc
+    limit 1
+    `,
+    [officialId]
+  );
+  if (existing[0]?.id) {
+    if (existing[0].body !== OFFICIAL_POST_BODY) {
+      await pool.query(
+        `update public.posts set body = $2, updated_at = now() where id = $1::uuid`,
+        [existing[0].id, OFFICIAL_POST_BODY]
+      );
+    }
+    return existing[0].id;
+  }
+
+  const { rows } = await pool.query<{ id: string }>(
+    `
+    insert into public.posts
+      (author_id, country_name, country_code, title, body, visibility, moderation_status)
+    values
+      ($1::uuid, 'Global', 'GL', null, $2, 'public', 'active')
+    returning id::text as id
+    `,
+    [officialId, OFFICIAL_POST_BODY]
+  );
+  const id = rows[0]?.id;
+  if (!id) throw new Error('failed_create_official_welcome_post');
+  return id;
+}
+
+/** Refresh every existing Matterya / Masquerade welcome DM body to the current copy. */
+export async function refreshAllOfficialWelcomeBodies(): Promise<{
+  primary: number;
+  masquerade: number;
+  feedPostId: string;
+}> {
+  const officialId = await ensureMatteryaOfficialUser();
+  const primary = await pool.query(
+    `
+    update public.messages m
+    set body = $2, updated_at = now()
+    from public.conversations c
+    where m.conversation_id = c.id
+      and m.sender_id = $1::uuid
+      and coalesce(c.surface, 'primary') = 'primary'
+      and (
+        ltrim(m.body) like 'Welcome to Matterya.%'
+        or ltrim(m.body) like 'Hey — welcome to Matterya.%'
+        or ltrim(m.body) like 'Hey - welcome to Matterya.%'
+        or ltrim(m.body) like '**Hey, welcome to Matterya!**%'
+        or ltrim(m.body) like 'Hey, welcome to Matterya!%'
+        or ltrim(m.body) like '**Well, hello there. Welcome to Matterya!**%'
+        or ltrim(m.body) like 'Well, hello there. Welcome to Matterya!%'
+        or m.body like '%**Matterya Team**%'
+      )
+      and m.body is distinct from $2
+    `,
+    [officialId, WELCOME_MESSAGE]
+  );
+  const masquerade = await pool.query(
+    `
+    update public.messages m
+    set body = $2, updated_at = now()
+    from public.conversations c
+    where m.conversation_id = c.id
+      and m.sender_id = $1::uuid
+      and coalesce(c.surface, 'primary') = 'masquerade'
+      and (
+        ltrim(m.body) like '**Well, look who wandered in.**%'
+        or ltrim(m.body) like 'Well, look who wandered in.%'
+        or ltrim(m.body) like 'Welcome to Masquerade.%'
+        or m.body like '%Give him a mask%'
+      )
+      and m.body is distinct from $2
+    `,
+    [officialId, MASQUERADE_WELCOME_MESSAGE]
+  );
+  const feedPostId = await ensureOfficialWelcomePost();
+  return {
+    primary: primary.rowCount ?? 0,
+    masquerade: masquerade.rowCount ?? 0,
+    feedPostId,
+  };
 }
 
 /** Default avatar path from the iOS app icon asset. */

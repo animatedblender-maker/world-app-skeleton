@@ -48,10 +48,25 @@ struct ProfileSetupView: View {
                         }
 
                         Section {
-                            Button(busy ? "Saving…" : (birthdateOnly ? "Save birthday" : "Complete Setup")) {
+                            Button {
                                 Task { await saveProfile() }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Spacer(minLength: 0)
+                                    if busy {
+                                        ProgressView()
+                                            .tint(Theme.paper)
+                                    }
+                                    Text(busy ? "Saving…" : (birthdateOnly ? "Save birthday" : "Complete Setup"))
+                                    Spacer(minLength: 0)
+                                }
+                                .matteryaPrimaryFill()
                             }
+                            .buttonStyle(.plain)
                             .disabled(busy || !canSave)
+                            .opacity(busy || !canSave ? 0.55 : 1)
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 16, trailing: 16))
                         }
                     }
                 }
@@ -61,7 +76,7 @@ struct ProfileSetupView: View {
         }
         .screenBackground()
         .toolbarBackground(Theme.canvas, for: .navigationBar)
-        .tint(Theme.accentBright)
+        .tint(Theme.ink)
         .task {
             await loadInitialState()
         }
@@ -101,7 +116,7 @@ struct ProfileSetupView: View {
                     }
                 }
             }
-            Text("Your photo, bio, and location stay as they are. We only need your date of birth.")
+            Text("We need your date of birth!")
                 .font(.caption)
                 .foregroundStyle(Theme.inkMuted)
         }
@@ -116,7 +131,7 @@ struct ProfileSetupView: View {
             .labelsHidden()
             .datePickerStyle(.wheel)
             .tint(Theme.ink)
-            Text("Required. Private — only you can see this. Under-18 experience comes later.")
+            Text("Required. Private — only you can see this.")
                 .font(.caption)
                 .foregroundStyle(Theme.inkMuted)
         }
@@ -164,7 +179,7 @@ struct ProfileSetupView: View {
                 displayedComponents: .date
             )
             .tint(Theme.ink)
-            Text("Required. Private — only you can see this. Under-18 experience comes later.")
+            Text("Required. Private — only you can see this.")
                 .font(.caption)
                 .foregroundStyle(Theme.inkMuted)
         }

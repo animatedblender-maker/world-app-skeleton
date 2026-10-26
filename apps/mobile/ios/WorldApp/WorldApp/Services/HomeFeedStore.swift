@@ -88,6 +88,10 @@ final class HomeFeedStore {
     private var lastVisibleIndex: Int = 0
     /// Last open's head IDs — demoted on the next fresh session so Feed isn't identical every launch.
     private static let lastHeadDefaultsKey = "home.feed.lastHeadIDs.v2"
+    /// Canonical @matterya welcome post — pin once at top until the user has seen it.
+    private static let officialWelcomePostID = "afb52c5b-2218-4b78-afdf-b2b6f4327602"
+    private static let officialWelcomeSeenKey = "matterya.home.officialWelcomeSeen.v1"
+    private var cachedOfficialWelcome: CountryPost?
 
     /// Network page size — keep modest so ranking/merge stays off the scroll path.
     private let pageSize = 16
@@ -330,6 +334,8 @@ final class HomeFeedStore {
     }
 
     /// Put last-open head at the tail — API `/v1/feed` is newest-first and otherwise repeats.
+    /// Image cards are hard-dropped (not demoted): they never get video `onViewed`, so without
+    /// this the same Reddit photos resurface every refresh while videos rotate.
     private func demoteRecentHead(_ posts: [CountryPost]) -> [CountryPost] {
         let recent = Set(persistedLastHeadIDs())
         guard !recent.isEmpty else { return posts }
@@ -338,6 +344,7 @@ final class HomeFeedStore {
         fresh.reserveCapacity(posts.count)
         for post in posts {
             if recent.contains(post.id) {
+                if Self.isHomeImageCard(post) { continue }
                 stale.append(post)
             } else {
                 fresh.append(post)
@@ -345,6 +352,10 @@ final class HomeFeedStore {
         }
         guard !fresh.isEmpty else { return posts }
         return fresh + stale
+    }
+
+    private static func isHomeImageCard(_ post: CountryPost) -> Bool {
+        PlayPlatformBridge.isHomeImageCard(post)
     }
 
     /// On reshape: if page-1 is mostly last session's head, walk the cursor for new IDs.
@@ -360,7 +371,7 @@ final class HomeFeedStore {
         if freshCount >= 20 || cursor == nil { return (pooled, cursor) }
 
         var seen = Set(pooled.map(\.id))
-        for _ in 0..<5 {
+        for _ in 0..<8 {
             guard let cur = cursor, !cur.isEmpty else { break }
             guard let page = await SurfacePageClient.fetchHomeFeed(
                 limit: 48,
@@ -368,7 +379,11 @@ final class HomeFeedStore {
                 session: feedSessionId
             ) else { break }
             cursor = page.nextCursor
-            if page.items.isEmpty { break }
+            // Delivery ledger can return items=0 with next=true — keep walking.
+            if page.items.isEmpty {
+                if page.nextCursor == nil { break }
+                continue
+            }
             for post in page.items where seen.insert(post.id).inserted {
                 pooled.append(post)
             }
@@ -440,6 +455,12 @@ final class HomeFeedStore {
         }
 
         if forceReplace {
+            // Snapshot on-screen head before wipe so Reddit image cards (no video
+            // onViewed) are hard-excluded from the reshuffled pool.
+            rememberDisplayedHead()
+            for post in displayedPosts where Self.isHomeImageCard(post) {
+                SparkDiscoveryEngine.markWatched(post)
+            }
             userEngagedThisSession = false
             lastVisiblePostID = nil
             lastVisibleIndex = 0
@@ -500,38 +521,49 @@ final class HomeFeedStore {
             return
         }
 
-        if let thin, !thin.items.isEmpty {
+        if let thin {
             nextCursor = thin.nextCursor
             var livePool = thin.items
-            if forceReplace {
+            // items=0 + nextCursor = delivery-ledger exhausted window — walk before GraphQL.
+            if livePool.isEmpty, thin.nextCursor != nil {
+                let expanded = await expandFreshHead(initial: [], startingCursor: thin.nextCursor)
+                livePool = expanded.items
+                if let cur = expanded.cursor { nextCursor = cur }
+            } else if forceReplace, !livePool.isEmpty {
                 let expanded = await expandFreshHead(initial: livePool, startingCursor: thin.nextCursor)
                 livePool = expanded.items
                 if let cur = expanded.cursor { nextCursor = cur }
             }
-            var rankedFast = Self.liveOnlyPosts(livePool)
-            if rankedFast.isEmpty { rankedFast = livePool }
-            // Always session-rank on a fresh open so the head isn't identical every launch.
-            if forceReplace || !paintedBefore {
-                rankedFast = demoteRecentHead(rankForSessionSync(rankedFast))
-            }
-            let head = Array(rankedFast.prefix(forceReplace ? 36 : 24))
-            if !head.isEmpty {
-                let preserveHead = !forceReplace
-                    && (paintedBefore || userEngagedThisSession)
-                if preserveHead {
-                    await softMergePreservingHead(head)
-                } else {
-                    applyPosts(head, replace: true, sessionId: feedSessionId, alreadyRanked: true)
-                    ContentCache.shared.setPosts(posts, for: .homeFeed)
-                    rememberDisplayedHead()
+            if !livePool.isEmpty {
+                var rankedFast = Self.liveOnlyPosts(livePool)
+                if rankedFast.isEmpty { rankedFast = livePool }
+                // Always session-rank on a fresh open so the head isn't identical every launch.
+                if forceReplace || !paintedBefore {
+                    rankedFast = demoteRecentHead(rankForSessionSync(rankedFast))
                 }
-                isBootstrapping = false
-                didPaint = true
-                hasMore = true
-                Task { await warmHead(lite: true) }
+                let head = Array(rankedFast.prefix(forceReplace ? 36 : 24))
+                if !head.isEmpty {
+                    let preserveHead = !forceReplace
+                        && (paintedBefore || userEngagedThisSession)
+                    if preserveHead {
+                        await softMergePreservingHead(head)
+                    } else {
+                        applyPosts(head, replace: true, sessionId: feedSessionId, alreadyRanked: true)
+                        ContentCache.shared.setPosts(posts, for: .homeFeed)
+                        rememberDisplayedHead()
+                    }
+                    isBootstrapping = false
+                    didPaint = true
+                    hasMore = true
+                    Task { await warmHead(lite: true) }
+                }
             }
-        } else if posts.isEmpty {
-            let liveRaw = await PostsService.shared.fetchFirstPaintHomePosts(limit: 48)
+        }
+        if posts.isEmpty {
+            // Surface Sparks only — never GraphQL discover stampede on cold open (-1001 storm).
+            let sparkPage = await SurfacePageClient.fetchSparks(limit: 40)
+            let liveRaw = sparkPage?.items ?? []
+            if let cur = sparkPage?.nextCursor { nextCursor = cur }
             guard gen == generation else {
                 isRefreshing = false
                 return
@@ -544,6 +576,7 @@ final class HomeFeedStore {
                 ContentCache.shared.setPosts(posts, for: .homeFeed)
                 rememberDisplayedHead()
                 didPaint = true
+                hasMore = true
                 Task { await warmHead(lite: true) }
             }
         }
@@ -552,10 +585,15 @@ final class HomeFeedStore {
         isRefreshing = false
         recyclePass = 0
 
-        // 3) Heavy work AFTER first paint — never compete with thin feed.
+        // 3) Heavy work AFTER first paint + autoplay unlock — never AV under splash.
         Task(priority: .utility) { [weak self] in
             guard let self else { return }
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            // Wait until cold-open gate opens (or give up after ~4s).
+            for _ in 0..<40 {
+                if FeedVideoFocus.shared.allowsFeedAVWarm { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard FeedVideoFocus.shared.allowsFeedAVWarm else { return }
             guard gen == self.generation else { return }
             await self.warmHead(lite: false)
             let exclude = Set(self.posts.map(\.id))
@@ -634,13 +672,15 @@ final class HomeFeedStore {
                 guard seen.insert(post.id).inserted else { continue }
                 guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
                 // Never append watched videos — written/text stay eligible.
-                if SparkDiscoveryEngine.isViewed(post), !PlayPlatformBridge.isWrittenHomePost(post) {
+                if SparkDiscoveryEngine.isViewed(post),
+                   !(PlayPlatformBridge.isWrittenHomePost(post) && !Self.isHomeImageCard(post)) {
                     continue
                 }
                 newcomers.append(post)
             }
             let cleanedBelow = preservedBelow.filter {
-                PlayPlatformBridge.isWrittenHomePost($0) || !SparkDiscoveryEngine.isViewed($0)
+                (PlayPlatformBridge.isWrittenHomePost($0) && !Self.isHomeImageCard($0))
+                    || !SparkDiscoveryEngine.isViewed($0)
             }
             let wovenNew = Self.weaveWrittenAmongMedia(newcomers)
 
@@ -660,7 +700,8 @@ final class HomeFeedStore {
         // Truly empty: first paint from this merge — weave, don't score-stack written.
         let ranked = await rankForSessionAsync(clean)
         let woven = Self.weaveWrittenAmongMedia(ranked.filter {
-            PlayPlatformBridge.isWrittenHomePost($0) || !SparkDiscoveryEngine.isViewed($0)
+            (PlayPlatformBridge.isWrittenHomePost($0) && !Self.isHomeImageCard($0))
+                || !SparkDiscoveryEngine.isViewed($0)
         })
         guard !woven.isEmpty else { return }
 
@@ -677,9 +718,9 @@ final class HomeFeedStore {
         )
     }
 
-    /// Home mix kind for even interleave (Sparks / Hubs / image / text).
-    private enum HomeFeedKind {
-        case spark, hub, image, text
+    /// Home mix family — ShortForm Sparks vs TikTok vs Hubs vs image (variety weave).
+    private enum HomeFeedKind: Equatable {
+        case shortform, tiktok, hub, image, text
 
         static func classify(_ post: CountryPost) -> HomeFeedKind {
             if PlayPlatformBridge.isWrittenHomePost(post) {
@@ -694,47 +735,100 @@ final class HomeFeedStore {
                 || post.externalRefType?.lowercased() == "hub" {
                 return .hub
             }
-            return .spark
+            let mt = (post.mediaType ?? "").lowercased()
+            if mt == "image" || mt == "photo" || mt == "gif" || (post.hasImage && !post.hasVideo) {
+                return .image
+            }
+            let blob = [
+                post.mediaURL ?? "",
+                post.mediaPayload?.r2Key ?? "",
+                post.thumbURL ?? "",
+            ]
+            .joined(separator: " ")
+            .lowercased()
+            if blob.contains("/shortform/") { return .shortform }
+            if blob.contains("/longform/") { return .hub }
+            if blob.contains("/posts/") { return .image }
+            // TikTok country-root packs: Country/<digits>/…
+            if blob.range(of: #"(united_states|germany|albania|egypt|kosovo)/\d{8,}"#, options: .regularExpression) != nil {
+                return .tiktok
+            }
+            return .tiktok
         }
     }
 
-    /// Even round-robin: spark → hub → image → text. Used when merging mixed sources.
-    /// Thin `/v1/feed` pages already arrive woven — preserve that order instead.
+    /// Variety weave: ShortForm Sparks appear often between hubs/images/TikTok —
+    /// never stack the same family back-to-back when alternatives exist.
     private static func weaveWrittenAmongMedia(_ posts: [CountryPost]) -> [CountryPost] {
         guard posts.count > 1 else { return posts }
-        var spark: [CountryPost] = []
+        var shortform: [CountryPost] = []
+        var tiktok: [CountryPost] = []
         var hub: [CountryPost] = []
         var image: [CountryPost] = []
         var text: [CountryPost] = []
         for p in posts {
             switch HomeFeedKind.classify(p) {
-            case .spark: spark.append(p)
+            case .shortform: shortform.append(p)
+            case .tiktok: tiktok.append(p)
             case .hub: hub.append(p)
             case .image: image.append(p)
             case .text: text.append(p)
             }
         }
-        // Already mixed from API (at least 3 kinds present) — keep order.
-        let kindsPresent = [spark, hub, image, text].filter { !$0.isEmpty }.count
-        if kindsPresent >= 3 {
-            return posts
-        }
-        var lanes = [spark, hub, image, text]
-        var idxs = [0, 0, 0, 0]
+
+        // Prefer ShortForm twice as often as TikTok in the rotation.
+        let rotation: [HomeFeedKind] = [
+            .shortform, .hub, .image, .shortform, .tiktok, .hub, .image,
+        ]
+        var queues: [HomeFeedKind: [CountryPost]] = [
+            .shortform: shortform,
+            .tiktok: tiktok,
+            .hub: hub,
+            .image: image,
+            .text: text,
+        ]
         var out: [CountryPost] = []
         out.reserveCapacity(posts.count)
+        var rot = 0
         var guardCount = 0
-        while out.count < posts.count, guardCount < posts.count * 4 {
+        var prev: HomeFeedKind?
+
+        func take(_ kind: HomeFeedKind) -> CountryPost? {
+            guard var q = queues[kind], !q.isEmpty else { return nil }
+            let post = q.removeFirst()
+            queues[kind] = q
+            return post
+        }
+
+        while out.count < posts.count, guardCount < posts.count * 8 {
             guardCount += 1
-            var progressed = false
-            for li in 0..<4 {
-                if idxs[li] < lanes[li].count {
-                    out.append(lanes[li][idxs[li]])
-                    idxs[li] += 1
-                    progressed = true
+            let prefer = rotation[rot % rotation.count]
+            rot += 1
+            var picked: CountryPost?
+            if prefer != prev {
+                picked = take(prefer)
+            }
+            if picked == nil {
+                for kind in [HomeFeedKind.shortform, .hub, .image, .tiktok, .text] where kind != prev {
+                    if let p = take(kind) {
+                        picked = p
+                        prev = kind
+                        break
+                    }
                 }
             }
-            if !progressed { break }
+            if picked == nil {
+                for kind in [HomeFeedKind.shortform, .hub, .image, .tiktok, .text] {
+                    if let p = take(kind) {
+                        picked = p
+                        prev = kind
+                        break
+                    }
+                }
+            }
+            guard let post = picked else { break }
+            prev = HomeFeedKind.classify(post)
+            out.append(post)
         }
         return out.isEmpty ? posts : out
     }
@@ -771,22 +865,42 @@ final class HomeFeedStore {
                 applyPosts(ranked, replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 isBootstrapping = false
                 didPaint = true
-                Task { await warmHead() }
+                // Thumbs only until autoplay unlock — AV/Frame0 under splash freezes + ghost audio.
+                Task { await warmHead(lite: true) }
             }
         }
 
-        // 2) Thin surface page first (slug/light path) — fall back to GraphQL first-paint.
+        // 2) Thin surface page first — walk empty ledger pages; Sparks surface if still empty.
+        // Never GraphQL discover on this path (cold-open -1001 stampede).
         let live: [CountryPost]
         let fromThin: Bool
-        if let thin = await SurfacePageClient.fetchHomeFeed(limit: 28, cursor: nil), !thin.items.isEmpty {
+        if let thin = await SurfacePageClient.fetchHomeFeed(limit: 28, cursor: nil, session: feedSessionId) {
             nextCursor = thin.nextCursor
-            live = Self.liveOnlyPosts(thin.items)
-            fromThin = true
-            #if DEBUG
-            print("[HomeFeed] thin /v1/feed firstPaint=\(live.count)")
-            #endif
+            var pool = thin.items
+            if pool.isEmpty, let cur = thin.nextCursor {
+                let expanded = await expandFreshHead(initial: [], startingCursor: cur)
+                pool = expanded.items
+                if let c = expanded.cursor { nextCursor = c }
+            }
+            if !pool.isEmpty {
+                live = Self.liveOnlyPosts(pool)
+                fromThin = true
+                #if DEBUG
+                print("[HomeFeed] thin /v1/feed firstPaint=\(live.count)")
+                #endif
+            } else {
+                let sparks = await SurfacePageClient.fetchSparks(limit: 40)
+                live = Self.liveOnlyPosts(sparks?.items ?? [])
+                if let c = sparks?.nextCursor { nextCursor = c }
+                fromThin = false
+                #if DEBUG
+                print("[HomeFeed] sparks surface fallback firstPaint=\(live.count)")
+                #endif
+            }
         } else {
-            live = Self.liveOnlyPosts(await PostsService.shared.fetchFirstPaintHomePosts(limit: 48))
+            let sparks = await SurfacePageClient.fetchSparks(limit: 40)
+            live = Self.liveOnlyPosts(sparks?.items ?? [])
+            if let c = sparks?.nextCursor { nextCursor = c }
             fromThin = false
         }
         guard gen == generation else { return }
@@ -803,19 +917,20 @@ final class HomeFeedStore {
         } else {
             let existingLive = posts.filter { !$0.isStory }
             let realBatch = Self.liveOnlyPosts(live + existingLive)
-            // Thin /v1/feed already weaves spark/hub/image/text — keep that order.
+            // Variety weave: ShortForm Sparks between hubs/images/TikTok (no same-family stacks).
+            let mixed = Self.weaveWrittenAmongMedia(realBatch)
             let capped: [CountryPost]
             if fromThin {
-                capped = Array(realBatch.prefix(min(realBatch.count, 90)))
+                capped = Array(mixed.prefix(min(mixed.count, 90)))
             } else {
-                capped = Array((await rankForSessionAsync(realBatch)).prefix(min(realBatch.count, 90)))
+                capped = Array((await rankForSessionAsync(mixed)).prefix(min(mixed.count, 90)))
             }
 
             if !capped.isEmpty {
                 applyPosts(capped, replace: true, sessionId: feedSessionId, alreadyRanked: true)
                 ContentCache.shared.setPosts(posts, for: .homeFeed)
                 didPaint = true
-                Task { await warmHead() }
+                Task { await warmHead(lite: true) }
                 hasMore = true
                 recyclePass = 0
                 #if DEBUG
@@ -845,11 +960,11 @@ final class HomeFeedStore {
     /// **Keeps R2 Sparks** — they render as SparkFeedCard on the main feed.
     /// Hard-exclude watched **videos** — written/text posts are not “watched clips”.
     private static func liveOnlyPosts(_ posts: [CountryPost]) -> [CountryPost] {
-        let under18 = ContentCache.shared.cachedProfile()?.isUnder18 == true
+        // NSFW never on Home — R2 adult packs route to Masquerade secrets.
         let base = posts
             .excludingDeletedPosts()
             .forHomeFeed()
-            .filter { under18 ? !$0.isAdultContent : true }
+            .filter { !$0.isAdultContent }
             // Home: drop pure text/written cards (forum corpus freezes scroll). Keep images + video.
             .filter { post in
                 let mt = (post.mediaType ?? "").lowercased()
@@ -867,7 +982,11 @@ final class HomeFeedStore {
             }
         guard !base.isEmpty else { return [] }
         return base.filter { post in
-            if PlayPlatformBridge.isWrittenHomePost(post) { return true }
+            // Pure text/written can resurface; Home image cards (Reddit stills) follow
+            // the same once-seen rule as videos once EngagementTracker marks them.
+            if PlayPlatformBridge.isWrittenHomePost(post), !isHomeImageCard(post) {
+                return true
+            }
             return !SparkDiscoveryEngine.isViewed(post)
         }
     }
@@ -908,6 +1027,10 @@ final class HomeFeedStore {
         guard let index = displayedPosts.firstIndex(where: { $0.id == post.id }) else { return }
         lastVisiblePostID = post.id
         lastVisibleIndex = index
+        // Once they scroll past the @matterya welcome, stop pinning it on later opens.
+        if index > 0 {
+            markOfficialWelcomeSeenIfNeeded(visiblePostID: post.id)
+        }
 
         // True exposure (viewport) — stronger label than "returned by ranking".
         // Dwell/skip still come from FeedView appear/disappear.
@@ -1154,7 +1277,7 @@ final class HomeFeedStore {
         applyPosts(Array(filtered.prefix(36)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
         hasMore = true
         didPaint = !posts.isEmpty
-        Task { await warmHead() }
+        Task { await warmHead(lite: true) }
         if !filtered.isEmpty {
             ContentCache.shared.setPosts(posts, for: .homeFeed)
         } else {
@@ -1278,7 +1401,8 @@ final class HomeFeedStore {
             for post in pageDeduped {
                 guard seen.insert(post.id).inserted else { continue }
                 guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
-                if SparkDiscoveryEngine.isViewed(post), !PlayPlatformBridge.isWrittenHomePost(post) {
+                if SparkDiscoveryEngine.isViewed(post),
+                   !(PlayPlatformBridge.isWrittenHomePost(post) && !Self.isHomeImageCard(post)) {
                     continue
                 }
                 appended.append(post)
@@ -1394,32 +1518,93 @@ final class HomeFeedStore {
         // Stable unique by id — duplicate keys crash Dictionary(uniqueKeysWithValues) on rank/open.
         var seen = Set<String>()
         let ordered = ranked.filter { seen.insert($0.id).inserted }
+        let pinned = withOfficialWelcomePinned(ordered)
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
-            posts = ordered
+            posts = pinned
             if replace {
                 // Only shrink/reset the window when the user has not started watching yet.
                 // Resetting windowLimit mid-watch felt like a full feed refresh.
                 if !userEngagedThisSession {
-                    windowLimit = min(firstWindow, max(ordered.count, 0))
+                    windowLimit = min(firstWindow, max(pinned.count, 0))
                 } else {
-                    windowLimit = min(max(windowLimit, firstWindow), max(ordered.count, 0))
+                    windowLimit = min(max(windowLimit, firstWindow), max(pinned.count, 0))
                 }
             }
         }
         // Preserve existing nextCursor from Surface/GraphQL — don't clobber with ISO.
         hasMore = true
+        Task { await ensureOfficialWelcomeCached() }
     }
 
-    /// Open / after-paint: thumbs + Frame0 + first feed videos deep-warm for instant autoplay.
+    private var hasSeenOfficialWelcome: Bool {
+        UserDefaults.standard.bool(forKey: Self.officialWelcomeSeenKey)
+    }
+
+    /// Pin the Matterya welcome post at index 0 until the user has scrolled past it once.
+    private func withOfficialWelcomePinned(_ posts: [CountryPost]) -> [CountryPost] {
+        guard !hasSeenOfficialWelcome else { return posts }
+        let welcome =
+            posts.first(where: { $0.id == Self.officialWelcomePostID })
+            ?? cachedOfficialWelcome
+            ?? posts.first(where: {
+                let handle = $0.author?.username?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let body = ($0.body ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                return handle == "matterya" && body.hasPrefix("**Well, hello there. Welcome to Matterya!**")
+            })
+        guard let welcome else { return posts }
+        cachedOfficialWelcome = welcome
+        var rest = posts.filter { $0.id != welcome.id }
+        return [welcome] + rest
+    }
+
+    private func ensureOfficialWelcomeCached() async {
+        guard !hasSeenOfficialWelcome else { return }
+        if cachedOfficialWelcome != nil { return }
+        if let hit = posts.first(where: { $0.id == Self.officialWelcomePostID }) {
+            cachedOfficialWelcome = hit
+            return
+        }
+        if let remote = try? await PostsService.shared.getPostByID(Self.officialWelcomePostID) {
+            cachedOfficialWelcome = remote
+            // Re-pin without a full network reload if the pool already painted.
+            if !posts.isEmpty, posts.first?.id != remote.id {
+                let rest = posts.filter { $0.id != remote.id }
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) { posts = [remote] + rest }
+            }
+        }
+    }
+
+    /// Call when the welcome card leaves the first visible slot (scrolled past / opened elsewhere).
+    func markOfficialWelcomeSeenIfNeeded(visiblePostID: String?) {
+        guard !hasSeenOfficialWelcome else { return }
+        guard let visiblePostID, !visiblePostID.isEmpty else { return }
+        if visiblePostID == Self.officialWelcomePostID { return }
+        // Any other card in focus means the welcome is no longer the first thing they see.
+        if posts.contains(where: { $0.id == Self.officialWelcomePostID })
+            || cachedOfficialWelcome != nil
+            || posts.first?.author?.username?.lowercased() == "matterya"
+        {
+            UserDefaults.standard.set(true, forKey: Self.officialWelcomeSeenKey)
+        }
+    }
+
+    /// Open / after-paint: thumbs (+ Frame0 after settle). Lite skips Frame0 + AV entirely.
+    /// Cold open Frame0×N + AV under splash froze the main thread while audio kept playing.
     private func warmHead(lite: Bool = false) async {
-        let thumbN = lite ? 4 : min(max(windowLimit, firstWindow), 8)
+        let thumbN = lite ? 3 : min(max(windowLimit, firstWindow), 8)
         let thumbBand = Array(posts.prefix(thumbN))
-        ImageCache.shared.prefetchFeedMedia(thumbBand, maxPixelSize: lite ? 420 : 720)
-        ImageCache.shared.prefetchPostThumbnails(thumbBand, maxPixelSize: 420, aggressive: false)
+        ImageCache.shared.prefetchFeedMedia(thumbBand, maxPixelSize: lite ? 320 : 540)
+        ImageCache.shared.prefetchPostThumbnails(thumbBand, maxPixelSize: lite ? 280 : 420, aggressive: false)
+        // Open path: tiny thumbs only. Frame0 + AV only after autoplay unlock.
+        guard !lite else { return }
+        guard FeedVideoFocus.shared.allowsFeedAVWarm else { return }
         Task(priority: .utility) {
-            await Frame0PosterResolver.shared.prefetch(postIDs: Array(thumbBand.prefix(4).map(\.id)))
+            // Cap Frame0 stampede on open — 2 posters max.
+            await Frame0PosterResolver.shared.prefetch(postIDs: Array(thumbBand.prefix(2).map(\.id)))
         }
         let videos = Self.feedWarmVideoQueue(
             from: Array(displayedPosts.prefix(max(windowLimit, firstWindow)))

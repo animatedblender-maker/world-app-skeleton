@@ -5,6 +5,7 @@
  *   npx tsx src/matterya-official-runner.ts --welcome-email=amr@…
  *   npx tsx src/matterya-official-runner.ts --masquerade-welcome=USER_ID
  *   npx tsx src/matterya-official-runner.ts --masquerade-welcome-email=amr@…
+ *   npx tsx src/matterya-official-runner.ts --refresh-copy
  */
 import dotenv from 'dotenv';
 import path from 'node:path';
@@ -14,6 +15,7 @@ import {
   defaultOfficialAvatarPath,
   ensureMatteryaOfficialUser,
   MASQUERADE_WELCOME_MESSAGE,
+  refreshAllOfficialWelcomeBodies,
   sendMatteryaMasqueradeWelcomeMessage,
   sendMatteryaWelcomeMessage,
   WELCOME_MESSAGE,
@@ -37,6 +39,13 @@ async function main() {
     [id]
   );
   console.log('[official]', rows[0]);
+
+  if (process.argv.includes('--refresh-copy')) {
+    const result = await refreshAllOfficialWelcomeBodies();
+    console.log('[refresh-copy]', result);
+    console.log('[welcome-preview]', WELCOME_MESSAGE.slice(0, 60));
+    console.log('[masquerade-preview]', MASQUERADE_WELCOME_MESSAGE.slice(0, 60));
+  }
 
   const welcomeId = argValue('welcome');
   const welcomeEmail = argValue('welcome-email');

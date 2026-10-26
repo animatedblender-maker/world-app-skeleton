@@ -7,6 +7,10 @@ enum AnonymousPhase: Equatable {
     case gatedUnder18
     case needAttest
     case needUsername
+    /// Full Masquerade welcome letter after claiming a name.
+    case welcomeLetter
+    /// First-time Space picker after the welcome letter (skippable).
+    case pickSpaces
     case ready
     case suspended
     case offline
@@ -24,6 +28,8 @@ final class AnonymousStore {
     /// Disk feed older than this is treated as stale — soft-refresh replaces sticky tops.
     private let feedCacheMaxAge: TimeInterval = 8 * 60
     private let wildeSeenKey = "matterya.anonymous.wildeSeen.v1"
+    private let welcomeLetterSeenKey = "matterya.anonymous.welcomeLetterSeen.v1"
+    private let spacesOnboardingSeenKey = "matterya.anonymous.spacesOnboardingSeen.v1"
     private let pinnedUsernameKey = "matterya.anonymous.pinnedUsername.v1"
 
     var phase: AnonymousPhase = .loading
@@ -373,8 +379,17 @@ final class AnonymousStore {
                 applySession(patched, animated: false)
                 cacheSession(patched)
             }
-            await loadFeed(force: true)
-            await loadSpaces(filter: .joined, force: true)
+            // New name → welcome letter → Space picker → Feed.
+            if !hasCompletedWelcomeLetter {
+                withAnimation(MatteryaMotion.snappy) { phase = .welcomeLetter }
+            } else if !hasCompletedSpacesOnboarding {
+                withAnimation(MatteryaMotion.snappy) { phase = .pickSpaces }
+                await loadSpaces(filter: .forYou, force: true)
+                await loadSpaces(filter: .popular, force: true)
+            } else {
+                await loadFeed(force: true)
+                await loadSpaces(filter: .joined, force: true)
+            }
             lastError = nil
         } catch let err as AnonymousError {
             shouldToastLastError = true
@@ -389,9 +404,59 @@ final class AnonymousStore {
     }
 
     func markWildeSeenIfReady() {
-        guard phase == .ready || session.profile != nil else { return }
+        guard phase == .ready || phase == .welcomeLetter || phase == .pickSpaces || session.profile != nil else { return }
         UserDefaults.standard.set(true, forKey: wildeSeenKey)
         withAnimation(MatteryaMotion.snappy) { showWildeEpigraph = false }
+    }
+
+    var hasCompletedWelcomeLetter: Bool {
+        UserDefaults.standard.bool(forKey: welcomeLetterSeenKey)
+    }
+
+    var hasCompletedSpacesOnboarding: Bool {
+        UserDefaults.standard.bool(forKey: spacesOnboardingSeenKey)
+    }
+
+    func completeWelcomeLetter() {
+        UserDefaults.standard.set(true, forKey: welcomeLetterSeenKey)
+        if !hasCompletedSpacesOnboarding {
+            withAnimation(MatteryaMotion.snappy) { phase = .pickSpaces }
+            Task {
+                await loadSpaces(filter: .forYou, force: true)
+                await loadSpaces(filter: .popular, force: true)
+            }
+        } else {
+            completeSpacesOnboarding()
+        }
+    }
+
+    /// Spaces shown on the first-time join picker (For you, then popular fill).
+    /// Includes already-joined so the Join button can flip to Joined in place.
+    var spacesOnboardingCandidates: [AnonymousSpace] {
+        var seen = Set<String>()
+        var out: [AnonymousSpace] = []
+        for space in (spacesByFilter[.forYou] ?? []) + (spacesByFilter[.popular] ?? []) + (spacesByFilter[.free] ?? []) {
+            guard !space.isPaid else { continue }
+            guard seen.insert(space.id).inserted else { continue }
+            out.append(space)
+            if out.count >= 24 { break }
+        }
+        return out
+    }
+
+    func completeSpacesOnboarding() {
+        UserDefaults.standard.set(true, forKey: spacesOnboardingSeenKey)
+        withAnimation(MatteryaMotion.snappy) { phase = .ready }
+        Task {
+            await loadFeed(force: true)
+            await loadSpaces(filter: .joined, force: true)
+            await loadSpaces(filter: .forYou, force: false)
+        }
+    }
+
+    @discardableResult
+    func joinSpace(_ space: AnonymousSpace) async -> Bool {
+        await ensureJoined(space)
     }
 
     // MARK: - Spaces
@@ -1064,6 +1129,10 @@ final class AnonymousStore {
             next = .needAttest
         } else if remote.profile == nil {
             next = .needUsername
+        } else if !UserDefaults.standard.bool(forKey: welcomeLetterSeenKey) {
+            next = .welcomeLetter
+        } else if !UserDefaults.standard.bool(forKey: spacesOnboardingSeenKey) {
+            next = .pickSpaces
         } else {
             next = .ready
         }
@@ -1079,8 +1148,15 @@ final class AnonymousStore {
             if !UserDefaults.standard.bool(forKey: wildeSeenKey) {
                 showWildeEpigraph = true
             }
-        } else if next == .ready {
+        } else if next == .ready || next == .welcomeLetter || next == .pickSpaces {
             markWildeSeenIfReady()
+        }
+
+        if next == .pickSpaces {
+            Task {
+                await loadSpaces(filter: .forYou, force: false)
+                await loadSpaces(filter: .popular, force: false)
+            }
         }
     }
 
