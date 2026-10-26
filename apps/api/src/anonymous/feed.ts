@@ -38,6 +38,44 @@ function masqueradeFamily(row: {
   return 'text';
 }
 
+/** Stable 0…1 jitter so soft-recycle pages rotate instead of freezing the same tops. */
+function forYouJitter(seed: string, id: string): number {
+  let h = 2166136261;
+  const s = `${seed}:${id}`;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return ((h >>> 0) % 10_000) / 10_000;
+}
+
+const FEED_SELECT = `
+    select p.id, p.space_id, p.title, p.body, p.state, p.score, p.comment_count,
+           p.created_at, p.edited_at, p.media_type, p.media_url, p.thumb_url,
+           s.slug as space_slug, s.title as space_title,
+           a.id as author_id, a.username as author_username, a.avatar_seed as author_avatar_seed,
+           coalesce(v.value, 0) as my_vote,
+           case when m.id is not null then 1 else 0 end as is_member
+    from anonymous.posts p
+    join anonymous.spaces s on s.id = p.space_id
+    join anonymous.profiles a on a.id = p.author_profile_id
+    left join anonymous.space_memberships m
+      on m.space_id = s.id and m.anon_profile_id = $1::uuid and m.state = 'active'
+    left join anonymous.votes v
+      on v.target_type = 'post' and v.target_id = p.id and v.anon_profile_id = $1::uuid
+    left join anonymous.blocks b
+      on b.blocker_profile_id = $1::uuid and b.blocked_profile_id = p.author_profile_id
+    where p.state = 'active'
+      and s.status in ('active', 'read_only')
+      and b.id is null
+      and (
+        m.id is not null
+        or (
+          s.visibility = 'adult_public'
+          and s.admission = 'free'
+        )
+      )`;
+
 /**
  * Feed from joined Spaces + public (adult_public + free) Spaces only.
  * Restricted / private / paid Spaces never appear unless the viewer is an active member.
@@ -63,11 +101,13 @@ export async function getFeed(opts: {
 
   const params: unknown[] = [opts.profile.id];
   let cursorClause = '';
+  let cursorCreatedAt: string | null = null;
   if (opts.cursor) {
     try {
       const raw = Buffer.from(opts.cursor, 'base64url').toString('utf8');
       const [created_at, id] = raw.split('|');
       if (created_at && id) {
+        cursorCreatedAt = created_at;
         params.push(created_at, id);
         cursorClause = ` and (p.created_at, p.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
       }
@@ -76,39 +116,18 @@ export async function getFeed(opts: {
     }
   }
 
-  // Over-fetch for social ranking; new/chrono stays tight.
-  const fetchLimit = useSocial ? Math.min(limit * 6, 180) : limit + 1;
+  const isForYou = sort === 'for_you';
+  // For you needs a wide pool — newest-180 alone freezes the same Hot tops forever.
+  const fetchLimit = useSocial
+    ? isForYou
+      ? Math.min(Math.max(limit * 16, 320), 480)
+      : Math.min(limit * 6, 180)
+    : limit + 1;
   params.push(fetchLimit);
 
-  const { rows } = await pool.query<any>(
+  const { rows: recentRows } = await pool.query<any>(
     `
-    select p.id, p.space_id, p.title, p.body, p.state, p.score, p.comment_count,
-           p.created_at, p.edited_at, p.media_type, p.media_url, p.thumb_url,
-           s.slug as space_slug, s.title as space_title,
-           a.id as author_id, a.username as author_username, a.avatar_seed as author_avatar_seed,
-           coalesce(v.value, 0) as my_vote,
-           case when m.id is not null then 1 else 0 end as is_member
-    from anonymous.posts p
-    join anonymous.spaces s on s.id = p.space_id
-    join anonymous.profiles a on a.id = p.author_profile_id
-    left join anonymous.space_memberships m
-      on m.space_id = s.id and m.anon_profile_id = $1::uuid and m.state = 'active'
-    left join anonymous.votes v
-      on v.target_type = 'post' and v.target_id = p.id and v.anon_profile_id = $1::uuid
-    left join anonymous.blocks b
-      on b.blocker_profile_id = $1::uuid and b.blocked_profile_id = p.author_profile_id
-    where p.state = 'active'
-      and s.status in ('active', 'read_only')
-      and b.id is null
-      and (
-        -- Joined: include that Space's posts (private / restricted / paid ok).
-        m.id is not null
-        -- Not joined: public Spaces only — never restricted/private/paid.
-        or (
-          s.visibility = 'adult_public'
-          and s.admission = 'free'
-        )
-      )
+    ${FEED_SELECT}
       ${cursorClause}
     order by p.created_at desc, p.id desc
     limit $${params.length}
@@ -116,12 +135,41 @@ export async function getFeed(opts: {
     params
   );
 
+  // First For you page: also sample older inventory so ledger can serve beyond the newest slice.
+  let rows = recentRows as any[];
+  if (isForYou && !cursorCreatedAt && recentRows.length) {
+    const oldest = recentRows[recentRows.length - 1]?.created_at;
+    if (oldest) {
+      const exploreLimit = Math.min(240, fetchLimit);
+      try {
+        const { rows: older } = await pool.query<any>(
+          `
+          ${FEED_SELECT}
+            and p.created_at < $2::timestamptz
+          order by (p.score + coalesce(p.comment_count, 0) * 2) desc, p.created_at desc
+          limit $3
+          `,
+          [opts.profile.id, oldest, exploreLimit]
+        );
+        if (older.length) {
+          const seen = new Set(rows.map((r: any) => String(r.id)));
+          for (const r of older) {
+            if (seen.has(String(r.id))) continue;
+            seen.add(String(r.id));
+            rows.push(r);
+          }
+        }
+      } catch {
+        /* keep recent-only pool */
+      }
+    }
+  }
+
   let selected = rows as any[];
 
   if (useSocial && rows.length) {
     const now = Date.now();
     const viewerId = String(opts.profile.id);
-    const isForYou = sort === 'for_you';
     // Keep the viewer's own posts at the top for ~3 days — Hot/ledger was wiping
     // brand-new score-0 posts on the next soft refresh (showed once, then gone).
     const ownRows = rows.filter((r: any) => {
@@ -136,7 +184,8 @@ export async function getFeed(opts: {
     const membershipJoined = isForYou ? 1.35 : 1;
     const membershipPublic = isForYou ? 0.28 : 0.35;
     const halfLifeHours = isForYou ? 22 : 18;
-    const seenPenalty = isForYou ? 0.18 : 0.28;
+    // Soft recycle must not re-pin the same viral tops — nearly drop seen cards.
+    const seenPenalty = isForYou ? 0.04 : 0.28;
 
     const scored = rows
       .filter((r: any) => !ownIds.has(String(r.id)))
@@ -146,13 +195,17 @@ export async function getFeed(opts: {
         const ups = Math.max(0, Number(r.score) || 0);
         const membershipBoost =
           Number(r.is_member) === 1 ? membershipJoined : membershipPublic;
-        const score = socialHotScore({
+        let score = socialHotScore({
           ups,
           commentCount: Number(r.comment_count) || 0,
           ageHours,
           membershipBoost,
           halfLifeHours,
         });
+        // Per-request jitter so refresh/load-more rotate when scores cluster.
+        if (isForYou) {
+          score *= 0.88 + 0.24 * forYouJitter(requestId, String(r.id));
+        }
         return {
           row: r,
           id: String(r.id),
@@ -173,7 +226,10 @@ export async function getFeed(opts: {
     // Soft recycle only when unviewed inventory is short — seen cards get a
     // hard score penalty so fresh content still wins MMR (MIND §2 / §11).
     const rankedSlots = Math.max(1, limit + 1 - Math.min(ownRows.length, 3));
-    const ledgerUser = await resolveLedgerUserId(opts.profile.id);
+    // Always ledger — fall back to anon profile id when account link is missing
+    // (seeded personas / older claims left 5k+ profiles with only ~1 link).
+    const ledgerUser =
+      (await resolveLedgerUserId(opts.profile.id)) ?? String(opts.profile.id);
     let eligible = scored;
     let freshCount = scored.length;
     let recycleCount = 0;
@@ -189,7 +245,11 @@ export async function getFeed(opts: {
       } else {
         const seen = scored
           .filter((c) => delivered.has(c.mediaKey))
-          .map((c) => ({ ...c, score: c.score * seenPenalty }));
+          .map((c) => ({
+            ...c,
+            // Extra jitter on recycle so the same 12 don't stick after exhaustion.
+            score: c.score * seenPenalty * (0.7 + 0.6 * forYouJitter(`${requestId}:seen`, c.id)),
+          }));
         recycleCount = seen.length;
         eligible = [...fresh, ...seen];
       }
@@ -306,7 +366,11 @@ export async function getFeed(opts: {
   };
 }
 
-/** Map anonymous profile → Matterya account for the shared delivery ledger. */
+/**
+ * Map anonymous profile → Matterya account for the shared delivery ledger.
+ * Callers must fall back to the anon profile id when this returns null —
+ * most seeded/legacy profiles have no account link (links ≪ profiles).
+ */
 async function resolveLedgerUserId(anonProfileId: string): Promise<string | null> {
   try {
     const { rows } = await pool.query<{ account_id: string }>(

@@ -58,6 +58,8 @@ struct AnonymousFeedView: View {
                         .onAppear {
                             // Prefetch first page of comments so opening the thread never spins.
                             AnonymousCommentsWarmCache.shared.warm(post.id)
+                            // Session suppress — next refresh/load-more skips already-seen cards.
+                            store.markFeedPostSeen(post.id)
                             // Endless For you — prefetch when ~8 cards from the end.
                             if index >= store.feed.count - 8 {
                                 Task { await store.loadMoreFeed() }

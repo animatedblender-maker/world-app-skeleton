@@ -47,6 +47,8 @@ final class AnonymousStore {
     var feedLoading = false
     var feedLoadingMore = false
     var feedHasMore = true
+    /// Posts already painted this Masquerade session — refresh/load-more prefer unseen.
+    private var sessionSeenFeedIds: Set<String> = []
     /// Coalesce bootstrap + Feed tab `.task` so Masquerade doesn't double-hit `/feed`.
     private var feedLoadTask: Task<Void, Never>?
 
@@ -600,13 +602,23 @@ final class AnonymousStore {
         }
     }
 
-    /// Paint cache immediately, then pull a fresh ranked page so sticky Reddit
-    /// photos don't freeze the top forever (delivery ledger advances on each fetch).
+    /// Remember cards the user already saw so the next ranked page can skip them.
+    func markFeedPostSeen(_ id: String) {
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        sessionSeenFeedIds.insert(trimmed)
+    }
+
+    /// Paint cache immediately, then always pull a fresh ranked page so For you
+    /// advances (delivery ledger + wider candidate pool) instead of freezing.
     func softRefreshFeedIfStale() async {
         guard !feedLoading else { return }
-        if feed.isEmpty || isFeedCacheStale() {
-            await loadFeed(force: true)
+        // Mark current head as seen before reshuffle — sticky Reddit tops were
+        // winning every soft refresh when the ledger key was missing.
+        for post in feed.prefix(40) {
+            sessionSeenFeedIds.insert(post.id)
         }
+        await loadFeed(force: true)
     }
 
     private func performLoadFeed(force: Bool) async {
@@ -619,12 +631,21 @@ final class AnonymousStore {
             for item in page.items {
                 postById[item.id] = item
             }
-            var merged = mergeOwnRecentPosts(into: page.items)
+            // Prefer never-seen this session; fall back to full page when inventory is thin.
+            let fresh = page.items.filter { !sessionSeenFeedIds.contains($0.id) }
+            let preferred = fresh.count >= min(8, page.items.count) ? fresh : page.items
+            var merged = mergeOwnRecentPosts(into: preferred)
             // Never let a thin ranked page wipe a healthy feed (ledger exhaustion).
             if merged.count < 6, feed.count > merged.count {
                 let incomingIds = Set(merged.map(\.id))
-                let keep = feed.filter { !incomingIds.contains($0.id) }
-                merged = mergeOwnRecentPosts(into: Array((merged + keep).prefix(48)))
+                let keep = feed.filter { !incomingIds.contains($0.id) && !sessionSeenFeedIds.contains($0.id) }
+                let keepAny = keep.isEmpty
+                    ? feed.filter { !incomingIds.contains($0.id) }
+                    : keep
+                merged = mergeOwnRecentPosts(into: Array((merged + keepAny).prefix(48)))
+            }
+            for item in merged {
+                sessionSeenFeedIds.insert(item.id)
             }
             withAnimation(MatteryaMotion.insert) {
                 feed = merged
@@ -651,33 +672,51 @@ final class AnonymousStore {
     /// Endless Masquerade For you — append the next ranked page.
     func loadMoreFeed() async {
         guard !feedLoading, !feedLoadingMore else { return }
-        guard feedHasMore, let cursor = feedCursor, !cursor.isEmpty else { return }
+        guard feedHasMore, feedCursor?.isEmpty == false else { return }
         feedLoadingMore = true
         defer { feedLoadingMore = false }
-        do {
-            let page = try await AnonymousService.feed(
-                sort: feedSort,
-                cursor: cursor,
-                limit: AnonymousService.feedPageLimit
-            )
-            var seen = Set(feed.map(\.id))
-            var appended: [AnonymousPost] = []
-            for item in page.items where seen.insert(item.id).inserted {
-                postById[item.id] = item
-                appended.append(item)
+        var hops = 0
+        while hops < 4 {
+            hops += 1
+            guard let cursor = feedCursor, !cursor.isEmpty else {
+                feedHasMore = false
+                return
             }
-            if !appended.isEmpty {
-                withAnimation(MatteryaMotion.insert) {
-                    feed.append(contentsOf: appended)
+            do {
+                let page = try await AnonymousService.feed(
+                    sort: feedSort,
+                    cursor: cursor,
+                    limit: AnonymousService.feedPageLimit
+                )
+                var seen = Set(feed.map(\.id)).union(sessionSeenFeedIds)
+                var appended: [AnonymousPost] = []
+                for item in page.items where seen.insert(item.id).inserted {
+                    postById[item.id] = item
+                    sessionSeenFeedIds.insert(item.id)
+                    appended.append(item)
                 }
+                feedCursor = page.nextCursor
+                if !appended.isEmpty {
+                    withAnimation(MatteryaMotion.insert) {
+                        feed.append(contentsOf: appended)
+                    }
+                    feedHasMore = page.nextCursor != nil
+                    cacheFeed(feed, cursor: feedCursor)
+                    return
+                }
+                // All duplicates — advance cursor and try again (bounded hops).
+                guard let next = page.nextCursor, next != cursor else {
+                    feedHasMore = false
+                    cacheFeed(feed, cursor: feedCursor)
+                    return
+                }
+                feedHasMore = true
+            } catch {
+                feedHasMore = feedCursor != nil
+                return
             }
-            feedCursor = page.nextCursor
-            // Empty page or no cursor → stop; also stop if we got zero new ids (exhausted).
-            feedHasMore = page.nextCursor != nil && !appended.isEmpty
-            cacheFeed(feed, cursor: feedCursor)
-        } catch {
-            feedHasMore = feedCursor != nil
         }
+        cacheFeed(feed, cursor: feedCursor)
     }
 
     private func isFeedCacheStale() -> Bool {
@@ -717,6 +756,9 @@ final class AnonymousStore {
     }
 
     func refreshFeed() async {
+        for post in feed.prefix(60) {
+            sessionSeenFeedIds.insert(post.id)
+        }
         await loadFeed(force: true)
     }
 
