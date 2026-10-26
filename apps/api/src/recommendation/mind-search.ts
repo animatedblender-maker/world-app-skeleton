@@ -1,9 +1,15 @@
 /**
- * MIND-020 — Hybrid search (keyword + Voyage ANN).
+ * MIND-020 — Hybrid search (keyword + Voyage ANN + Voyage rerank).
  * Public posts only. Masquerade stays on its own keyword path.
  */
 import { pool } from '../db.js';
 import { annCandidates, mindEmbeddingsEnabled } from './mind-embeddings.js';
+import {
+  MIND_RERANK_CANDIDATE_CAP,
+  mindRerankEnabled,
+  rerankPassage,
+  voyageRerank,
+} from './mind-rerank.js';
 
 export function mindHybridSearchEnabled(): boolean {
   const v = process.env.MIND_HYBRID_SEARCH_ENABLED;
@@ -25,6 +31,9 @@ export type HybridSearchResult = {
   lexicalCount: number;
   semanticCount: number;
   hybrid: boolean;
+  /** True when Voyage rerank reordered the candidate head. */
+  reranked: boolean;
+  rerankModel: string | null;
   latencyMs: number;
 };
 
@@ -154,6 +163,8 @@ export async function hybridSearch(opts: {
       lexicalCount: 0,
       semanticCount: 0,
       hybrid: false,
+      reranked: false,
+      rerankModel: null,
       latencyMs: Date.now() - started,
     };
   }
@@ -173,35 +184,45 @@ export async function hybridSearch(opts: {
     }
   }
 
-  const ranked = useHybrid && semanticIds.length
+  let ranked = useHybrid && semanticIds.length
     ? rrfMerge(lexical, semanticIds)
     : lexical;
-  const items = ranked.slice(offset, offset + limit);
 
-  // Fill title/author for semantic-only hits
-  const missing = items.filter((i) => !i.title).map((i) => i.id);
-  if (missing.length) {
-    try {
-      const { rows } = await pool.query<{
-        id: string;
-        title: string | null;
-        author_id: string | null;
-      }>(
-        `select id::text, title, author_id::text from public.posts where id = any($1::uuid[])`,
-        [missing]
-      );
-      const meta = new Map(rows.map((r) => [r.id, r]));
-      for (const it of items) {
-        const m = meta.get(it.id);
-        if (m) {
-          it.title = m.title;
-          it.authorId = m.author_id;
-        }
+  // Fill title/body for the rerank head (and page) before Voyage.
+  const headN = Math.min(MIND_RERANK_CANDIDATE_CAP, ranked.length);
+  const needMeta = ranked.slice(0, Math.max(headN, offset + limit));
+  await fillHitMeta(needMeta);
+
+  let reranked = false;
+  let rerankModel: string | null = null;
+  if (mindRerankEnabled() && ranked.length >= 2) {
+    const head = ranked.slice(0, headN);
+    const docs = head.map((h) =>
+      rerankPassage(h.title, (h as HybridSearchHit & { body?: string | null }).body)
+    );
+    const result = await voyageRerank({
+      query,
+      documents: docs,
+      topK: head.length,
+    });
+    if (result) {
+      const reordered = result.order
+        .map((i) => head[i])
+        .filter((h): h is HybridSearchHit => !!h);
+      const seen = new Set(reordered.map((h) => h.id));
+      for (const h of head) {
+        if (!seen.has(h.id)) reordered.push(h);
       }
-    } catch {
-      /* ignore */
+      for (const h of reordered) {
+        if (!h.sources.includes('rerank')) h.sources = [...h.sources, 'rerank'];
+      }
+      ranked = [...reordered, ...ranked.slice(headN)];
+      reranked = true;
+      rerankModel = result.model;
     }
   }
+
+  const items = ranked.slice(offset, offset + limit);
 
   return {
     query,
@@ -209,6 +230,37 @@ export async function hybridSearch(opts: {
     lexicalCount: lexical.length,
     semanticCount: semanticIds.length,
     hybrid: useHybrid && semanticIds.length > 0,
+    reranked,
+    rerankModel,
     latencyMs: Date.now() - started,
   };
+}
+
+type HitWithBody = HybridSearchHit & { body?: string | null };
+
+async function fillHitMeta(hits: HybridSearchHit[]): Promise<void> {
+  if (hits.length === 0) return;
+  const ids = [...new Set(hits.map((i) => i.id))];
+  try {
+    const { rows } = await pool.query<{
+      id: string;
+      title: string | null;
+      body: string | null;
+      author_id: string | null;
+    }>(
+      `select id::text, title, left(coalesce(body, ''), 1200) as body, author_id::text
+       from public.posts where id = any($1::uuid[])`,
+      [ids]
+    );
+    const meta = new Map(rows.map((r) => [r.id, r]));
+    for (const it of hits) {
+      const m = meta.get(it.id);
+      if (!m) continue;
+      if (!it.title) it.title = m.title;
+      if (!it.authorId) it.authorId = m.author_id;
+      (it as HitWithBody).body = m.body;
+    }
+  } catch {
+    /* ignore — rerank will use title-only / fallback passage */
+  }
 }

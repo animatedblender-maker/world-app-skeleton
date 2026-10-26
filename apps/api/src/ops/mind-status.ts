@@ -37,6 +37,10 @@ import {
   getEmbeddingsStatus,
   type EmbeddingsStatus,
 } from '../recommendation/mind-embeddings.js';
+import {
+  getRerankStatus,
+  type RerankStatus,
+} from '../recommendation/mind-rerank.js';
 import { getGuardianStatus } from '../recommendation/mind-guardian.js';
 import { mindSessionFeaturesEnabled } from '../recommendation/mind-session.js';
 import { mindOpportunityEnabled } from '../recommendation/mind-opportunity.js';
@@ -76,6 +80,7 @@ export type MindStatus = {
     mindOpportunity: boolean;
     mindTrainedRanker: boolean;
     mindHybridSearch: boolean;
+    mindRerank: boolean;
   };
   guardian?: {
     openPostReports: number;
@@ -140,6 +145,7 @@ export type MindStatus = {
   };
   mediaUnderstanding: MediaUnderstandingStatus;
   embeddings: EmbeddingsStatus;
+  rerank: RerankStatus;
   masquerade: {
     rooms: { slug: string; title: string; posts: number }[];
     posts: number;
@@ -659,6 +665,8 @@ async function buildMindStatus(): Promise<MindStatus> {
     console.warn('[mind-status] embeddings', err?.message ?? err);
   }
 
+  const rerank = getRerankStatus();
+
   let guardian;
   try {
     guardian = await getGuardianStatus();
@@ -682,6 +690,7 @@ async function buildMindStatus(): Promise<MindStatus> {
       mindOpportunity: mindOpportunityEnabled(),
       mindTrainedRanker: mindTrainedRankerEnabled(),
       mindHybridSearch: mindHybridSearchEnabled(),
+      mindRerank: rerank.enabled,
     },
     ledger,
     engagement,
@@ -697,6 +706,7 @@ async function buildMindStatus(): Promise<MindStatus> {
     purpose,
     mediaUnderstanding,
     embeddings,
+    rerank,
     guardian,
   };
 }

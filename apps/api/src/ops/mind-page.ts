@@ -461,7 +461,7 @@ const GAPS = [
   ['9','Candidates','shipped','Multi-lane + cold-start + opportunity'],
   ['10','Rank + diversity','shipped','MMR + session + controls + logistic flag'],
   ['11','Exposure ledger','shipped','feed_video_delivery on all For You surfaces'],
-  ['12','Search / world','shipped','GET /v1/search hybrid · /v1/world/country'],
+  ['12','Search / world','shipped','GET /v1/search hybrid+rerank · /v1/world/country'],
   ['13','Guardian','shipped','/mind Guardian panel + report/mod queues'],
   ['14','Ads / economy','missing','Product gate (insights organic only)'],
   ['15','GraphQL FeedItem','missing','REST (ADR 0002)'],
@@ -702,6 +702,7 @@ async function refresh(){
       'opportunity=' + !!fl.mindOpportunity,
       'trained=' + !!fl.mindTrainedRanker,
       'hybridSearch=' + !!fl.mindHybridSearch,
+      'rerank=' + !!fl.mindRerank,
     ].join(' · ');
 
     const seed = s.seed || {};
@@ -784,10 +785,12 @@ async function refresh(){
       ['Embed rows', emb.rows],
       ['Embed dims', emb.dims],
     ].map(([l,n]) => '<div class="stat"><div class="n">'+fmt(n)+'</div><div class="l">'+l+'</div></div>').join('');
+    const rr = s.rerank || {};
     $('mediaNote').textContent +=
       ' · Voyage ' + (emb.configured ? (emb.model||'ok') : 'missing key')
       + ' · embed rows ' + fmt(emb.rows)
-      + ' · ' + (emb.enabled ? 'ANN ON' : 'ANN OFF');
+      + ' · ' + (emb.enabled ? 'ANN ON' : 'ANN OFF')
+      + ' · rerank ' + (rr.enabled ? ('ON · ' + (rr.model||'ok')) : 'OFF');
 
     if (!$('docNav').dataset.ready) {
       $('docNav').dataset.ready = '1';
