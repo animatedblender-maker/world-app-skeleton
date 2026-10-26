@@ -107,12 +107,15 @@ struct AnonymousPostDetailView: View {
         .onAppear {
             if comments.isEmpty, let warm = AnonymousCommentsWarmCache.shared.cached(localPost.id) {
                 comments = warm
+                hasCompletedInitialLoad = true
             }
             AnonymousCommentsWarmCache.shared.warm(localPost.id)
         }
         .task {
-            await refreshPostMedia()
-            await loadComments()
+            // Comments first — never block the thread on media re-sign.
+            async let commentsTask: Void = loadComments()
+            async let mediaTask: Void = refreshPostMedia()
+            _ = await (commentsTask, mediaTask)
         }
     }
 
@@ -242,36 +245,55 @@ struct AnonymousPostDetailView: View {
 
     private func loadComments() async {
         commentsError = nil
+        // Paint warm/disk cache immediately so the thread never sits empty.
         if comments.isEmpty, let warm = AnonymousCommentsWarmCache.shared.cached(localPost.id) {
             comments = warm
+            hasCompletedInitialLoad = true
         }
+
         let loaded = await AnonymousCommentsWarmCache.shared.load(localPost.id)
-        if !loaded.isEmpty || comments.isEmpty {
+        if !loaded.isEmpty {
             comments = loaded
-        }
-        if loaded.isEmpty {
-            do {
-                let page = try await AnonymousService.listComments(postId: localPost.id)
-                comments = page.items
-                if !page.items.isEmpty {
-                    AnonymousCommentsWarmCache.shared.store(localPost.id, comments: page.items)
-                }
-                if localPost.commentCount == nil || (localPost.commentCount ?? 0) < page.items.count {
-                    localPost.commentCount = page.items.count
-                }
-            } catch let err as AnonymousError {
-                if comments.isEmpty {
-                    commentsError = err.errorDescription ?? "Couldn’t load comments."
-                }
-            } catch {
-                if comments.isEmpty {
-                    commentsError = error.localizedDescription
-                }
+            if localPost.commentCount == nil || (localPost.commentCount ?? 0) < countComments(loaded) {
+                localPost.commentCount = countComments(loaded)
             }
-        } else if localPost.commentCount == nil || (localPost.commentCount ?? 0) < loaded.count {
-            localPost.commentCount = loaded.count
+            hasCompletedInitialLoad = true
+            return
+        }
+
+        // Cache miss / empty warm — one direct fetch (API no longer signs media first).
+        do {
+            let page = try await AnonymousService.listComments(postId: localPost.id)
+            comments = page.items
+            if !page.items.isEmpty {
+                AnonymousCommentsWarmCache.shared.store(localPost.id, comments: page.items)
+            }
+            let n = countComments(page.items)
+            if localPost.commentCount == nil || (localPost.commentCount ?? 0) < n {
+                localPost.commentCount = n
+            }
+        } catch let err as AnonymousError {
+            if comments.isEmpty {
+                commentsError = err.errorDescription ?? "Couldn’t load comments."
+            }
+        } catch {
+            if comments.isEmpty {
+                commentsError = error.localizedDescription
+            }
         }
         hasCompletedInitialLoad = true
+    }
+
+    private func countComments(_ items: [AnonymousComment]) -> Int {
+        var n = 0
+        func walk(_ list: [AnonymousComment]) {
+            for item in list {
+                n += 1
+                if let replies = item.replies, !replies.isEmpty { walk(replies) }
+            }
+        }
+        walk(items)
+        return n
     }
 
     private func submitComment() async {

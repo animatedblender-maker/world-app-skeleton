@@ -13,6 +13,8 @@ struct AnonymousFeedView: View {
                 } else {
                     await store.softRefreshFeedIfStale()
                 }
+                // Prefetch comments for the first screenful so open is instant.
+                AnonymousCommentsWarmCache.shared.warmMany(store.feed.prefix(10).map(\.id))
             }
     }
 

@@ -35,6 +35,7 @@ export type CommentPublic = {
   score: number;
   created_at: string;
   my_vote?: number;
+  replies?: CommentPublic[];
 };
 
 function iso(v: Date | string | null | undefined): string | null {
@@ -670,6 +671,70 @@ async function notifyCommentRecipients(opts: {
   }
 }
 
+/** View gate for a post — no media signing (comments must stay instant). */
+async function assertCanViewPostForComments(opts: {
+  profile: AnonymousProfilePublic;
+  postId: string;
+  ageEligible: boolean;
+  ageAttested: boolean;
+}): Promise<
+  | { ok: true }
+  | { ok: false; code: string; reason: string; status: number }
+> {
+  const { rows } = await pool.query<{ space_id: string; state: string }>(
+    `
+    select p.space_id, p.state
+    from anonymous.posts p
+    where p.id = $1::uuid
+    limit 1
+    `,
+    [opts.postId]
+  );
+  const row = rows[0];
+  if (!row || row.state === 'deleted') {
+    return { ok: false, code: 'not_found', reason: 'Post not found.', status: 404 };
+  }
+  const space = await getSpaceById(row.space_id);
+  if (!space) {
+    return { ok: false, code: 'not_found', reason: 'Post not found.', status: 404 };
+  }
+  const decision = await canAccess({
+    profile: {
+      id: opts.profile.id,
+      state: opts.profile.state,
+      age_attested_at: opts.profile.age_attested_at,
+    },
+    space,
+    action: 'VIEW_CONTENT',
+    ageEligible: opts.ageEligible,
+    ageAttested: opts.ageAttested,
+  });
+  if (!decision.allow) {
+    return { ok: false, code: decision.code, reason: decision.reason, status: 403 };
+  }
+  return { ok: true };
+}
+
+function nestCommentTree(flat: CommentPublic[]): CommentPublic[] {
+  const nodes = new Map<string, CommentPublic>();
+  for (const c of flat) {
+    nodes.set(c.id, { ...c, replies: [] });
+  }
+  const roots: CommentPublic[] = [];
+  for (const c of flat) {
+    const node = nodes.get(c.id)!;
+    const parentId = c.parent_id;
+    if (parentId && nodes.has(parentId)) {
+      const parent = nodes.get(parentId)!;
+      parent.replies = parent.replies ?? [];
+      parent.replies.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+  return roots;
+}
+
 export async function listComments(opts: {
   profile: AnonymousProfilePublic;
   postId: string;
@@ -679,8 +744,9 @@ export async function listComments(opts: {
   | { ok: true; comments: CommentPublic[] }
   | { ok: false; code: string; reason: string; status: number }
 > {
-  const postRes = await getPost(opts);
-  if (!postRes.ok) return postRes as any;
+  // Never call getPost here — withResolvedMedia (R2 sign) made every thread open feel stuck.
+  const gate = await assertCanViewPostForComments(opts);
+  if (!gate.ok) return gate;
 
   const { rows } = await pool.query<any>(
     `
@@ -702,24 +768,26 @@ export async function listComments(opts: {
     [opts.postId, opts.profile.id]
   );
 
+  const flat: CommentPublic[] = rows.map((r) => ({
+    id: r.id,
+    post_id: r.post_id,
+    parent_id: r.parent_comment_id,
+    author: {
+      id: r.author_id,
+      username: r.author_username,
+      avatar_seed: r.author_avatar_seed,
+    },
+    body: r.body,
+    depth: Number(r.depth) || 0,
+    state: r.state,
+    score: Number(r.score) || 0,
+    created_at: iso(r.created_at)!,
+    my_vote: Number(r.my_vote) || 0,
+  }));
+
   return {
     ok: true,
-    comments: rows.map((r) => ({
-      id: r.id,
-      post_id: r.post_id,
-      parent_id: r.parent_comment_id,
-      author: {
-        id: r.author_id,
-        username: r.author_username,
-        avatar_seed: r.author_avatar_seed,
-      },
-      body: r.body,
-      depth: Number(r.depth) || 0,
-      state: r.state,
-      score: Number(r.score) || 0,
-      created_at: iso(r.created_at)!,
-      my_vote: Number(r.my_vote) || 0,
-    })),
+    comments: nestCommentTree(flat),
   };
 }
 
