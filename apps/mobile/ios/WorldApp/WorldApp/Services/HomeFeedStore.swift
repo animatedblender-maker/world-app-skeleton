@@ -66,7 +66,11 @@ final class HomeFeedStore {
     private var pendingDrainTask: Task<Void, Never>?
     /// Empty thin/top-up pages (filtered viewed) — forceNetwork follow-ups per generation.
     private var emptyAppendRetriesThisGeneration = 0
-    private let maxEmptyAppendRetries = 3
+    /// Endless Home: never stop retrying empty pages — only back off between attempts.
+    private let maxEmptyAppendRetries = 10_000
+    /// Bumps on every load-more finish (including empty) so FeedView's sentinel `.task` re-fires
+    /// when `windowLimit` did not grow — otherwise the absolute bottom goes quiet forever.
+    private(set) var endlessLoadEpoch = 0
     /// Architecture §5 — retry the same key after timeout; clear only on success.
     private var pendingFeedIdempotencyKey: String?
     /// Consecutive `/v1/feed` timeouts/500s on the same thin cursor.
@@ -98,12 +102,12 @@ final class HomeFeedStore {
     private let windowPageSize = 10
     /// First paint window — ~1.5 screens; grow on scroll.
     private let firstWindow = 10
-    /// Prefetch next page later — early ratio stacked /v1/feed + Sparks while scrolling.
-    private let prefetchRatio = 0.55
-    /// Architecture: request next batch when ~3 cards remain (use 4 for settle lag).
-    private let nearTailRemaining = 4
+    /// Prefetch earlier so the tail never waits on network while scrolling.
+    private let prefetchRatio = 0.40
+    /// Request next batch when ~8 cards remain (settle lag + fling headroom).
+    private let nearTailRemaining = 8
     /// Keep at least this many posts buffered in `posts` (beyond the visible window).
-    private let minBufferedPool = 36
+    private let minBufferedPool = 48
 
     private init() {
         scrollSettleObserver = NotificationCenter.default.addObserver(
@@ -435,6 +439,7 @@ final class HomeFeedStore {
         generation += 1
         let gen = generation
         emptyAppendRetriesThisGeneration = 0
+        endlessLoadEpoch = 0
         errorMessage = nil
         nextCursor = nil
         thinFeedFailStreak = 0
@@ -629,7 +634,8 @@ final class HomeFeedStore {
         var guardPasses = 0
         var stagnant = 0
         var lastCount = posts.count
-        while posts.count < minBufferedPool, hasMore, guardPasses < 6 {
+        // Endless Home: keep walking until the buffer is deep or generation changes.
+        while posts.count < minBufferedPool, hasMore, guardPasses < 12 {
             guardPasses += 1
             let gen = generation
             // Force network — don't only expand the local window.
@@ -637,7 +643,11 @@ final class HomeFeedStore {
             guard gen == generation else { return }
             if posts.count <= lastCount {
                 stagnant += 1
-                if stagnant >= 3 { break }
+                // Brief pause then keep going — empty thin/viewed pages are transient.
+                if stagnant >= 2 {
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                }
+                if stagnant >= 8 { break }
             } else {
                 stagnant = 0
                 lastCount = posts.count
@@ -1388,7 +1398,7 @@ final class HomeFeedStore {
                     // Drop the stuck cursor so the next thin attempt starts fresh.
                     nextCursor = nil
                     pageNextCursor = nil
-                    thinFeedCoolUntil = Date().addingTimeInterval(45)
+                    thinFeedCoolUntil = Date().addingTimeInterval(20)
                     thinFeedFailStreak = 0
                     pendingFeedIdempotencyKey = nil
                 }
@@ -1455,21 +1465,32 @@ final class HomeFeedStore {
         }
 
         if appended.isEmpty {
-            // Keep trying on next scroll — never set hasMore false permanently.
+            // Keep trying forever — never set hasMore false permanently.
             hasMore = true
             if let next = pageNextCursor, next != cursor {
                 nextCursor = next
             }
-            // Filtered-viewed / empty thin must not leave the tail stuck until tab remount.
-            if emptyAppendRetriesThisGeneration < maxEmptyAppendRetries {
-                emptyAppendRetriesThisGeneration += 1
+            emptyAppendRetriesThisGeneration += 1
+            // Pulse sentinel even when windowLimit did not grow.
+            endlessLoadEpoch &+= 1
+            // After several empty top-ups, nudge Sparks pager so the next pass walks fresh R2.
+            if emptyAppendRetriesThisGeneration % 3 == 0 {
+                PostsService.shared.nudgeHomeFeedSparkPagerForEndless()
+            }
+            // Back off a bit so we don't storm /v1/feed — but never stop.
+            let attempt = emptyAppendRetriesThisGeneration
+            let delayMs: UInt64 = min(8_000, 350 + UInt64(attempt) * 250)
+            if attempt <= maxEmptyAppendRetries {
                 let followGen = gen
                 Task(priority: .utility) { [weak self] in
-                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
                     guard let self, followGen == self.generation else { return }
                     await self.loadMore(generation: followGen, forceNetwork: true)
                 }
             }
+            #if DEBUG
+            print("[HomeFeed] loadMore empty retry=\(attempt) pool=\(posts.count) window=\(windowLimit) epoch=\(endlessLoadEpoch)")
+            #endif
             return
         }
 
@@ -1491,6 +1512,7 @@ final class HomeFeedStore {
             nextCursor = pageNextCursor
         }
         hasMore = true
+        endlessLoadEpoch &+= 1
         ContentCache.shared.setPosts(Array(posts.prefix(ContentCache.maxCachedPosts)), for: .homeFeed)
         // Media session 09: page append = thumbs only (no AV pool).
         ImageCache.shared.prefetchFeedMedia(

@@ -712,6 +712,14 @@ final class PostsService {
         homeSparksSurfaceCursor = nil
     }
 
+    /// Endless Home: after empty top-ups, drop a stuck Sparks cursor so the next pass
+    /// walks fresh R2 pages instead of sitting on a filtered-viewed dead end.
+    func nudgeHomeFeedSparkPagerForEndless() {
+        homeFeedSparkOffset = 0
+        homeFeedSparkOrder = []
+        homeSparksSurfaceCursor = nil
+    }
+
     /// Draw Hubs-badge long-form / `__hub_origin__|` shares for Home (not Sparks).
     /// Suggests **unviewed** first (same discovery rule as Sparks); LRV fill only if starved.
     func homeFeedHubTopUp(excluding: Set<String>, limit: Int, forceRefresh: Bool = false) async -> [CountryPost] {
@@ -752,7 +760,8 @@ final class PostsService {
     }
 
     /// Draw the next slice of R2 Sparks for the main feed (SparkFeedCard).
-    /// Fast path: one short `/v1/sparks` cursor page, then GraphQL discover — no multi-page crawls.
+    /// Fast path: `/v1/sparks` cursor pages, then GraphQL discover — soft-recycle only when
+    /// unviewed inventory for this request is exhausted (endless Home never dies).
     func homeFeedSparkTopUp(excluding: Set<String>, limit: Int, forceRefresh: Bool = false) async -> [CountryPost] {
         guard limit > 0 else { return [] }
         if forceRefresh {
@@ -762,16 +771,19 @@ final class PostsService {
         var out: [CountryPost] = []
         var seen = excluding.union(Set(SparkDiscoveryEngine.viewedIDList(limit: 400)))
 
-        // One light surface page from the saved cursor (keeps the library moving without stalls).
+        // Walk more surface pages so Home stays ahead of a fast scroll (~300k R2).
         let surface = await SurfacePageClient.fetchSparksPages(
             want: max(limit, 24),
             startingCursor: homeSparksSurfaceCursor,
-            maxPages: 2,
+            maxPages: 4,
             excluding: seen,
             skipViewed: true
         )
         if let next = surface.nextCursor {
             homeSparksSurfaceCursor = next
+        } else if surface.items.isEmpty {
+            // Cursor exhausted — restart from newest for the next endless pass.
+            homeSparksSurfaceCursor = nil
         }
         for post in surface.items {
             guard seen.insert(post.id).inserted else { continue }
@@ -837,6 +849,35 @@ final class PostsService {
             seen.insert(post.id)
             guard post.playableVideoURL != nil || post.hasVideo || !(post.mediaURL ?? "").isEmpty else { continue }
             out.append(post)
+        }
+
+        // Soft recycle only when this request found zero unviewed Sparks — explicit penalty path.
+        if out.isEmpty {
+            seen = excluding
+            let recycleSurface = await SurfacePageClient.fetchSparksPages(
+                want: max(limit, 24),
+                startingCursor: nil,
+                maxPages: 3,
+                excluding: seen,
+                skipViewed: false
+            )
+            if let next = recycleSurface.nextCursor {
+                homeSparksSurfaceCursor = next
+            }
+            for post in recycleSurface.items {
+                guard seen.insert(post.id).inserted else { continue }
+                guard post.playableVideoURL != nil || post.hasVideo || !(post.mediaURL ?? "").isEmpty else { continue }
+                out.append(post)
+                if out.count >= limit { break }
+            }
+            if out.isEmpty, !sparksSessionCatalog.isEmpty {
+                for post in SparkDiscoveryEngine.rankForDiscovery(sparksSessionCatalog, excluding: seen) {
+                    guard seen.insert(post.id).inserted else { continue }
+                    guard post.playableVideoURL != nil || post.hasVideo || !(post.mediaURL ?? "").isEmpty else { continue }
+                    out.append(post)
+                    if out.count >= limit { break }
+                }
+            }
         }
         return out
     }

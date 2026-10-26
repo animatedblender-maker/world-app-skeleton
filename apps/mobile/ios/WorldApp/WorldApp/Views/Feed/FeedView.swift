@@ -82,13 +82,11 @@ struct FeedView: View {
             let freshBump = appState.feedFreshSessionToken != lastHandledFreshToken
             lastHandledFreshToken = appState.feedFreshSessionToken
             let forceReshape = freshBump || !store.didPaint || store.displayedPosts.isEmpty
-            // Cache strips only on open — discoverSparks raced thin feed and made load feel ages.
+            // Cache strips only on open — no thumb decode storm before first paint settles.
             paintStripsFromCache()
-            prefetchStripThumbnails()
             await store.beginFreshSession(forceReplace: forceReshape)
             guard !Task.isCancelled else { return }
             paintStripsFromCache()
-            prefetchStripThumbnails()
             PerformanceTelemetry.milestoneFromLaunch(
                 "app_start_to_feed_interactive",
                 surface: "feed",
@@ -97,11 +95,17 @@ struct FeedView: View {
                     "didPaint": store.didPaint ? "1" : "0",
                 ]
             )
-            // Strip network + hubs rails after first paint (staggered).
+            // Audible autoplay unlocks from WorldAppApp after splash dismiss — not here.
+            // Strip network + thumbs only after Feed AV gate opens (no Frame0 under splash).
             Task { @MainActor in
+                for _ in 0..<40 {
+                    if FeedVideoFocus.shared.allowsFeedAVWarm { break }
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+                guard FeedVideoFocus.shared.allowsFeedAVWarm else { return }
                 try? await Task.sleep(nanoseconds: 800_000_000)
-                await refreshFeedReels(network: true)
                 prefetchStripThumbnails()
+                await refreshFeedReels(network: true)
                 refreshNewOnPlay()
                 await refreshContinueWatching(network: false)
                 prefetchStripThumbnails()
@@ -212,9 +216,9 @@ struct FeedView: View {
                                 post,
                                 surface: RecommendationSurface.homeForYou.rawValue
                             )
-                            // Do NOT markWatched on fleeting appear — that starved Home
-                            // (90-day suppress + load-more excluded every watched Spark).
-                            // Meaningful views still record via video onViewed / Sparks watch.
+                            // Do NOT markWatched videos on fleeting appear — that starved Home.
+                            // Image cards mark seen on dwell/disappear (EngagementTracker) and
+                            // on pull-to-refresh head snapshot (HomeFeedStore).
                         }
                         .onDisappear {
                             EngagementTracker.shared.feedPostDisappeared(post)
@@ -223,12 +227,15 @@ struct FeedView: View {
 
                     Color.clear
                         .frame(height: 1)
-                        // Re-runs when the window grows so empty/filtered pages retry
-                        // without waiting for a tab remount.
-                        .task(id: store.windowLimit) {
-                            store.requestLoadMore()
-                            try? await Task.sleep(nanoseconds: 600_000_000)
+                        // Endless Home: re-fire when the window grows OR when an empty
+                        // load-more bumps endlessLoadEpoch (otherwise the absolute bottom
+                        // goes quiet forever after filtered-viewed pages).
+                        .task(id: "\(store.windowLimit)-\(store.endlessLoadEpoch)") {
+                            // Sleep first so empty-retry backoff is not defeated by an
+                            // immediate re-entry when endlessLoadEpoch alone changes.
+                            try? await Task.sleep(nanoseconds: 700_000_000)
                             store.drainQueuedLoadMoreIfNeeded()
+                            store.requestLoadMore()
                         }
                     if store.isLoadingMore, store.displayedPosts.count < 6 {
                         ProgressView()
@@ -397,16 +404,19 @@ struct FeedView: View {
             )
         }
 
-        // Dense Hubs thumb path + Frame 0 for every Continue watching / New on Hubs card.
-        // Balanced-light prefetchPostThumbnails (cap 4) left most strip tiles black.
+        // Dense Hubs thumb path — Frame0 only after Feed AV unlock (batch -1001 under splash).
         let hubsStrip = Array(continueWatching + newOnPlay)
         if !hubsStrip.isEmpty {
             ImageCache.shared.prefetchHubsListThumbnails(
                 hubsStrip,
                 maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
             )
-            Task(priority: .utility) {
-                await Frame0PosterResolver.shared.prefetch(postIDs: hubsStrip.map(\.id))
+            if FeedVideoFocus.shared.allowsFeedAVWarm {
+                Task(priority: .utility) {
+                    await Frame0PosterResolver.shared.prefetch(
+                        postIDs: Array(hubsStrip.prefix(6).map(\.id))
+                    )
+                }
             }
         }
     }
@@ -434,8 +444,8 @@ struct FeedView: View {
         let snapshot = PostsService.shared.sparksCatalogSnapshot()
         let pool: [CountryPost]
         if network {
-            // One small discover sample only — never also deep-load catalog on open.
-            let remote = await PostsService.shared.fetchDiscoverSparks(limit: 16)
+            // Thin /v1/sparks only — GraphQL discoverSparks stampeded -1001 on cold open.
+            let remote = await SurfacePageClient.fetchSparks(limit: 16)?.items ?? []
             pool = remote + snapshot
         } else if snapshot.count > 1 {
             var shuffled = snapshot
