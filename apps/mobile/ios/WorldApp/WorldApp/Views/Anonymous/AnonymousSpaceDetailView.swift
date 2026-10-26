@@ -459,8 +459,7 @@ struct AnonymousPostCard: View {
             mediaBlock
                 .padding(.horizontal, style == .feed ? 0 : Theme.pagePadding)
                 .onAppear {
-                    // Prefetch first page so opening the post never shows a comments spinner.
-                    AnonymousCommentsWarmCache.shared.warm(post.id)
+                    // Tease only — feed list owns comment prefetch (keeps scroll light).
                     refreshCommentTease()
                 }
 

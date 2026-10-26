@@ -5,8 +5,11 @@ import Foundation
 enum AnonymousService {
     /// First paint stays under a soft budget; one retry covers cold wakes.
     private static let timeout: TimeInterval = 45
-    private static let feedFirstLimit = 24
-    static let feedPageLimit = 24
+    /// Fat first page — one fetch should cover a long scroll (almost never load-more).
+    private static let feedFirstLimit = 40
+    static let feedPageLimit = 40
+    /// Soft cap for endless scroll — after this, wait for pull-to-refresh.
+    static let feedSoftCap = 80
     static let spacePostsPageLimit = 40
 
     // MARK: - Session / identity
@@ -258,7 +261,7 @@ enum AnonymousService {
         cursor: String? = nil,
         limit: Int? = nil
     ) async throws -> AnonymousPage<AnonymousPost> {
-        let resolvedLimit = min(max(limit ?? feedFirstLimit, 1), 48)
+        let resolvedLimit = min(max(limit ?? feedFirstLimit, 1), 50)
         var q: [String: String] = [
             "sort": sort.rawValue,
             "limit": "\(resolvedLimit)",

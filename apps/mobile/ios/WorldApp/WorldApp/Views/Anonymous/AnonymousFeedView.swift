@@ -13,8 +13,8 @@ struct AnonymousFeedView: View {
                 } else {
                     await store.softRefreshFeedIfStale()
                 }
-                // Prefetch comments for the first screenful so open is instant.
-                AnonymousCommentsWarmCache.shared.warmMany(store.feed.prefix(10).map(\.id))
+                // Prefetch comments for the first screen only — keep feed light.
+                AnonymousCommentsWarmCache.shared.warmMany(store.feed.prefix(6).map(\.id))
             }
     }
 
@@ -58,21 +58,19 @@ struct AnonymousFeedView: View {
                             store.pushPost(post)
                         }
                         .onAppear {
-                            // Prefetch first page of comments so opening the thread never spins.
-                            AnonymousCommentsWarmCache.shared.warm(post.id)
+                            // Prefetch comments only for nearby cards (not every row).
+                            if index < 8 || index >= store.feed.count - 3 {
+                                AnonymousCommentsWarmCache.shared.warm(post.id)
+                            }
                             // Session suppress — next refresh/load-more skips already-seen cards.
                             store.markFeedPostSeen(post.id)
-                            // Endless For you — prefetch when ~8 cards from the end.
-                            if index >= store.feed.count - 8 {
+                            // Rare silent append — only at the very end (first page is fat).
+                            if store.feedHasMore,
+                               store.feed.count < AnonymousService.feedSoftCap,
+                               index >= store.feed.count - 2 {
                                 Task { await store.loadMoreFeed() }
                             }
                         }
-                    }
-                    if store.feedLoadingMore {
-                        ProgressView()
-                            .tint(Theme.inkMuted)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
                     }
                 }
                 .padding(.bottom, 8)

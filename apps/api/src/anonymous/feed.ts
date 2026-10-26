@@ -117,11 +117,11 @@ export async function getFeed(opts: {
   }
 
   const isForYou = sort === 'for_you';
-  // For you needs a wide pool — newest-180 alone freezes the same Hot tops forever.
+  // Wide enough to rotate; capped so first paint stays light/fast (was 480 and felt heavy).
   const fetchLimit = useSocial
     ? isForYou
-      ? Math.min(Math.max(limit * 16, 320), 480)
-      : Math.min(limit * 6, 180)
+      ? Math.min(Math.max(limit * 6, 180), 260)
+      : Math.min(limit * 5, 160)
     : limit + 1;
   params.push(fetchLimit);
 

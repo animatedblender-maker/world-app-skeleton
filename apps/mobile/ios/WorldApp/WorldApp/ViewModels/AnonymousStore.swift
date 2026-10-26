@@ -26,7 +26,8 @@ final class AnonymousStore {
     private let feedCacheKey = "matterya.anonymous.feed.v5"
     private let feedCacheSavedAtKey = "matterya.anonymous.feed.v5.savedAt"
     /// Disk feed older than this is treated as stale — soft-refresh replaces sticky tops.
-    private let feedCacheMaxAge: TimeInterval = 8 * 60
+    /// Keep painted feed longer — Masquerade should feel light, not re-fetch on every open.
+    private let feedCacheMaxAge: TimeInterval = 20 * 60
     private let wildeSeenKey = "matterya.anonymous.wildeSeen.v1"
     private let welcomeLetterSeenKey = "matterya.anonymous.welcomeLetterSeen.v1"
     private let spacesOnboardingSeenKey = "matterya.anonymous.spacesOnboardingSeen.v1"
@@ -684,10 +685,11 @@ final class AnonymousStore {
         sessionSeenFeedIds.insert(trimmed)
     }
 
-    /// Paint cache immediately, then always pull a fresh ranked page so For you
-    /// advances (delivery ledger + wider candidate pool) instead of freezing.
+    /// Background reshuffle only when the painted cache is stale.
+    /// Opening Masquerade with a fresh cache must stay instant (no reload spinner).
     func softRefreshFeedIfStale() async {
         guard !feedLoading else { return }
+        guard isFeedCacheStale() else { return }
         // Mark current head as seen before reshuffle — sticky Reddit tops were
         // winning every soft refresh when the ledger key was missing.
         for post in feed.prefix(40) {
@@ -765,14 +767,18 @@ final class AnonymousStore {
         }
     }
 
-    /// Endless Masquerade For you — append the next ranked page.
+    /// Rare append near the absolute end — first page is fat; soft-cap stops churn.
     func loadMoreFeed() async {
         guard !feedLoading, !feedLoadingMore else { return }
         guard feedHasMore, feedCursor?.isEmpty == false else { return }
+        if feed.count >= AnonymousService.feedSoftCap {
+            feedHasMore = false
+            return
+        }
         feedLoadingMore = true
         defer { feedLoadingMore = false }
         var hops = 0
-        while hops < 4 {
+        while hops < 2 {
             hops += 1
             guard let cursor = feedCursor, !cursor.isEmpty else {
                 feedHasMore = false
@@ -790,17 +796,18 @@ final class AnonymousStore {
                     postById[item.id] = item
                     sessionSeenFeedIds.insert(item.id)
                     appended.append(item)
+                    if feed.count + appended.count >= AnonymousService.feedSoftCap { break }
                 }
                 feedCursor = page.nextCursor
                 if !appended.isEmpty {
-                    withAnimation(MatteryaMotion.insert) {
-                        feed.append(contentsOf: appended)
-                    }
-                    feedHasMore = page.nextCursor != nil
+                    feed.append(contentsOf: appended)
+                    feedHasMore =
+                        page.nextCursor != nil
+                        && feed.count < AnonymousService.feedSoftCap
                     cacheFeed(feed, cursor: feedCursor)
                     return
                 }
-                // All duplicates — advance cursor and try again (bounded hops).
+                // All duplicates — advance cursor once more (bounded).
                 guard let next = page.nextCursor, next != cursor else {
                     feedHasMore = false
                     cacheFeed(feed, cursor: feedCursor)
