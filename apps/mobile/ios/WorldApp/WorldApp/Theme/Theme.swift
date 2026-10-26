@@ -98,8 +98,8 @@ enum Theme {
     /// Readable side inset for post body text on full-width feed cards.
     static let feedTextInset: CGFloat = 16
     static let cardPadding: CGFloat = 12
-    /// Tall enough for large equal tab marks (Feed / Masquerade / Hubs / Messages / Profile).
-    static let tabBarHeight: CGFloat = 56
+    /// Quiet premium tab bar — compact ~22pt marks + selected pill (was 56 for oversized 34pt icons).
+    static let tabBarHeight: CGFloat = 50
 }
 
 // MARK: - Premium motion (YouTube / IG / FB snappy feel — short easeOut, no hangy springs)
