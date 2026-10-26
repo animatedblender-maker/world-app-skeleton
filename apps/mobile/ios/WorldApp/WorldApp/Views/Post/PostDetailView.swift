@@ -43,6 +43,8 @@ struct PostDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Theme.canvas, for: .navigationBar)
         .task(id: postID) {
+            // Prefetch comments while resolving the post so expand never waits.
+            CommentsWarmCache.shared.warm(postID)
             await load()
         }
     }
@@ -55,6 +57,8 @@ struct PostDetailView: View {
         if let cached = PostsService.shared.cachedPostForDetail(id: postID) {
             post = cached
             isLoading = false
+            let threadID = PostsService.commentThreadOriginID(for: cached.id, post: cached) ?? cached.id
+            CommentsWarmCache.shared.warm(threadID)
         }
 
         // Network / hub fetch with a hard timeout so we never spin forever.
@@ -65,6 +69,8 @@ struct PostDetailView: View {
         if let fetched {
             post = fetched
             errorMessage = nil
+            let threadID = PostsService.commentThreadOriginID(for: fetched.id, post: fetched) ?? fetched.id
+            CommentsWarmCache.shared.warm(threadID)
         } else if post == nil {
             errorMessage = "Post not found or couldn’t be loaded. Pull back and try again."
         }

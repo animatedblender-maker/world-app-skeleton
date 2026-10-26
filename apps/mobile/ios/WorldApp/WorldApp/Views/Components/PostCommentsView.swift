@@ -107,7 +107,9 @@ struct PostCommentsView: View {
 
     @State private var commentDraft = ""
     @State private var replyTarget: ReplyTarget?
-    @State private var isLoading = false
+    /// True after the first fetch finishes — used so we never flash a spinner,
+    /// and only show “No comments yet” once we know the thread is empty.
+    @State private var hasCompletedInitialLoad = false
     @State private var isSubmitting = false
     @State private var likingCommentIDs: Set<String> = []
     @FocusState private var composerFocused: Bool
@@ -127,16 +129,13 @@ struct PostCommentsView: View {
                 composer(isReply: false)
             }
 
-            // Show spinner while demo threads / GraphQL load — avoids a false "no comments" flash.
-            if isLoading && threadedComments.isEmpty {
-                ProgressView()
-                    .tint(Theme.accent)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-            } else if threadedComments.isEmpty {
-                Text("No comments yet. Be the first to comment.")
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.inkMuted)
+            // Never show a ProgressView — warm cache, blank while fetching, or empty copy.
+            if threadedComments.isEmpty {
+                if hasCompletedInitialLoad {
+                    Text("No comments yet. Be the first to comment.")
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.inkMuted)
+                }
             } else {
                 ForEach(visibleThreadedComments) { item in
                     FacebookCommentRow(
@@ -182,8 +181,15 @@ struct PostCommentsView: View {
         // Always Matterya paper ink — Sparks full-screen uses .dark and made TextField white-on-white.
         .environment(\.colorScheme, .light)
         .dismissKeyboardOnTap()
+        .onAppear {
+            // Synchronous warm paint — first frame already has the thread when cached.
+            if comments.isEmpty, let warm = CommentsWarmCache.shared.cached(postID) {
+                comments = warm
+            }
+            CommentsWarmCache.shared.warm(postID)
+        }
         .task(id: postID) {
-            // Paint warm cache immediately so Chat / feed expand never flash empty.
+            hasCompletedInitialLoad = false
             if comments.isEmpty, let warm = CommentsWarmCache.shared.cached(postID) {
                 comments = warm
             }
@@ -298,9 +304,6 @@ struct PostCommentsView: View {
         if comments.isEmpty, let warm = CommentsWarmCache.shared.cached(postID) {
             comments = warm
         }
-        let showSpinner = comments.isEmpty
-        if showSpinner { isLoading = true }
-        defer { isLoading = false }
 
         do {
             // Progressive load — first page only on the critical path (was 2000 × 2 GraphQL calls).
@@ -320,7 +323,7 @@ struct PostCommentsView: View {
                     CommentsWarmCache.shared.store(postID, comments: fresh)
                 }
             }
-            // Top up fuller thread without spinner; only replace if we got more rows.
+            // Top up fuller thread in background; only replace if we got more rows.
             let capturedCount = comments.count
             Task { @MainActor in
                 let more = (try? await PostsService.shared.listComments(
@@ -344,6 +347,7 @@ struct PostCommentsView: View {
                 onError?(error.localizedDescription)
             }
         }
+        hasCompletedInitialLoad = true
     }
 
     private func submitComment() async {
@@ -770,8 +774,13 @@ struct ReelsCommentsSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let postID: String
-    @State private var comments: [PostComment] = []
+    @State private var comments: [PostComment]
     @State private var errorMessage: String?
+
+    init(postID: String) {
+        self.postID = postID
+        _comments = State(initialValue: CommentsWarmCache.shared.cached(postID) ?? [])
+    }
 
     var body: some View {
         NavigationStack {
@@ -806,6 +815,7 @@ struct ReelsCommentsSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+        .onAppear { CommentsWarmCache.shared.warm(postID) }
     }
 }
 
@@ -815,8 +825,13 @@ struct SparksCommentsSheet: View {
     let postID: String
     @Environment(\.dismiss) private var dismiss
 
-    @State private var comments: [PostComment] = []
+    @State private var comments: [PostComment]
     @State private var errorMessage: String?
+
+    init(postID: String) {
+        self.postID = postID
+        _comments = State(initialValue: CommentsWarmCache.shared.cached(postID) ?? [])
+    }
 
     var body: some View {
         NavigationStack {

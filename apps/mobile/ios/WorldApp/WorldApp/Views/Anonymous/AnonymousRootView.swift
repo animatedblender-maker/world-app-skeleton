@@ -690,6 +690,7 @@ private struct AnonymousPostRouteView: View {
             }
         }
         .task(id: postId) {
+            AnonymousCommentsWarmCache.shared.warm(postId)
             if let cached = store.post(forId: postId) {
                 fetched = cached
                 return

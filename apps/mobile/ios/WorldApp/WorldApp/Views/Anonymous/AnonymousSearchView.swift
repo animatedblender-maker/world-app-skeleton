@@ -380,6 +380,7 @@ struct AnonymousSearchView: View {
             commitHistory()
             store.pushPost(post)
         }
+        .onAppear { AnonymousCommentsWarmCache.shared.warm(post.id) }
     }
 
     private func peopleRow(_ person: AnonymousProfile) -> some View {

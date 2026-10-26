@@ -5,7 +5,9 @@ import Foundation
 enum AnonymousService {
     /// First paint stays under a soft budget; one retry covers cold wakes.
     private static let timeout: TimeInterval = 45
-    private static let feedFirstLimit = 12
+    private static let feedFirstLimit = 24
+    static let feedPageLimit = 24
+    static let spacePostsPageLimit = 40
 
     // MARK: - Session / identity
 
@@ -252,7 +254,7 @@ enum AnonymousService {
     }
 
     static func feed(
-        sort: AnonymousFeedSort = .hot,
+        sort: AnonymousFeedSort = .forYou,
         cursor: String? = nil,
         limit: Int? = nil
     ) async throws -> AnonymousPage<AnonymousPost> {
@@ -276,10 +278,62 @@ enum AnonymousService {
         return try await getPage("/v1/anonymous/notifications", query: q, itemType: AnonymousNotification.self)
     }
 
+    static func search(query: String, limit: Int = 12) async throws -> AnonymousSearchResults {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return AnonymousSearchResults() }
+        return try await get(
+            "/v1/anonymous/search",
+            query: [
+                "q": q,
+                "limit": "\(min(max(limit, 1), 24))",
+            ],
+            as: AnonymousSearchResults.self
+        )
+    }
+
+    static func publicProfile(username: String) async throws -> AnonymousPublicProfilePayload {
+        let handle = username
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+        let encoded = handle.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? handle
+        return try await get(
+            "/v1/anonymous/profiles/\(encoded)",
+            as: AnonymousPublicProfilePayload.self
+        )
+    }
+
+    static func authorPosts(
+        username: String,
+        cursor: String? = nil,
+        limit: Int = 24
+    ) async throws -> AnonymousPage<AnonymousPost> {
+        let handle = username
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+        let encoded = handle.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? handle
+        var q: [String: String] = [
+            "limit": "\(min(max(limit, 1), 48))",
+        ]
+        if let cursor, !cursor.isEmpty { q["cursor"] = cursor }
+        return try await getPage(
+            "/v1/anonymous/profiles/\(encoded)/posts",
+            query: q,
+            itemType: AnonymousPost.self
+        )
+    }
+
     // MARK: - HTTP
 
     private static func get<T: Decodable>(_ path: String, as type: T.Type) async throws -> T {
-        let req = try await makeRequest(path: path, method: "GET", query: nil, body: nil)
+        try await get(path, query: nil, as: type)
+    }
+
+    private static func get<T: Decodable>(
+        _ path: String,
+        query: [String: String]?,
+        as type: T.Type
+    ) async throws -> T {
+        let req = try await makeRequest(path: path, method: "GET", query: query, body: nil)
         return try await perform(req, as: type)
     }
 

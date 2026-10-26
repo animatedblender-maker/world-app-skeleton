@@ -104,6 +104,7 @@ struct AnonymousPublicProfileView: View {
                             store.pushPost(post)
                         }
                         .onAppear {
+                            AnonymousCommentsWarmCache.shared.warm(post.id)
                             if index >= posts.count - 4 {
                                 Task { await loadMorePosts() }
                             }

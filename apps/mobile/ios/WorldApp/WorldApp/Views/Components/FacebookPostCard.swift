@@ -487,6 +487,18 @@ struct FacebookPostCard: View {
         .onAppear {
             // Seed from model (incl. origin count on shares) so the link never vanishes after tab hops.
             loadedCommentCount = max(loadedCommentCount, post.displayCommentCount)
+            let threadID = commentsThreadID
+            // Viewport prefetch — first page ready before Chat / expand tap.
+            CommentsWarmCache.shared.warm(threadID)
+            if threadID != post.id {
+                CommentsWarmCache.shared.warm(post.id)
+            }
+            if inlineComments.isEmpty,
+               let warm = CommentsWarmCache.shared.cached(threadID)
+                ?? CommentsWarmCache.shared.cached(post.id) {
+                inlineComments = warm
+                loadedCommentCount = max(loadedCommentCount, warm.count)
+            }
             if commentsInitiallyExpanded {
                 commentsExpanded = true
             }
@@ -505,6 +517,13 @@ struct FacebookPostCard: View {
             inlineComments = []
             loadedCommentCount = post.displayCommentCount
             commentError = nil
+            let threadID = commentsThreadID
+            CommentsWarmCache.shared.warm(threadID)
+            if let warm = CommentsWarmCache.shared.cached(threadID)
+                ?? CommentsWarmCache.shared.cached(post.id) {
+                inlineComments = warm
+                loadedCommentCount = max(loadedCommentCount, warm.count)
+            }
         }
         .onChange(of: post.commentCount) { _, newValue in
             loadedCommentCount = max(loadedCommentCount, newValue, post.displayCommentCount)

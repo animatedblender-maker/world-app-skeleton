@@ -208,6 +208,7 @@ struct AnonymousSpace: Identifiable, Codable, Hashable, Sendable {
     var visibility: AnonymousSpaceVisibility?
     var admission: AnonymousSpaceAdmission?
     var memberCount: Int?
+    var postCount: Int?
     var ownerUsername: String?
     var rules: [String]?
     var isJoined: Bool?
@@ -230,6 +231,7 @@ struct AnonymousSpace: Identifiable, Codable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, slug, title, description, category, tags, visibility, admission, status
         case memberCount, member_count
+        case postCount, post_count
         case ownerUsername, owner_username
         case rules
         case isJoined, is_joined, joined
@@ -252,6 +254,8 @@ struct AnonymousSpace: Identifiable, Codable, Hashable, Sendable {
         admission = try c.decodeIfPresent(AnonymousSpaceAdmission.self, forKey: .admission)
         memberCount = try c.decodeIfPresent(Int.self, forKey: .memberCount)
             ?? c.decodeIfPresent(Int.self, forKey: .member_count)
+        postCount = try c.decodeIfPresent(Int.self, forKey: .postCount)
+            ?? c.decodeIfPresent(Int.self, forKey: .post_count)
         ownerUsername = try c.decodeIfPresent(String.self, forKey: .ownerUsername)
             ?? c.decodeIfPresent(String.self, forKey: .owner_username)
         // API may return rules as [{position,text}] — accept string array only; ignore objects.
@@ -287,6 +291,7 @@ struct AnonymousSpace: Identifiable, Codable, Hashable, Sendable {
         try c.encodeIfPresent(visibility, forKey: .visibility)
         try c.encodeIfPresent(admission, forKey: .admission)
         try c.encodeIfPresent(memberCount, forKey: .memberCount)
+        try c.encodeIfPresent(postCount, forKey: .postCount)
         try c.encodeIfPresent(ownerUsername, forKey: .ownerUsername)
         try c.encodeIfPresent(rules, forKey: .rules)
         try c.encodeIfPresent(isJoined, forKey: .isJoined)
@@ -397,7 +402,7 @@ struct AnonymousNotification: Identifiable, Codable, Hashable, Sendable {
     var isUnread: Bool { readAt == nil }
 
     var displayTitle: String {
-        if let title, !title.isEmpty { return title }
+        if let title, !title.isEmpty { return ContentSanitizer.displayText(title) }
         switch kind {
         case "reply": return "New reply"
         case "mention": return "Mention"
@@ -407,7 +412,7 @@ struct AnonymousNotification: Identifiable, Codable, Hashable, Sendable {
     }
 
     var displayBody: String {
-        if let body, !body.isEmpty { return body }
+        if let body, !body.isEmpty { return ContentSanitizer.displayText(body) }
         if let actor = actorUsername, let space = spaceTitle {
             return "@\(actor) in \(space)"
         }
@@ -437,6 +442,15 @@ struct AnonymousPost: Identifiable, Codable, Hashable, Sendable {
     var mediaType: String?
     var mediaURL: String?
     var thumbURL: String?
+
+    /// UI title — `subreddit`/`reddit` already remapped to space/Masquerade.
+    var displayTitle: String? {
+        let t = ContentSanitizer.displayText(title)
+        return t.isEmpty ? nil : t
+    }
+
+    /// UI body — never leak source-platform wording into Masquerade.
+    var displayBody: String { ContentSanitizer.displayText(body) }
 
     var hasImage: Bool {
         guard let mediaType else { return false }
@@ -551,6 +565,56 @@ struct AnonymousPost: Identifiable, Codable, Hashable, Sendable {
 enum AnonymousRoute: Hashable, Sendable {
     case space(slug: String)
     case post(id: String)
+    case profile(username: String)
+    /// Official Matterya (and later user↔user) DMs — stays inside Masquerade so Back → Inbox.
+    case conversation(id: String)
+}
+
+struct AnonymousSearchResults: Decodable, Sendable {
+    var people: [AnonymousProfile]
+    var spaces: [AnonymousSpace]
+    var posts: [AnonymousPost]
+
+    enum CodingKeys: String, CodingKey {
+        case people, spaces, posts
+        case profiles
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        people = (try? c.decode([AnonymousProfile].self, forKey: .people))
+            ?? (try? c.decode([AnonymousProfile].self, forKey: .profiles))
+            ?? []
+        spaces = (try? c.decode([AnonymousSpace].self, forKey: .spaces)) ?? []
+        posts = (try? c.decode([AnonymousPost].self, forKey: .posts)) ?? []
+    }
+
+    init(people: [AnonymousProfile] = [], spaces: [AnonymousSpace] = [], posts: [AnonymousPost] = []) {
+        self.people = people
+        self.spaces = spaces
+        self.posts = posts
+    }
+}
+
+struct AnonymousPublicProfilePayload: Decodable, Sendable {
+    var profile: AnonymousProfile
+    var postCount: Int?
+    var spaceCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case profile
+        case postCount, post_count
+        case spaceCount, space_count
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        profile = try c.decode(AnonymousProfile.self, forKey: .profile)
+        postCount = try c.decodeIfPresent(Int.self, forKey: .postCount)
+            ?? c.decodeIfPresent(Int.self, forKey: .post_count)
+        spaceCount = try c.decodeIfPresent(Int.self, forKey: .spaceCount)
+            ?? c.decodeIfPresent(Int.self, forKey: .space_count)
+    }
 }
 
 struct AnonymousComment: Identifiable, Codable, Hashable, Sendable {
@@ -565,6 +629,9 @@ struct AnonymousComment: Identifiable, Codable, Hashable, Sendable {
     var score: Int?
     var myVote: Int?
     var replies: [AnonymousComment]?
+
+    /// UI body — `subreddit` → space, `reddit` → masquerade (never raw).
+    var displayBody: String { ContentSanitizer.displayText(body) }
 
     enum CodingKeys: String, CodingKey {
         case id, body, author, depth, score, replies
@@ -639,6 +706,8 @@ struct AnonymousFeedPage: Codable, Sendable {
 }
 
 enum AnonymousFeedSort: String, CaseIterable, Identifiable, Sendable {
+    /// Personalized MIND ranking (social hot + MMR + delivery ledger).
+    case forYou = "for_you"
     case hot
     case new
     case top
@@ -647,6 +716,7 @@ enum AnonymousFeedSort: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
+        case .forYou: "For you"
         case .hot: "Hot"
         case .new: "New"
         case .top: "Top"

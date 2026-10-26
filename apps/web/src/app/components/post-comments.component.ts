@@ -14,6 +14,7 @@ import { AuthService } from '../core/services/auth.service';
 import { PostsService } from '../core/services/posts.service';
 import { ProfileService } from '../core/services/profile.service';
 import { resolveAvatarUrl } from '../core/utils/media-url.util';
+import { rebrandCompetitorNames } from '../core/utils/content-sanitize';
 import { HubsCatalogService } from '../hubs/hubs-catalog.service';
 import { HubsEngagementService } from '../hubs/hubs-engagement.service';
 
@@ -30,8 +31,7 @@ type ThreadItem = { comment: PostComment; depth: 0 | 1 };
   imports: [CommonModule, FormsModule],
   template: `
     <div class="pc">
-      <div class="pc-status" *ngIf="loading && !threaded.length">Loading comments…</div>
-
+      <!-- Never show a loading status — warm/blank until fetch finishes, then empty copy. -->
       <div class="pc-empty" *ngIf="!loading && !threaded.length">
         No comments yet. Be the first to comment.
       </div>
@@ -52,7 +52,7 @@ type ThreadItem = { comment: PostComment; depth: 0 | 1 };
           </div>
           <div class="pc-main">
             <div class="pc-name">{{ nameOf(item.comment) }}</div>
-            <div class="pc-body">{{ item.comment.body }}</div>
+            <div class="pc-body">{{ displayBody(item.comment) }}</div>
             <div class="pc-actions">
               <button
                 type="button"
@@ -443,6 +443,10 @@ export class PostCommentsComponent implements OnChanges {
 
   nameOf(c: PostComment): string {
     return c.author?.display_name || c.author?.username || 'Member';
+  }
+
+  displayBody(c: PostComment): string {
+    return rebrandCompetitorNames(c.body || '');
   }
 
   initialsOf(c: PostComment): string {

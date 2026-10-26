@@ -271,6 +271,7 @@ struct AnonymousSpaceDetailView: View {
                         store.pushPost(post)
                     }
                     .onAppear {
+                        AnonymousCommentsWarmCache.shared.warm(post.id)
                         if index >= store.spacePosts.count - 6 {
                             Task { await store.loadMoreSpacePosts() }
                         }
@@ -442,6 +443,10 @@ struct AnonymousPostCard: View {
             }
 
             mediaBlock
+                .onAppear {
+                    // Prefetch first page so opening the post never shows a comments spinner.
+                    AnonymousCommentsWarmCache.shared.warm(post.id)
+                }
 
             // Like · comments → full post thread (not an in-feed expand).
             HStack(spacing: 16) {

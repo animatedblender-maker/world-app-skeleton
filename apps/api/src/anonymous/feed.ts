@@ -121,6 +121,7 @@ export async function getFeed(opts: {
   if (useSocial && rows.length) {
     const now = Date.now();
     const viewerId = String(opts.profile.id);
+    const isForYou = sort === 'for_you';
     // Keep the viewer's own posts at the top for ~3 days — Hot/ledger was wiping
     // brand-new score-0 posts on the next soft refresh (showed once, then gone).
     const ownRows = rows.filter((r: any) => {
@@ -131,19 +132,26 @@ export async function getFeed(opts: {
     });
     const ownIds = new Set(ownRows.map((r: any) => String(r.id)));
 
+    // For you: stronger membership affinity + slightly longer half-life than Hot.
+    const membershipJoined = isForYou ? 1.35 : 1;
+    const membershipPublic = isForYou ? 0.28 : 0.35;
+    const halfLifeHours = isForYou ? 22 : 18;
+    const seenPenalty = isForYou ? 0.18 : 0.28;
+
     const scored = rows
       .filter((r: any) => !ownIds.has(String(r.id)))
       .map((r: any) => {
         const created = r.created_at instanceof Date ? r.created_at : new Date(r.created_at);
         const ageHours = Math.max(0, (now - created.getTime()) / 3600_000);
         const ups = Math.max(0, Number(r.score) || 0);
-        const membershipBoost = Number(r.is_member) === 1 ? 1 : 0.35;
+        const membershipBoost =
+          Number(r.is_member) === 1 ? membershipJoined : membershipPublic;
         const score = socialHotScore({
           ups,
           commentCount: Number(r.comment_count) || 0,
           ageHours,
           membershipBoost,
-          halfLifeHours: 18,
+          halfLifeHours,
         });
         return {
           row: r,
@@ -181,7 +189,7 @@ export async function getFeed(opts: {
       } else {
         const seen = scored
           .filter((c) => delivered.has(c.mediaKey))
-          .map((c) => ({ ...c, score: c.score * 0.28 }));
+          .map((c) => ({ ...c, score: c.score * seenPenalty }));
         recycleCount = seen.length;
         eligible = [...fresh, ...seen];
       }
@@ -193,14 +201,15 @@ export async function getFeed(opts: {
     ];
 
     // Prefer fresh text/video mix — image-only Reddit packs were freezing the top of Hot.
+    // For you: slightly higher MMR diversity so Spaces/creators rotate more.
     const picked = mmrPick(eligible, {
       limit: rankedSlots,
-      lambda: 0.72,
+      lambda: isForYou ? 0.68 : 0.72,
       maxSameCreator: 1,
-      creatorWindow: 10,
+      creatorWindow: isForYou ? 12 : 10,
       // Big Spaces (e.g. HighlyStrange) must not own the whole first page.
-      maxSameSpace: 2,
-      spaceWindow: 10,
+      maxSameSpace: isForYou ? 1 : 2,
+      spaceWindow: isForYou ? 12 : 10,
       exclusiveFamilies: ['tiktok', 'image', 'video'],
       // Image/video at most ~1 in 4 so media cards cannot pin the whole first page.
       exclusiveEveryN: 4,

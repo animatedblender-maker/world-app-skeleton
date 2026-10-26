@@ -4,18 +4,20 @@ struct AnonymousPostDetailView: View {
     let post: AnonymousPost
     @Environment(AppState.self) private var appState
     private var store: AnonymousStore { AnonymousStore.shared }
-    @State private var comments: [AnonymousComment] = []
-    @State private var isLoading = true
+    @State private var comments: [AnonymousComment]
+    /// True after first fetch finishes — empty copy only then; never a spinner.
+    @State private var hasCompletedInitialLoad = false
     @State private var commentsError: String?
     @State private var replyBody = ""
     @State private var replyParentId: String?
-    @State private var showReport = false
     @State private var localPost: AnonymousPost
     @FocusState private var composerFocused: Bool
 
     init(post: AnonymousPost) {
         self.post = post
         _localPost = State(initialValue: post)
+        // Seed from warm cache so the thread paints on first frame.
+        _comments = State(initialValue: AnonymousCommentsWarmCache.shared.cached(post.id) ?? [])
     }
 
     var body: some View {
@@ -39,53 +41,7 @@ struct AnonymousPostDetailView: View {
                     }
                 )
 
-                HStack {
-                    Button { showReport = true } label: {
-                        Text("Report")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Theme.danger)
-                    }
-                    .buttonStyle(.plain)
-                    Spacer()
-                    Button {
-                        Task {
-                            let ok = await store.block(profileId: localPost.authorProfileId)
-                            if ok {
-                                appState.showToast("Blocked @\(localPost.authorUsername)", style: .info)
-                            } else if let msg = store.consumeError() {
-                                appState.showToast(msg, style: .error)
-                            } else {
-                                appState.showToast("Couldn’t block this author.", style: .error)
-                            }
-                        }
-                    } label: {
-                        Text("Block author")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Theme.inkMuted)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, Theme.pagePadding)
-                .padding(.vertical, 12)
-
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Comments")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Theme.ink)
-                    if let count = localPost.commentCount, count > 0 {
-                        Text("\(count)")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Theme.inkMuted)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, Theme.pagePadding)
-                .padding(.bottom, 10)
-
-                if isLoading {
-                    ProgressView().tint(Theme.ink)
-                        .padding(.horizontal, Theme.pagePadding)
-                } else if let commentsError {
+                if let commentsError {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(commentsError)
                             .font(.subheadline)
@@ -98,11 +54,13 @@ struct AnonymousPostDetailView: View {
                     }
                     .padding(.horizontal, Theme.pagePadding)
                 } else if comments.isEmpty {
-                    Text(MatteryaCopy.anonymousNoComments)
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.inkMuted)
-                        .padding(.horizontal, Theme.pagePadding)
-                        .padding(.bottom, 8)
+                    if hasCompletedInitialLoad {
+                        Text(MatteryaCopy.anonymousNoComments)
+                            .font(.subheadline)
+                            .foregroundStyle(Theme.inkMuted)
+                            .padding(.horizontal, Theme.pagePadding)
+                            .padding(.bottom, 8)
+                    }
                 } else {
                     LazyVStack(spacing: 0) {
                         ForEach(flattenedComments, id: \.rowId) { row in
@@ -136,15 +94,15 @@ struct AnonymousPostDetailView: View {
         // Back lives on MasqueradePushChrome — system nav bars stay hidden inside MainTabView.
         .toolbar(.hidden, for: .navigationBar)
         .tint(Theme.ink)
+        .onAppear {
+            if comments.isEmpty, let warm = AnonymousCommentsWarmCache.shared.cached(localPost.id) {
+                comments = warm
+            }
+            AnonymousCommentsWarmCache.shared.warm(localPost.id)
+        }
         .task {
             await refreshPostMedia()
             await loadComments()
-        }
-        .confirmationDialog("Report post", isPresented: $showReport, titleVisibility: .visible) {
-            Button("Harassment", role: .destructive) { Task { await report("harassment") } }
-            Button("Spam", role: .destructive) { Task { await report("spam") } }
-            Button("Doxxing / identity", role: .destructive) { Task { await report("doxxing") } }
-            Button("Cancel", role: .cancel) {}
         }
     }
 
@@ -241,22 +199,37 @@ struct AnonymousPostDetailView: View {
     }
 
     private func loadComments() async {
-        isLoading = true
         commentsError = nil
-        defer { isLoading = false }
-        do {
-            let page = try await AnonymousService.listComments(postId: localPost.id)
-            comments = page.items
-            if localPost.commentCount == nil || (localPost.commentCount ?? 0) < page.items.count {
-                localPost.commentCount = page.items.count
-            }
-        } catch let err as AnonymousError {
-            comments = []
-            commentsError = err.errorDescription ?? "Couldn’t load comments."
-        } catch {
-            comments = []
-            commentsError = error.localizedDescription
+        if comments.isEmpty, let warm = AnonymousCommentsWarmCache.shared.cached(localPost.id) {
+            comments = warm
         }
+        let loaded = await AnonymousCommentsWarmCache.shared.load(localPost.id)
+        if !loaded.isEmpty || comments.isEmpty {
+            comments = loaded
+        }
+        if loaded.isEmpty {
+            do {
+                let page = try await AnonymousService.listComments(postId: localPost.id)
+                comments = page.items
+                if !page.items.isEmpty {
+                    AnonymousCommentsWarmCache.shared.store(localPost.id, comments: page.items)
+                }
+                if localPost.commentCount == nil || (localPost.commentCount ?? 0) < page.items.count {
+                    localPost.commentCount = page.items.count
+                }
+            } catch let err as AnonymousError {
+                if comments.isEmpty {
+                    commentsError = err.errorDescription ?? "Couldn’t load comments."
+                }
+            } catch {
+                if comments.isEmpty {
+                    commentsError = error.localizedDescription
+                }
+            }
+        } else if localPost.commentCount == nil || (localPost.commentCount ?? 0) < loaded.count {
+            localPost.commentCount = loaded.count
+        }
+        hasCompletedInitialLoad = true
     }
 
     private func submitComment() async {
@@ -268,6 +241,7 @@ struct AnonymousPostDetailView: View {
                 input: AnonymousCreateCommentInput(body: body, parentCommentId: replyParentId)
             )
             comments.append(created)
+            AnonymousCommentsWarmCache.shared.store(localPost.id, comments: comments)
             replyBody = ""
             replyParentId = nil
             composerFocused = false
@@ -277,11 +251,6 @@ struct AnonymousPostDetailView: View {
         } catch {
             appState.showToast(error.localizedDescription, style: .error)
         }
-    }
-
-    private func report(_ reason: String) async {
-        await store.report(targetType: "post", targetId: localPost.id, reason: reason)
-        appState.showToast("Report submitted.", style: .info)
     }
 
     private func replaceComment(_ updated: AnonymousComment) {
@@ -298,7 +267,9 @@ struct AnonymousPostDetailView: View {
             }
             return false
         }
-        _ = walk(&comments)
+        if walk(&comments) {
+            AnonymousCommentsWarmCache.shared.store(localPost.id, comments: comments)
+        }
     }
 }
 
@@ -310,52 +281,83 @@ private struct AnonymousCommentRowView: View {
     var onToggleLike: (() -> Void)? = nil
     var onReply: () -> Void
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Text("@\(comment.authorUsername)")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Theme.ink)
-                if isPostAuthor {
-                    Text("Author")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(Theme.ink)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(Theme.matteDeep, in: Capsule())
-                        .accessibilityLabel("Post author")
-                }
-                Spacer()
-                Text(RelativeTime.format(comment.createdAt))
-                    .font(.caption)
-                    .foregroundStyle(Theme.inkMuted)
-            }
-            Text(comment.body)
-                .font(.body)
-                .foregroundStyle(Theme.inkSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 16) {
-                Button {
-                    onToggleLike?()
-                } label: {
-                    let liked = (comment.myVote ?? 0) > 0
-                    Label(
-                        "\((comment.score ?? 0))",
-                        systemImage: liked ? "heart.fill" : "heart"
-                    )
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(liked ? Theme.danger : Theme.inkMuted)
-                }
-                .buttonStyle(.plain)
-                .disabled(onToggleLike == nil)
-                .accessibilityLabel((comment.myVote ?? 0) > 0 ? "Unlike" : "Like")
+    private var isOfficialMatterya: Bool {
+        comment.authorUsername
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() == "matterya"
+    }
 
-                Button(action: onReply) {
-                    Text("Reply")
-                        .font(.caption.weight(.semibold))
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            if isOfficialMatterya {
+                AvatarView(url: nil, seed: "matterya", size: 28)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    if isOfficialMatterya {
+                        Text("Matterya")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.ink)
+                        MatteryaVerifiedBadge(size: 12)
+                    } else {
+                        Button {
+                            AnonymousStore.shared.pushProfile(username: comment.authorUsername)
+                        } label: {
+                            Text("@\(comment.authorUsername)")
+                                .font(.caption)
+                                .foregroundStyle(Theme.inkMuted)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Open @\(comment.authorUsername)")
+                    }
+                    if isPostAuthor {
+                        Text("Author")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(Theme.ink)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Theme.matteDeep, in: Capsule())
+                            .accessibilityLabel("Post author")
+                    }
+                    Spacer()
+                    Text(RelativeTime.format(comment.createdAt))
+                        .font(.caption2)
                         .foregroundStyle(Theme.inkMuted)
                 }
-                .buttonStyle(.plain)
+                MatteryaRichText(
+                    text: comment.displayBody,
+                    font: .body,
+                    color: Theme.ink
+                )
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.canvasMuted, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                HStack(spacing: 16) {
+                    Button {
+                        onToggleLike?()
+                    } label: {
+                        let liked = (comment.myVote ?? 0) > 0
+                        Label(
+                            "\((comment.score ?? 0))",
+                            systemImage: liked ? "heart.fill" : "heart"
+                        )
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(liked ? Theme.danger : Theme.inkMuted)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(onToggleLike == nil)
+                    .accessibilityLabel((comment.myVote ?? 0) > 0 ? "Unlike" : "Like")
+
+                    Button(action: onReply) {
+                        Text("Reply")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.inkMuted)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
         .padding(.horizontal, Theme.pagePadding)

@@ -18,9 +18,9 @@ final class AnonymousStore {
     static let shared = AnonymousStore()
 
     private let cacheKey = "matterya.anonymous.session.v1"
-    /// v3 — social For you / delivery-aware pages (drop pre-MMR caches).
-    private let feedCacheKey = "matterya.anonymous.feed.v4"
-    private let feedCacheSavedAtKey = "matterya.anonymous.feed.v4.savedAt"
+    /// v5 — default sort=for_you (stronger MIND MMR than hot); drop hot-default caches.
+    private let feedCacheKey = "matterya.anonymous.feed.v5"
+    private let feedCacheSavedAtKey = "matterya.anonymous.feed.v5.savedAt"
     /// Disk feed older than this is treated as stale — soft-refresh replaces sticky tops.
     private let feedCacheMaxAge: TimeInterval = 8 * 60
     private let wildeSeenKey = "matterya.anonymous.wildeSeen.v1"
@@ -42,7 +42,8 @@ final class AnonymousStore {
 
     var feed: [AnonymousPost] = []
     var feedCursor: String?
-    var feedSort: AnonymousFeedSort = .hot
+    /// Default For you — social score + MMR + masquerade_for_you delivery ledger.
+    var feedSort: AnonymousFeedSort = .forYou
     var feedLoading = false
     var feedLoadingMore = false
     var feedHasMore = true
@@ -110,6 +111,8 @@ final class AnonymousStore {
         let id = post.id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty else { return }
         postById[id] = post
+        // Prefetch comments before the detail view appears.
+        AnonymousCommentsWarmCache.shared.warm(id)
         // Avoid duplicate top-of-stack pushes from double taps.
         if navigationPath.last == .post(id: id) { return }
         navigationPath = navigationPath + [.post(id: id)]
@@ -119,6 +122,7 @@ final class AnonymousStore {
     func pushPostId(_ id: String) {
         let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        AnonymousCommentsWarmCache.shared.warm(trimmed)
         if navigationPath.last == .post(id: trimmed) { return }
         navigationPath = navigationPath + [.post(id: trimmed)]
     }
