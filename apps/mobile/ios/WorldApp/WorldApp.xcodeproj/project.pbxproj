@@ -6,6 +6,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		3592492D083C475A9992822C /* MatteryaPhotoLightbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = E06E090538504BF68C0293F7 /* MatteryaPhotoLightbox.swift */; };
 		BFA069A17DD04323B9323D37 /* MatteryaImageGallery.swift in Sources */ = {isa = PBXBuildFile; fileRef = C54E9DED6D304A64AA38C0EE /* MatteryaImageGallery.swift */; };
 		2442341D5F5942BC9AB2A9A00C5417DB /* SearchHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00F1345045B14A0FB46CA790A9C3699C /* SearchHistoryStore.swift */; };
 		3DE36B1DAAAE40F8AD404561B94C84E5 /* AnonymousCommentsWarmCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = D783F7BA737F4119ACAB83AD2477CBF7 /* AnonymousCommentsWarmCache.swift */; };
@@ -218,6 +219,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		E06E090538504BF68C0293F7 /* MatteryaPhotoLightbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Views/Components/MatteryaPhotoLightbox.swift; sourceTree = "<group>"; };
 		8700EA8860D543958A2BCFA7 /* WorldApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WorldApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		26D8A3C0F72F40C28CC0944C /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/AppDelegate.swift; sourceTree = "<group>"; };
 		6D7F4410AA824F22B66C40C0 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldApp/Config/AppConfig.swift; sourceTree = "<group>"; };
@@ -448,6 +450,7 @@
 				480A7D8385034AD68BA4DE8C /* MindInterestClient.swift */,
 				991DEDE6DA0749CDB9F88D9E /* LiveCaptionEngine.swift */,
 				C54E9DED6D304A64AA38C0EE /* MatteryaImageGallery.swift */,
+				E06E090538504BF68C0293F7 /* MatteryaPhotoLightbox.swift */,
 				00F1345045B14A0FB46CA790A9C3699C /* SearchHistoryStore.swift */,
 				D783F7BA737F4119ACAB83AD2477CBF7 /* AnonymousCommentsWarmCache.swift */,
 				5AB84EA2F40546498F365BF7145294BF /* YouTubeSearchSheet.swift */,
@@ -623,6 +626,7 @@
 				835C0D919FD048A19D092B10 /* MindInterestClient.swift in Sources */,
 				026DBB35C25646A2B9F89BC7 /* LiveCaptionEngine.swift in Sources */,
 				BFA069A17DD04323B9323D37 /* MatteryaImageGallery.swift in Sources */,
+				3592492D083C475A9992822C /* MatteryaPhotoLightbox.swift in Sources */,
 				2442341D5F5942BC9AB2A9A00C5417DB /* SearchHistoryStore.swift in Sources */,
 				3DE36B1DAAAE40F8AD404561B94C84E5 /* AnonymousCommentsWarmCache.swift in Sources */,
 				B524AFE4A39E4F399D1C0F1B42E30C32 /* YouTubeSearchSheet.swift in Sources */,

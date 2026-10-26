@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AnonymousFeedView: View {
     @State private var store = AnonymousStore.shared
+    @Bindable private var photoZoomGate = FeedPhotoZoomGate.shared
 
     var body: some View {
         content
@@ -75,6 +76,7 @@ struct AnonymousFeedView: View {
                 }
                 .padding(.bottom, 8)
             }
+            .scrollDisabled(photoZoomGate.isZooming)
             .background(Theme.canvas)
             .refreshable { await store.refreshFeed() }
         }

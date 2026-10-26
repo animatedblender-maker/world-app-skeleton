@@ -543,14 +543,18 @@ final class HomeFeedStore {
                 }
                 let head = Array(rankedFast.prefix(forceReplace ? 36 : 24))
                 if !head.isEmpty {
-                    let preserveHead = !forceReplace
-                        && (paintedBefore || userEngagedThisSession)
-                    if preserveHead {
+                    // Never yank the list under a mid-scroll finger — cache may have
+                    // painted, user scrolled, then thin network returned with forceReplace.
+                    let scrolling =
+                        userEngagedThisSession || ScrollBudget.isFlinging
+                    if scrolling {
                         await softMergePreservingHead(head)
-                    } else {
+                    } else if forceReplace || !paintedBefore {
                         applyPosts(head, replace: true, sessionId: feedSessionId, alreadyRanked: true)
                         ContentCache.shared.setPosts(posts, for: .homeFeed)
                         rememberDisplayedHead()
+                    } else {
+                        await softMergePreservingHead(head)
                     }
                     isBootstrapping = false
                     didPaint = true

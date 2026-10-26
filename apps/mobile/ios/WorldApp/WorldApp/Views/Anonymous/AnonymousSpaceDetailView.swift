@@ -311,6 +311,21 @@ struct AnonymousSpaceDetailView: View {
     }
 }
 
+private struct AnonymousPhotoClipModifier: ViewModifier {
+    var clip: Bool
+    var cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        if clip {
+            content
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        } else {
+            content
+        }
+    }
+}
+
 /// Full-width Reddit-scale post card — Matterya paper/serif + heart engagement.
 struct AnonymousPostCard: View {
     enum Style {
@@ -336,6 +351,8 @@ struct AnonymousPostCard: View {
     @State private var showFeedVideoPlayer = false
     @State private var showReport = false
     @State private var teasedComment: AnonymousComment?
+    @State private var isPhotoPinching = false
+    @State private var showPhotoLightbox = false
     private var store: AnonymousStore { AnonymousStore.shared }
 
     private var bodyText: String {
@@ -542,9 +559,13 @@ struct AnonymousPostCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.surface)
         .clipped()
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if style == .feed { onOpenPost?() }
+        .zIndex(isPhotoPinching ? 80 : 0)
+        .fullScreenCover(isPresented: $showPhotoLightbox) {
+            if let url = post.mediaURLValue {
+                MatteryaPhotoLightbox(urls: [url], startIndex: 0) {
+                    showPhotoLightbox = false
+                }
+            }
         }
         .overlay(alignment: .bottom) {
             if style == .feed {
@@ -620,11 +641,9 @@ struct AnonymousPostCard: View {
     @ViewBuilder
     private var mediaBlock: some View {
         if post.hasImage, let url = post.mediaURLValue {
-            // Feed-list decode budget — 1080px bitmaps made Masquerade scroll laggy.
-            let listPx: CGFloat = style == .thread ? 900 : 540
-            // Width-first fit — maxHeight+clip was cropping landscape photos from the sides.
-            // Button labels often ignore flexible width; use plain tap instead.
-            let image = CachedAsyncImage(
+            // Feed-list decode budget — pinch + lightbox use sharper decode.
+            let listPx: CGFloat = style == .thread ? 900 : 720
+            FeedPinchZoomPhoto(
                 url: url,
                 maxPixelSize: listPx,
                 contentMode: .fit,
@@ -638,27 +657,23 @@ struct AnonymousPostCard: View {
                                 .tint(Theme.inkMuted)
                         }
                 ),
-                onLoadFailed: { _ in
-                    // HTML-as-jpg scrape poison — drop the whole post; body without photo is empty context.
-                    store.removeBrokenPhotoPost(id: post.id)
+                onZoomingChanged: { zooming in
+                    isPhotoPinching = zooming
+                },
+                onTap: {
+                    showPhotoLightbox = true
                 }
             )
             .frame(maxWidth: .infinity)
-            .frame(maxHeight: style == .thread ? 480 : 420, alignment: .center)
-            .clipped()
-            .clipShape(RoundedRectangle(cornerRadius: style == .feed ? 0 : 10, style: .continuous))
+            .frame(maxHeight: isPhotoPinching ? nil : (style == .thread ? 520 : 440), alignment: .center)
+            .modifier(AnonymousPhotoClipModifier(
+                clip: !isPhotoPinching,
+                cornerRadius: style == .feed ? 0 : 10
+            ))
             .overlay(
                 RoundedRectangle(cornerRadius: style == .feed ? 0 : 10, style: .continuous)
                     .stroke(Theme.border.opacity(style == .feed ? 0 : 0.7), lineWidth: 0.5)
             )
-
-            if let onOpenPost, style == .feed {
-                image
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: onOpenPost)
-            } else {
-                image
-            }
         } else if post.hasVideo, let url = post.mediaURLValue {
             let posterH: CGFloat = style == .thread ? 280 : 240
             if style == .thread {

@@ -9,6 +9,7 @@ struct MatteryaImageGallery: View {
     var onTap: (() -> Void)? = nil
 
     @State private var page = 0
+    var onTapPage: ((Int) -> Void)? = nil
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -22,7 +23,13 @@ struct MatteryaImageGallery: View {
                         onZoomingChanged: { zooming in
                             onZoomingChanged?(zooming)
                         },
-                        onTap: { onTap?() }
+                        onTap: {
+                            if let onTapPage {
+                                onTapPage(index)
+                            } else {
+                                onTap?()
+                            }
+                        }
                     )
                     .tag(index)
                 }

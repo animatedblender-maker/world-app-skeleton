@@ -56,6 +56,8 @@ final class AnonymousStore {
     var feedHasMore = true
     /// Posts already painted this Masquerade session — refresh/load-more prefer unseen.
     private var sessionSeenFeedIds: Set<String> = []
+    /// Pull-to-refresh may replace the list; background/force must not mid-scroll.
+    private var allowFeedReplace = false
     /// Last open's For you head — demoted on the next refresh so viral cards don't stick.
     private let lastFeedHeadKey = "matterya.anonymous.feed.lastHead.v1"
     /// Coalesce bootstrap + Feed tab `.task` so Masquerade doesn't double-hit `/feed`.
@@ -685,16 +687,13 @@ final class AnonymousStore {
         sessionSeenFeedIds.insert(trimmed)
     }
 
-    /// Background reshuffle only when the painted cache is stale.
-    /// Opening Masquerade with a fresh cache must stay instant (no reload spinner).
+    /// Background reshuffle only when the painted cache is stale **and** the list
+    /// is empty. A non-empty For you must never jump mid-scroll — pull-to-refresh
+    /// is the only explicit reshuffle while browsing.
     func softRefreshFeedIfStale() async {
         guard !feedLoading else { return }
+        guard feed.isEmpty else { return }
         guard isFeedCacheStale() else { return }
-        // Mark current head as seen before reshuffle — sticky Reddit tops were
-        // winning every soft refresh when the ledger key was missing.
-        for post in feed.prefix(40) {
-            sessionSeenFeedIds.insert(post.id)
-        }
         await loadFeed(force: true)
     }
 
@@ -745,12 +744,30 @@ final class AnonymousStore {
                 sessionSeenFeedIds.insert(item.id)
             }
             rememberFeedHead(merged)
-            withAnimation(MatteryaMotion.insert) {
-                feed = merged
+            // Mid-scroll: soft-append unseen only — never replace under the finger.
+            // Explicit pull-to-refresh sets `allowFeedReplace`.
+            let midScroll = !feed.isEmpty
+                && !allowFeedReplace
+                && (ScrollBudget.isFlinging || sessionSeenFeedIds.count > 2)
+            if midScroll {
+                var seen = Set(feed.map(\.id))
+                let extras = merged.filter { seen.insert($0.id).inserted }
+                if !extras.isEmpty {
+                    feed.append(contentsOf: extras.prefix(24))
+                }
                 feedCursor = page.nextCursor
-                feedHasMore = page.nextCursor != nil
+                feedHasMore =
+                    page.nextCursor != nil
+                    && feed.count < AnonymousService.feedSoftCap
+            } else {
+                withAnimation(MatteryaMotion.insert) {
+                    feed = merged
+                    feedCursor = page.nextCursor
+                    feedHasMore = page.nextCursor != nil
+                        && merged.count < AnonymousService.feedSoftCap
+                }
             }
-            cacheFeed(merged, cursor: page.nextCursor)
+            cacheFeed(feed, cursor: feedCursor)
             // Clear soft timeout copy once paint succeeds.
             if lastError != nil, shouldToastLastError == false {
                 lastError = nil
@@ -862,6 +879,8 @@ final class AnonymousStore {
         for post in feed.prefix(60) {
             sessionSeenFeedIds.insert(post.id)
         }
+        allowFeedReplace = true
+        defer { allowFeedReplace = false }
         await loadFeed(force: true)
     }
 

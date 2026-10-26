@@ -45,6 +45,9 @@ struct FacebookPostCard: View {
     @State private var actionMessage: String?
     /// Instagram-style pinch on the photo — lifts above clip until release.
     @State private var isPhotoPinching = false
+    /// Tap photo → fullscreen pinch/pan lightbox (Instagram).
+    @State private var showPhotoLightbox = false
+    @State private var lightboxStartIndex = 0
 
     private var isOwnPost: Bool {
         guard let userID = appState.currentProfile?.userID else { return false }
@@ -483,6 +486,14 @@ struct FacebookPostCard: View {
             }
         }
         .padding(.bottom, edgeToEdge ? 10 : 0)
+        .fullScreenCover(isPresented: $showPhotoLightbox) {
+            MatteryaPhotoLightbox(
+                urls: post.feedImageURLs,
+                startIndex: lightboxStartIndex
+            ) {
+                showPhotoLightbox = false
+            }
+        }
 
         .onAppear {
             // Seed from model (incl. origin count on shares) so the link never vanishes after tab hops.
@@ -895,22 +906,22 @@ struct FacebookPostCard: View {
                     if urls.count > 1 {
                         MatteryaImageGallery(
                             urls: urls,
-                            maxPixelSize: 540,
+                            maxPixelSize: 720,
                             onZoomingChanged: { zooming in
                                 isPhotoPinching = zooming
                             },
-                            onTap: { openMedia() }
+                            onTapPage: { openPhotoLightbox(at: $0) }
                         )
                     } else if let url = urls.first {
                         FeedPinchZoomPhoto(
                             url: url,
-                            maxPixelSize: 540,
+                            maxPixelSize: 720,
                             contentMode: .fit,
                             placeholder: AnyView(mediaPlaceholder),
                             onZoomingChanged: { zooming in
                                 isPhotoPinching = zooming
                             },
-                            onTap: { openMedia() }
+                            onTap: { openPhotoLightbox(at: 0) }
                         )
                     }
                 } else {
@@ -1171,9 +1182,20 @@ struct FacebookPostCard: View {
             openPlayVideo()
         } else if post.hasVideo, mediaContext == .feed, let onOpenVideo {
             onOpenVideo()
+        } else if !post.feedImageURLs.isEmpty {
+            openPhotoLightbox(at: 0)
         } else {
             onOpenPost()
         }
+    }
+
+    private func openPhotoLightbox(at index: Int) {
+        guard !post.feedImageURLs.isEmpty else {
+            onOpenPost()
+            return
+        }
+        lightboxStartIndex = min(max(0, index), post.feedImageURLs.count - 1)
+        showPhotoLightbox = true
     }
 
     private func openReel() {
