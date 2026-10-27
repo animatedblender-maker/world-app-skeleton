@@ -70,11 +70,13 @@ struct YouTubeAppView: View {
     private static let hubsRailCardCount = 15
     /// First-hop vibe rows (expanded after paint).
     private static let hubsVibeRailCountFirstPaint = 2
-    /// Full Netflix vibe rows after deferred densify.
-    private static let hubsVibeRailCount = 5
+    /// Full Netflix vibe rows after deferred densify (kept lean — 5×15 posters felt heavy).
+    private static let hubsVibeRailCount = 3
     /// Extra “More to watch” chunk rows under the vibe shelves.
     private static let hubsMoreRailRowsFirstPaint = 1
-    private static let hubsMoreRailRows = 3
+    private static let hubsMoreRailRows = 2
+    /// Thumb warm head per shelf — full rail stays 15; only decode the visible lead.
+    private static let hubsRailPrefetchCount = 6
     /// Premium-but-light shelf posters (196/480 froze Hubs + stampeded /v1/poster).
     private static let hubsRailCardWidth: CGFloat = 168
     private static let hubsPeopleRailCardWidth: CGFloat = 180
@@ -543,8 +545,9 @@ struct YouTubeAppView: View {
     }
 
     /// Every Continue watching card must paint a real poster — never stay black.
+    /// Prefetch only the visible lead; LazyHStack loads the rest as you swipe.
     private func warmContinueWatchingThumbnails() {
-        let strip = continueWatching
+        let strip = Array(continueWatching.prefix(Self.hubsRailPrefetchCount))
         guard !strip.isEmpty else { return }
         ImageCache.shared.prefetchHubsListThumbnails(
             strip,
@@ -1290,12 +1293,12 @@ struct YouTubeAppView: View {
             if !filtered.isEmpty {
                 softMergeHubCatalog(filtered)
                 ImageCache.shared.prefetchHubsListThumbnails(
-                    Array(filtered.prefix(Self.hubsRailCardCount)),
+                    Array(filtered.prefix(Self.hubsRailPrefetchCount)),
                     maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
                 )
                 Task {
                     await Frame0PosterResolver.shared.prefetch(
-                        postIDs: Array(filtered.prefix(Self.hubsRailCardCount).map(\.id))
+                        postIDs: Array(filtered.prefix(Self.hubsRailPrefetchCount).map(\.id))
                     )
                 }
             }
@@ -1382,7 +1385,7 @@ struct YouTubeAppView: View {
         cardWidth: CGFloat,
         onNearEnd: (() -> Void)? = nil
     ) -> some View {
-        // Algorithm target: ~15 ranked long-form cards; rail loops so swipe never dead-ends.
+        // Algorithm target: ~15 ranked long-form cards (one light LazyHStack — no double-copy).
         let railPosts = Array(posts.prefix(Self.hubsRailCardCount))
         return VStack(alignment: .leading, spacing: 10) {
             if !title.isEmpty {
@@ -2055,7 +2058,7 @@ struct YouTubeAppView: View {
         // Only warm the first few shelves — full hubOrder × 24 was a download storm.
         Task.detached(priority: .background) {
             for slug in HubVideoSeedService.hubOrder.prefix(3) {
-                ImageCache.shared.prefetchHubSlug(slug, from: videos, limit: 10, maxPixelSize: thumbPx)
+                ImageCache.shared.prefetchHubSlug(slug, from: videos, limit: Self.hubsRailPrefetchCount, maxPixelSize: thumbPx)
             }
         }
     }
