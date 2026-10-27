@@ -1874,8 +1874,8 @@ final class AppState {
         if reelsViewerContext != nil {
             closeReelsViewer()
         }
-        FeedVideoFocus.shared.resetAll()
-        MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
+        FeedVideoFocus.shared.clearElectionOnly()
+        MediaPlaybackCoordinator.shared.silenceFeedSparksAudioPreservingHubsMini()
 
         let opensHub = PlayPlatformBridge.isHubFeedCardVideo(post)
             || PlayPlatformBridge.isHubOriginShare(post)
@@ -1892,8 +1892,8 @@ final class AppState {
         if reelsViewerContext != nil {
             closeReelsViewer()
         }
-        FeedVideoFocus.shared.resetAll()
-        MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
+        FeedVideoFocus.shared.clearElectionOnly()
+        MediaPlaybackCoordinator.shared.silenceFeedSparksAudioPreservingHubsMini()
     }
 
     func openPost(id: String) async {

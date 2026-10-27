@@ -540,6 +540,19 @@ final class SparkWarmPool {
         }
     }
 
+    /// Tab leave / Search browse — pause+mute **every** warm slot, including continuing.
+    /// Continuing decode is only for Feed→Sparks handoff, never while browsing another surface.
+    func hardSilenceAllBuffered() {
+        continuingIDs.removeAll(keepingCapacity: true)
+        for (_, slot) in slots {
+            let p = slot.player
+            p.pause()
+            p.isMuted = true
+            p.volume = 0
+            p.rate = 0
+        }
+    }
+
     /// Pause only warm slots that are still producing rate (page-change ghost audio).
     /// Leaves silent t≈0 buffers and mid-clip handoff slots untouched.
     func silencePlayingBuffered() {

@@ -226,6 +226,29 @@ final class MediaPlaybackCoordinator {
         return false
     }
 
+    /// Leave Feed / open Search — kill feed+Sparks audio. Continuous Hubs mini stays.
+    /// Lighter than `resetAll` remount storms: no item teardown, next-beat safe.
+    func silenceFeedSparksAudioPreservingHubsMini() {
+        sparkPageEpoch &+= 1
+        soloPlayingThroughInterrupt = nil
+        // Stale Masquerade watch must not block Search/tab silence.
+        protectedForegroundWatchPlayer = nil
+        let keep = protectedContinuousPlayer
+        for player in players.allObjects {
+            if let keep, player === keep { continue }
+            player.pause()
+            player.isMuted = true
+            player.volume = 0
+            player.rate = 0
+        }
+        SparkWarmPool.shared.hardSilenceAllBuffered()
+        if let keep, keep.currentItem != nil {
+            soloPlayer = keep
+        } else {
+            soloPlayer = nil
+        }
+    }
+
     /// True when this player is the current Sparks/Hubs audio owner.
     func isSolo(_ player: AVPlayer?) -> Bool {
         guard let player else { return false }

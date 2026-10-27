@@ -259,10 +259,8 @@ final class FeedVideoFocus {
                 silenceWhenEmptyTask = Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 450_000_000)
                     guard !Task.isCancelled, self.activeID == nil else { return }
-                    // Skip when continuous Hubs or Masquerade watch already owns audio —
-                    // walking players mid tab-hop was a MainActor hitch.
-                    if MediaPlaybackCoordinator.shared.continuousHubPlayer != nil { return }
-                    if MediaPlaybackCoordinator.shared.hasForegroundWatchProtection { return }
+                    // Always silence feed/Sparks ghosts — continuous Hubs is spared inside
+                    // silenceAllOffScreenAudio (never skip the call or feed audio leaks).
                     MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
                 }
             }

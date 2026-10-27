@@ -195,13 +195,17 @@ struct MainTabView: View {
             if tab == .anonymous {
                 anonymousShellMounted = true
             }
-            // Never hard-silence on the tab-change frame — resetAll() hitching leave/return.
-            // Continuous hubs / Feed election: clear map only; audio settles on the next beat.
+            // Clear election now; silence feed/Sparks on the next beat so the tab morph
+            // stays light. Continuous Hubs mini is spared. (clearElectionOnly alone left
+            // feed audio playing under other tabs / Search.)
             FeedVideoFocus.shared.clearElectionOnly()
-            // Tracking / stale-away reshuffle off the leave frame.
+            let leftFeed = oldTab == .feed && tab != .feed
             let leftHubs = oldTab == .hubs
             let openedHubs = tab == .hubs
             Task(priority: .utility) { @MainActor in
+                if leftFeed || tab != .feed {
+                    MediaPlaybackCoordinator.shared.silenceFeedSparksAudioPreservingHubsMini()
+                }
                 if leftHubs { EngagementTracker.shared.hubsLeft() }
                 if openedHubs { EngagementTracker.shared.hubsOpened() }
                 EngagementTracker.shared.screenOpened(tab.rawValue)
@@ -220,11 +224,11 @@ struct MainTabView: View {
             }
             // Left the pinned chat while mini → never force-return there on next minimize.
             appState.syncHubPlaybackChatReturnWithPath()
-            // Push/pop — don't nuke continuous hubs audio while mini is up.
-            if appState.hubPlaybackPost != nil {
-                FeedVideoFocus.shared.clearElectionOnly()
-            } else {
-                FeedVideoFocus.shared.resetAll()
+            // Push (Search / post / profile): kill feed/Sparks audio. Hubs mini stays.
+            // Pop back to root: election clears; feed cards re-report when live.
+            FeedVideoFocus.shared.clearElectionOnly()
+            if count > 0 {
+                MediaPlaybackCoordinator.shared.silenceFeedSparksAudioPreservingHubsMini()
             }
         }
         .onChange(of: appState.navigationPath) { _, _ in
