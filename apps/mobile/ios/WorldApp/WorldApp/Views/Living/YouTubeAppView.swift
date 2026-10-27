@@ -770,23 +770,29 @@ struct YouTubeAppView: View {
             guard appState.selectedTab == .hubs else { return }
             guard appState.hubPlaybackPost == nil else { return }
             Task { @MainActor in
-                // Soft reshuffle first (cheap). Network densify waits so the hop stays light.
                 hubsEndlessCycle = 0
                 hubsCaughtUp = false
-                hubsRailsDense = false
                 errorMessage = nil
+                // Keep densify state if the shell is already painted — resetting rails
+                // mid-hop was a tab-switch freeze.
                 if allVideos.isEmpty {
                     isLoading = true
                     await loadVideos(forceRefresh: false, mode: .fast)
                 }
+                if hubsShellIsUseful {
+                    // Light reshuffle only — no remount, no densify reset, no network storm.
+                    refreshHubsVisitShuffle(remountList: false)
+                    lastHubsSoftRefreshAt = Date()
+                    return
+                }
+                hubsRailsDense = false
                 refreshHubsVisitShuffle(remountList: false)
                 warmContinueWatchingThumbnails()
                 lastHubsSoftRefreshAt = Date()
                 Task(priority: .utility) {
-                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    try? await Task.sleep(nanoseconds: 900_000_000)
                     guard appState.selectedTab == .hubs, appState.hubPlaybackPost == nil else { return }
                     await loadVideos(forceRefresh: false, mode: .fast)
-                    await prefetchNextSlugPages(count: 1)
                 }
             }
         }

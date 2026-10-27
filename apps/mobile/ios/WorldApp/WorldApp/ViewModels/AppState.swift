@@ -381,13 +381,16 @@ final class AppState {
         }
         // Hubs: reshuffle only after a real away — every-hop reload froze tab navigation.
         // Skip while a hubs video is open/minimized so expand/morph stays smooth.
+        // nil hubsLeftAt must NOT count as "stale" (that forced a reshuffle on every first hop).
         if new == .hubs, old != .hubs, hubPlaybackPost == nil {
-            let away = hubsLeftAt.map { Date().timeIntervalSince($0) } ?? hubsStaleAwayInterval
-            if away >= hubsStaleAwayInterval {
-                #if DEBUG
-                print("[Hubs] away \(Int(away))s ≥ \(Int(hubsStaleAwayInterval))s → fresh session")
-                #endif
-                hubsFreshSessionToken += 1
+            if let left = hubsLeftAt {
+                let away = Date().timeIntervalSince(left)
+                if away >= hubsStaleAwayInterval {
+                    #if DEBUG
+                    print("[Hubs] away \(Int(away))s ≥ \(Int(hubsStaleAwayInterval))s → fresh session")
+                    #endif
+                    hubsFreshSessionToken += 1
+                }
             }
             hubsLeftAt = nil
         }

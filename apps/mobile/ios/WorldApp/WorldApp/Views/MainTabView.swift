@@ -182,33 +182,22 @@ struct MainTabView: View {
                 hubsDismountTask = nil
                 hubsShellMounted = true
             } else if oldTab == .hubs {
-                // YouTube-style: smooth morph to mini on leave. Catalog stays mounted (opacity 0)
-                // until the morph finishes — tearing it down on the same frame was the hitch.
+                // YouTube-style: smooth morph to mini on leave.
                 if appState.hubPlaybackPost != nil,
                    appState.hubPlaybackExpanded || appState.hubPlaybackLandscapeFullscreen {
                     appState.minimizeHubPlayback(returnToChat: false, animated: true)
                 }
+                // Keep Hubs mounted like Masquerade — remounting the catalog on every
+                // tab hop froze both leave and return (gesture gate + reshuffle).
                 hubsDismountTask?.cancel()
-                hubsDismountTask = Task { @MainActor in
-                    // After ytMorph easeOut (~0.22s) + settle — then drop the heavy Hubs tree.
-                    // Never tear down on the morph frame (that hitch parked the film mid-screen).
-                    try? await Task.sleep(nanoseconds: 320_000_000)
-                    guard !Task.isCancelled, appState.selectedTab != .hubs else { return }
-                    hubsShellMounted = false
-                }
+                hubsDismountTask = nil
             }
             if tab == .anonymous {
                 anonymousShellMounted = true
             }
-            // Continuous hubs owns AV — election clear only (no silence/reassert).
-            if appState.hubPlaybackPost != nil {
-                FeedVideoFocus.shared.clearElectionOnly()
-            } else if tab != .feed {
-                // Only reset feed election when leaving a surface that might have been playing.
-                FeedVideoFocus.shared.clearElectionOnly()
-            } else {
-                FeedVideoFocus.shared.resetAll()
-            }
+            // Never hard-silence on the tab-change frame — resetAll() hitching leave/return.
+            // Continuous hubs / Feed election: clear map only; audio settles on the next beat.
+            FeedVideoFocus.shared.clearElectionOnly()
             // Tracking / stale-away reshuffle off the leave frame.
             let leftHubs = oldTab == .hubs
             let openedHubs = tab == .hubs
