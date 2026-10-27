@@ -145,7 +145,8 @@ struct SparkFeedCard: View {
                         if let posterURL {
                             CachedAsyncImage(
                                 url: posterURL,
-                                maxPixelSize: 900,
+                                // Feed scroll weight — 900px posters hitch Home; Sparks FS uses its own decode.
+                                maxPixelSize: 540,
                                 contentMode: useFill ? .fill : .fit,
                                 placeholder: AnyView(Color.black)
                             )
@@ -304,7 +305,7 @@ struct SparkFeedCard: View {
     @MainActor
     private func seedAspectFromPoster(_ url: URL) async {
         guard !gravityLocked else { return }
-        guard let image = await ImageCache.shared.image(for: url, maxPixelSize: 720) else { return }
+        guard let image = await ImageCache.shared.image(for: url, maxPixelSize: 540) else { return }
         let pixel = CGSize(
             width: image.size.width * image.scale,
             height: image.size.height * image.scale

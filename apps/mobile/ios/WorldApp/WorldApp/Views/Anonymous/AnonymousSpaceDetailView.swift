@@ -653,7 +653,8 @@ struct AnonymousPostCard: View {
             // Full-width box sized to the photo’s real aspect; photo fills that box.
             // Clear+overlay+clipped — never a paper Color behind the bitmap (that was
             // the white letterbox/pillarbox). Tall memes grow the card (Reddit-style).
-            let listPx: CGFloat = style == .thread ? 900 : 720
+            // Feed decode stays light (540) — 720 was hitching Masquerade For you scroll.
+            let listPx: CGFloat = style == .thread ? 720 : 540
             let corner: CGFloat = style == .feed ? 0 : 10
             let aspect = photoAspect
             Color.clear

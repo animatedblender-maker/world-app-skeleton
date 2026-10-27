@@ -1807,7 +1807,8 @@ final class AppState {
         // Sparks identity includes catalog short-form (media_type=video + ShortForm markers),
         // not only explicit reel/spark types — Search often returns those thin rows.
         if post.isReel || PlayPlatformBridge.isSparkFeedCard(post) {
-            openReelsViewer(startingPost: post)
+            // Same handoff path as card tap — never bare openReelsViewer (skips export/warm).
+            openGlobalSparksViewer(startingPost: post)
         } else if PlayPlatformBridge.isHubFeedCardVideo(post)
             || PlayPlatformBridge.isHubOriginShare(post)
             || (PlayPlatformBridge.isHubCatalogContent(post) && post.hasVideo) {
@@ -1922,20 +1923,17 @@ final class AppState {
     func openReelsViewer(startingPost: CountryPost, seedPosts: [CountryPost] = []) {
         // Detect continue BEFORE clearing feed focus — resetAll would hard-silence the
         // mid-clip handoff buffer and force a cold Sparks open from Feed.
-        let continuing = shouldContinuePlayback(for: startingPost.id)
-            || SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: startingPost.id)
+        let startID = startingPost.id
+        let hasParked = SparkWarmPool.shared.parkedPlayer(for: startID) != nil
             || SparkWarmPool.shared.hasContinuingParked
-        if continuing {
-            // Keep the parked/decoding feed player — only drop the election map.
-            FeedVideoFocus.shared.clearElectionOnly()
-        } else {
-            // Soft handoff: clear feed focus, but do NOT pauseAll / silenceAllBuffered —
-            // that wiped the warm first-frame the feed card already decoded (slow open).
-            FeedVideoFocus.shared.resetAll()
-        }
+        let continuing = shouldContinuePlayback(for: startID)
+            || SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: startID)
+            || hasParked
+        // Always clearElectionOnly — never resetAll on the open frame (silence storm hitch).
+        FeedVideoFocus.shared.clearElectionOnly()
         // Fresh open mark every present (consumed on first-frame emit).
         PerformanceTelemetry.mark("sparks_open_start")
-        // Continuing handoff: skip page-silence (would hitch the live buffer) + skip cover anim.
+        // Soft page silence only when we have no parked buffer to claim.
         if !continuing {
             MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
         }
@@ -1945,10 +1943,8 @@ final class AppState {
         }
         var seeds = seedPosts
         if seeds.isEmpty {
-            // Small instant seed — expand in background after first frame.
-            seeds = continuing
-                ? [ReelsRankingEngine.resolvePlayerStart(startingPost)]
-                : Self.instantSparksSeedQueue(starting: startingPost, limit: 24)
+            // Never rank catalogs here — that blocked Feed→Sparks. Expand after paint.
+            seeds = [ReelsRankingEngine.resolvePlayerStart(startingPost)]
         }
         if !seeds.contains(where: { $0.id == startingPost.id }) {
             seeds.insert(ReelsRankingEngine.resolvePlayerStart(startingPost), at: 0)
@@ -2036,7 +2032,7 @@ final class AppState {
         presentGlobalSparks(starting: start, fromFeedPost: startingPost, seedPosts: seedPosts)
     }
 
-    /// Shared open path for feed + chat + strip: warm tapped BEFORE push, claim parked buffer.
+    /// Shared open path for feed + chat + strip: paint overlay first, expand seeds after.
     private func presentGlobalSparks(
         starting start: CountryPost,
         fromFeedPost: CountryPost? = nil,
@@ -2059,17 +2055,21 @@ final class AppState {
             syncPlaybackPosition(from: from.id, to: start.id)
         }
 
-        // Prefer strip/rail seeds (instant) over cold catalog snapshot.
-        let seedLimit = max(20, SparkWarmPool.MediaBudget.playerAheadSparks + 12)
-        let seeds = Self.mergeSparksOpenSeeds(
+        // FAST PATH: never rank catalogs on the tap frame — that made Feed→Sparks laggy.
+        // Prefer strip/rail seeds only (already on screen); expand after first paint.
+        let instantSeeds = Self.instantOpenSeeds(
             starting: start,
             preferred: seedPosts,
-            limit: seedLimit
+            limit: 12
         )
 
-        // ONE-SHOT open warm BEFORE navigation — tapped deep + next 1–2.
-        // Does not restore Feed list AV warm storms (strip/card open only).
-        Self.warmSparksOpenHandoff(seeds: seeds, focusIndex: 0)
+        // Deep-warm ONLY the tapped clip sync (already decoding if feed autoplay).
+        if let url = start.playableVideoURL ?? MediaURLResolver.videoURL(for: start) {
+            SparkWarmPool.shared.warmSingle(postID: start.id, url: url, deep: true)
+            if let from = fromFeedPost, from.id != start.id {
+                SparkWarmPool.shared.warmSingle(postID: from.id, url: url, deep: true)
+            }
+        }
 
         // Solo the parked buffer NOW (still muted) so Sparks mounts onto a live decoder.
         if let parked = SparkWarmPool.shared.parkedPlayer(for: start.id)
@@ -2082,25 +2082,54 @@ final class AppState {
             }
         }
 
-        openReelsViewer(startingPost: start, seedPosts: seeds)
+        // Paint overlay THIS runloop — no catalog absorb, no ahead warm storm.
+        openReelsViewer(startingPost: start, seedPosts: instantSeeds)
 
-        // Refill ahead window after paint. Skip cold GraphQL when strip seeds are rich enough.
+        // After paint: warm next 1–2 + expand seed queue (GraphQL only if strip was thin).
+        let preferred = seedPosts
         Task(priority: .userInitiated) { @MainActor in
-            SparkWarmPool.shared.preparePlayerWindow(posts: seeds, around: 0, policy: .landing)
-            guard seeds.count < seedLimit else { return }
+            let seedLimit = max(20, SparkWarmPool.MediaBudget.playerAheadSparks + 12)
+            let expanded = Self.mergeSparksOpenSeeds(
+                starting: start,
+                preferred: preferred,
+                limit: seedLimit
+            )
+            Self.warmSparksOpenHandoff(seeds: expanded, focusIndex: 0)
+            SparkWarmPool.shared.preparePlayerWindow(posts: expanded, around: 0, policy: .landing)
+            guard expanded.count < seedLimit else { return }
             _ = await PostsService.shared.loadSparksDiscoveryCatalog(
                 forceRefresh: false,
                 deep: false
             )
-            let expanded = Self.mergeSparksOpenSeeds(
+            let richer = Self.mergeSparksOpenSeeds(
                 starting: start,
-                preferred: seedPosts,
+                preferred: preferred,
                 limit: seedLimit
             )
-            if expanded.count > seeds.count {
-                SparkWarmPool.shared.preparePlayerWindow(posts: expanded, around: 0)
+            if richer.count > expanded.count {
+                SparkWarmPool.shared.preparePlayerWindow(posts: richer, around: 0)
             }
         }
+    }
+
+    /// Tap-frame seeds only — preferred strip/rail, no discovery ranking.
+    private static func instantOpenSeeds(
+        starting start: CountryPost,
+        preferred: [CountryPost],
+        limit: Int
+    ) -> [CountryPost] {
+        let head = ReelsRankingEngine.resolvePlayerStart(start)
+        var out: [CountryPost] = [head]
+        var seen: Set<String> = [head.id]
+        for post in preferred {
+            let resolved = ReelsRankingEngine.resolvePlayerStart(post)
+            guard seen.insert(resolved.id).inserted else { continue }
+            guard ReelsRankingEngine.isSparkEligible(resolved) else { continue }
+            if resolved.id != head.id, SparkDiscoveryEngine.isViewed(resolved) { continue }
+            out.append(resolved)
+            if out.count >= limit { break }
+        }
+        return out
     }
 
     /// Strip/rail first, then catalog fill — never block open on GraphQL.

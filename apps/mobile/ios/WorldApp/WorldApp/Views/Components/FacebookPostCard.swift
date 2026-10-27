@@ -1199,8 +1199,17 @@ struct FacebookPostCard: View {
     }
 
     private func openReel() {
+        // Prefer Feed/strip callback (passes seedPosts) — bare open forces cold catalog ranking.
+        if let onOpenReel {
+            onOpenReel()
+            return
+        }
         // Always endless Sparks from all over Matterya (up/down), never a single-clip dead end.
-        appState.openGlobalSparksViewer(startingPost: sparkCardPresentationPost)
+        let start = sparkCardPresentationPost
+        if let url = start.playableVideoURL ?? MediaURLResolver.videoURL(for: start) {
+            SparkWarmPool.shared.warmSingle(postID: start.id, url: url, deep: true)
+        }
+        appState.openGlobalSparksViewer(startingPost: start)
     }
 
     private func openPlayVideo() {

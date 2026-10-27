@@ -40,7 +40,8 @@ struct AnonymousFeedView: View {
         } else {
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(Array(store.feed.enumerated()), id: \.element.id) { index, post in
+                    // Avoid Array(enumerated()) every body pass — that copied the feed on scroll.
+                    ForEach(store.feed) { post in
                         AnonymousPostCard(
                             post: post,
                             style: .feed,
@@ -59,18 +60,20 @@ struct AnonymousFeedView: View {
                             store.pushPost(post)
                         }
                         .onAppear {
-                            // Prefetch comments only for nearby cards (not every row).
-                            if index < 8 || index >= store.feed.count - 3 {
-                                AnonymousCommentsWarmCache.shared.warm(post.id)
+                            // Prefetch comments only for head / near-tail (not every row).
+                            if let index = store.feed.firstIndex(where: { $0.id == post.id }) {
+                                if index < 6 || index >= store.feed.count - 3 {
+                                    AnonymousCommentsWarmCache.shared.warm(post.id)
+                                }
+                                // Rare silent append — only at the very end (first page is fat).
+                                if store.feedHasMore,
+                                   store.feed.count < AnonymousService.feedSoftCap,
+                                   index >= store.feed.count - 2 {
+                                    Task { await store.loadMoreFeed() }
+                                }
                             }
                             // Session suppress — next refresh/load-more skips already-seen cards.
                             store.markFeedPostSeen(post.id)
-                            // Rare silent append — only at the very end (first page is fat).
-                            if store.feedHasMore,
-                               store.feed.count < AnonymousService.feedSoftCap,
-                               index >= store.feed.count - 2 {
-                                Task { await store.loadMoreFeed() }
-                            }
                         }
                     }
                 }
