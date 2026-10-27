@@ -1330,7 +1330,6 @@ struct YouTubeAppView: View {
                 .padding(22)
             }
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .shadow(color: Theme.ink.opacity(0.18), radius: 18, x: 0, y: 8)
             .padding(.horizontal, Theme.pagePadding)
         }
         .buttonStyle(.plain)

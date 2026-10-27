@@ -726,91 +726,38 @@ struct YouTubeWatchPlayer<Content: View>: View {
     }
 }
 
-/// Endless Netflix-style horizontal rail — ~N ranked cards that wrap while swiping forward.
-/// Starts on card 0 fully in-frame (leading padding). Two copies; when the second copy’s
-/// tail appears, silently jump back one copy. No start-in-middle / backward wrap (those
-/// fought LazyHStack and crashed / left the first card half off-screen).
+/// Netflix-style horizontal rail — light and stable.
+/// LazyHStack only (no duplicated copies / scrollTo jumps — those froze Hubs).
+/// First card sits fully in-frame via leading padding.
 struct HubsLoopingHorizontalRail<Content: View>: View {
     let posts: [CountryPost]
     var spacing: CGFloat = 14
     var horizontalPadding: CGFloat = Theme.pagePadding
-    /// Fired when the logical (mod N) index nears the end of the ranked set.
+    /// Fired once when the user nears the end of this rail (debounced).
     var onNearEnd: (() -> Void)? = nil
     @ViewBuilder var content: (_ post: CountryPost, _ logicalIndex: Int) -> Content
 
-    private var shouldLoop: Bool { posts.count >= 3 }
-    private let copies = 2
-    @State private var wrapArmed = false
-    @State private var isJumping = false
     @State private var nearEndArmed = true
-
-    private var postsSignature: String {
-        posts.map(\.id).joined(separator: ",")
-    }
 
     var body: some View {
         let n = posts.count
-        let total = n > 0 ? (shouldLoop ? n * copies : n) : 0
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                // Eager HStack — ~30 premium cards; LazyHStack + scrollTo was unreliable.
-                HStack(alignment: .top, spacing: spacing) {
-                    ForEach(0..<total, id: \.self) { index in
-                        let logical = index % n
-                        let post = posts[logical]
-                        content(post, logical)
-                            .id(index)
-                            .onAppear {
-                                guard n > 0, !isJumping else { return }
-                                if nearEndArmed, logical >= max(0, n - 3) {
-                                    nearEndArmed = false
-                                    onNearEnd?()
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                                        nearEndArmed = true
-                                    }
-                                }
-                                guard shouldLoop, wrapArmed else { return }
-                                // Only wrap at the far end of the second copy → back one set.
-                                // Never wrap index < n (that stole the first-card start frame).
-                                if index >= n + (n - 2) {
-                                    isJumping = true
-                                    let target = index - n
-                                    var t = Transaction()
-                                    t.disablesAnimations = true
-                                    withTransaction(t) {
-                                        proxy.scrollTo(target, anchor: .leading)
-                                    }
-                                    DispatchQueue.main.async {
-                                        isJumping = false
-                                    }
-                                }
+        ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(alignment: .top, spacing: spacing) {
+                // Offset identity — same post can appear on multiple rails.
+                ForEach(Array(posts.enumerated()), id: \.offset) { index, post in
+                    content(post, index)
+                        .onAppear {
+                            guard n > 0, nearEndArmed, index >= max(0, n - 2) else { return }
+                            nearEndArmed = false
+                            onNearEnd?()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                                nearEndArmed = true
                             }
-                    }
-                }
-                .padding(.leading, horizontalPadding)
-                .padding(.trailing, horizontalPadding)
-            }
-            // First card starts fully in frame — no scrollTo(n) middle landing.
-            .onAppear {
-                wrapArmed = false
-                isJumping = false
-                // Allow wrap only after first layout settles (avoids appear-storm).
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    wrapArmed = shouldLoop
+                        }
                 }
             }
-            .onChange(of: postsSignature) { _, _ in
-                wrapArmed = false
-                isJumping = false
-                var t = Transaction()
-                t.disablesAnimations = true
-                withTransaction(t) {
-                    proxy.scrollTo(0, anchor: .leading)
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    wrapArmed = shouldLoop
-                }
-            }
+            .padding(.leading, horizontalPadding)
+            .padding(.trailing, horizontalPadding)
         }
     }
 }
@@ -854,7 +801,7 @@ struct HubsShelfThumbCard: View {
                     RoundedRectangle(cornerRadius: corner, style: .continuous)
                         .stroke(Theme.border.opacity(0.45), lineWidth: 0.5)
                 )
-                .shadow(color: Theme.ink.opacity(0.08), radius: 6, x: 0, y: 3)
+                // No per-card shadow — dozens of shadowed posters froze Hubs scroll.
                 .task(id: post.id) {
                     // Wait out fling — per-cell Frame0 mid-scroll froze Hubs everywhere.
                     for _ in 0..<6 {
