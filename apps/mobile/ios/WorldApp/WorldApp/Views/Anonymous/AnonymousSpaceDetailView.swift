@@ -338,7 +338,20 @@ struct AnonymousPostCard: View {
     @State private var teasedComment: AnonymousComment?
     @State private var isPhotoPinching = false
     @State private var showPhotoLightbox = false
+    /// Decoded bitmap size — sizes the media frame to the photo’s real aspect (no letterbox gaps).
+    @State private var photoPixelSize: CGSize?
     private var store: AnonymousStore { AnonymousStore.shared }
+
+    /// Width/height of the loaded photo; square until decode so the placeholder isn’t a tall empty box.
+    private var photoAspect: CGFloat {
+        guard let px = photoPixelSize, px.width > 1, px.height > 1 else {
+            return FacebookMediaLayout.photoSquareAspect
+        }
+        let raw = px.width / px.height
+        guard raw.isFinite, raw > 0.05 else { return FacebookMediaLayout.photoSquareAspect }
+        // Allow tall memes (~1:3) and wide shots; avoid zero/infinite from bad metadata.
+        return min(max(raw, 0.33), 2.5)
+    }
 
     private var bodyText: String {
         post.displayBody.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -637,43 +650,53 @@ struct AnonymousPostCard: View {
     @ViewBuilder
     private var mediaBlock: some View {
         if post.hasImage, let url = post.mediaURLValue {
-            // Full-bleed width + .fit inside a height-capped box — letterbox top/bottom
-            // on tall shots; never crop left/right (maxHeight+.clipped was the side crop).
+            // Aspect-matched frame + .fill: card height = width / photoAspect so the
+            // bitmap fills edge-to-edge — no top/bottom letterbox, no side pillarbox.
+            // Tall memes grow the card (Reddit-style); never crop to a fixed height.
             let listPx: CGFloat = style == .thread ? 900 : 720
-            let maxH: CGFloat = style == .thread ? 560 : FacebookMediaLayout.maxFeedMediaHeight
             let corner: CGFloat = style == .feed ? 0 : 10
-            GeometryReader { geo in
-                let w = max(1, geo.size.width)
-                let h = max(1, geo.size.height)
-                FeedPinchZoomPhoto(
-                    url: url,
-                    maxPixelSize: listPx,
-                    contentMode: .fit,
-                    placeholder: AnyView(
-                        Rectangle()
-                            .fill(Theme.canvasMuted)
-                            .overlay {
-                                ProgressView()
-                                    .tint(Theme.inkMuted)
-                            }
-                    ),
-                    onZoomingChanged: { zooming in
-                        isPhotoPinching = zooming
-                    },
-                    onTap: {
-                        showPhotoLightbox = true
-                    }
-                )
-                .frame(width: w, height: h)
-            }
+            let aspect = photoAspect
+            FeedPinchZoomPhoto(
+                url: url,
+                maxPixelSize: listPx,
+                contentMode: .fill,
+                placeholder: AnyView(
+                    Rectangle()
+                        .fill(Theme.canvasMuted)
+                        .overlay {
+                            ProgressView()
+                                .tint(Theme.inkMuted)
+                        }
+                ),
+                onZoomingChanged: { zooming in
+                    isPhotoPinching = zooming
+                },
+                onTap: {
+                    showPhotoLightbox = true
+                },
+                onImageSize: { size in
+                    guard size.width > 1, size.height > 1 else { return }
+                    guard photoPixelSize != size else { return }
+                    // Avoid animating LazyVStack height jumps (scroll hitch).
+                    var tx = Transaction()
+                    tx.disablesAnimations = true
+                    withTransaction(tx) { photoPixelSize = size }
+                }
+            )
             .frame(maxWidth: .infinity)
-            .frame(height: isPhotoPinching ? maxH + 80 : maxH)
+            .aspectRatio(aspect, contentMode: .fit)
             .background(Theme.canvasMuted)
             .clipShape(RoundedRectangle(cornerRadius: isPhotoPinching ? 0 : corner, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: corner, style: .continuous)
                     .stroke(Theme.border.opacity(style == .feed ? 0 : 0.7), lineWidth: 0.5)
             )
+            .onChange(of: post.id) { _, _ in
+                photoPixelSize = nil
+            }
+            .onChange(of: url.absoluteString) { _, _ in
+                photoPixelSize = nil
+            }
         } else if post.hasVideo, let url = post.mediaURLValue {
             let posterH: CGFloat = style == .thread ? 280 : 240
             if style == .thread {

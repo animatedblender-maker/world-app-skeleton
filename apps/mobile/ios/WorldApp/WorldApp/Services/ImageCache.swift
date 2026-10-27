@@ -528,8 +528,11 @@ struct CachedAsyncImage: View {
     var placeholder: AnyView?
     /// Called when the URL is blocked or the download/decode returns nil — parents can try the next poster.
     var onLoadFailed: ((URL) -> Void)? = nil
+    /// Pixel size of the decoded bitmap (for aspect-matched feed frames — no letterbox).
+    var onImageSize: ((CGSize) -> Void)? = nil
     @State private var image: UIImage?
     @State private var loadedURL: String?
+    @State private var reportedSizeKey: String?
 
     var body: some View {
         Group {
@@ -547,11 +550,18 @@ struct CachedAsyncImage: View {
             ScrollBudget.noteCellAppear()
             // Memory only — never hit disk/network synchronously during scroll.
             guard let url else { return }
-            if image != nil, loadedURL == url.absoluteString { return }
+            if image != nil, loadedURL == url.absoluteString {
+                reportSizeIfNeeded(image)
+                return
+            }
             if let cached = ImageCache.shared.imageIfCached(for: url, maxPixelSize: maxPixelSize) {
                 image = cached
                 loadedURL = url.absoluteString
+                reportSizeIfNeeded(cached)
             }
+        }
+        .onChange(of: image) { _, newImage in
+            reportSizeIfNeeded(newImage)
         }
         .task(id: taskID) {
             guard let url else {
@@ -596,6 +606,7 @@ struct CachedAsyncImage: View {
             if let cached = ImageCache.shared.imageIfCached(for: url, maxPixelSize: maxPixelSize) {
                 image = cached
                 loadedURL = url.absoluteString
+                reportSizeIfNeeded(cached)
                 return
             }
             let loaded = await ImageCache.shared.image(for: url, maxPixelSize: maxPixelSize)
@@ -605,6 +616,7 @@ struct CachedAsyncImage: View {
             if let loaded {
                 image = loaded
                 loadedURL = url.absoluteString
+                reportSizeIfNeeded(loaded)
             } else {
                 onLoadFailed?(url)
             }
@@ -614,6 +626,19 @@ struct CachedAsyncImage: View {
     private var taskID: String {
         guard let url else { return "nil" }
         return "\(url.absoluteString)|\(Int(maxPixelSize))"
+    }
+
+    private func reportSizeIfNeeded(_ img: UIImage?) {
+        guard let img, let onImageSize else { return }
+        let key = "\(loadedURL ?? "")|\(Int(img.size.width))x\(Int(img.size.height))"
+        guard reportedSizeKey != key else { return }
+        reportedSizeKey = key
+        let px = CGSize(
+            width: img.size.width * img.scale,
+            height: img.size.height * img.scale
+        )
+        guard px.width > 1, px.height > 1 else { return }
+        onImageSize(px)
     }
 }
 
@@ -642,10 +667,12 @@ struct FeedPinchZoomPhoto: View {
     let url: URL
     /// Feed-width memes: 540 keeps scroll light; pinch still looks sharp on phone widths.
     var maxPixelSize: CGFloat = 540
-    var contentMode: ContentMode = .fit
+    /// Prefer `.fill` inside an aspect-matched parent — `.fit` letterboxes (ugly margins).
+    var contentMode: ContentMode = .fill
     var placeholder: AnyView = AnyView(Theme.canvasMuted)
     var onZoomingChanged: ((Bool) -> Void)? = nil
     var onTap: (() -> Void)? = nil
+    var onImageSize: ((CGSize) -> Void)? = nil
 
     @State private var scale: CGFloat = 1
     @State private var offset: CGSize = .zero
@@ -664,10 +691,10 @@ struct FeedPinchZoomPhoto: View {
                 url: url,
                 maxPixelSize: maxPixelSize,
                 contentMode: contentMode,
-                placeholder: placeholder
+                placeholder: placeholder,
+                onImageSize: onImageSize
             )
-            // Lock to the proposed box so .fit letterboxes instead of overflowing
-            // and getting side-clipped by a parent.
+            // Fill the parent’s aspect-matched box (parent owns letterbox-free sizing).
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .scaleEffect(scale)
             .offset(offset)

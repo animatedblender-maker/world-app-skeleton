@@ -250,6 +250,8 @@ final class FeedVideoFocus {
         } else {
             // Debounce silence — LazyVStack recycle used to clear winner for one frame and
             // hard-pause a fully visible Hubs card (felt random).
+            // Feed stays mounted under Masquerade/Hubs: empty-election silence must not
+            // walk every AVPlayer on those tabs (tab-hop freeze).
             silenceWhenEmptyTask?.cancel()
             if silenceImmediately {
                 MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
@@ -257,6 +259,10 @@ final class FeedVideoFocus {
                 silenceWhenEmptyTask = Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 450_000_000)
                     guard !Task.isCancelled, self.activeID == nil else { return }
+                    // Skip when continuous Hubs or Masquerade watch already owns audio —
+                    // walking players mid tab-hop was a MainActor hitch.
+                    if MediaPlaybackCoordinator.shared.continuousHubPlayer != nil { return }
+                    if MediaPlaybackCoordinator.shared.hasForegroundWatchProtection { return }
                     MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
                 }
             }

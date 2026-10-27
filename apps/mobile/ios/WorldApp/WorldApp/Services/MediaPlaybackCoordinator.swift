@@ -4,12 +4,15 @@ import UIKit
 
 extension AVPlayer {
     /// `playImmediately` / `preroll` throw if status isn't ready — that crashed WorldApp on open.
+    /// Always honor `rate` — the old `play()` fallback reset Hubs speed to 1x.
     func safePlayImmediately(atRate rate: Float = 1.0) {
-        guard status == .readyToPlay else {
+        let r = max(0.25, min(rate, 3.0))
+        if status == .readyToPlay {
+            playImmediately(atRate: r)
+        } else {
             play()
-            return
+            self.rate = r
         }
-        playImmediately(atRate: rate)
     }
 }
 
@@ -30,6 +33,9 @@ final class MediaPlaybackCoordinator {
     private weak var soloPlayer: AVPlayer?
     /// Continuous Hubs AVPlayer — never kill when silencing feed/Sparks (tab switch / focus loss).
     private weak var protectedContinuousPlayer: AVPlayer?
+    /// Intentional watch (Masquerade fullscreen/thread, archive) — survives Feed empty-election silence.
+    /// Feed stays mounted under Masquerade; `silenceAllOffScreenAudio` used to hard-mute this player.
+    private weak var protectedForegroundWatchPlayer: AVPlayer?
     /// Solo player that was actively playing when the app briefly resigned (screenshot, CC, etc.).
     private weak var soloPlayingThroughInterrupt: AVPlayer?
     /// True while we paused for resign/background — resume only the remembered solo.
@@ -97,23 +103,35 @@ final class MediaPlaybackCoordinator {
         }
     }
 
-    /// Pause Sparks/warm-pool audio on resign/minimize; remember solo for foreground resume.
+    /// Pause Sparks/warm-pool audio on resign/minimize; continuous Hubs keeps playing
+    /// (UIBackgroundModes audio). Remember non-continuous solo for foreground resume.
     private func noteResignActive() {
         soloPlayingThroughInterrupt = nil
+        let continuous = protectedContinuousPlayer
         if let solo = soloPlayer,
+           solo !== continuous,
            solo.rate > 0.01
             || solo.timeControlStatus == .playing
             || solo.timeControlStatus == .waitingToPlayAtSpecifiedRate {
             soloPlayingThroughInterrupt = solo
         }
         pauseSparksAudioForAppInactive()
+        // Keep continuous hubs butter-smooth through Control Center / app switcher / minimize.
+        if let continuous, continuous.currentItem != nil {
+            soloPlayer = continuous
+            ensurePlaybackAudioSession()
+            if continuous.rate < 0.05 {
+                continuous.play()
+            }
+        }
     }
 
-    /// Hard-pause every registered + warm-pool player without tearing items down.
-    /// Keeps `soloPlayer` identity so resume can re-kick only that one.
+    /// Hard-pause Sparks/feed/warm-pool without tearing items down.
+    /// Never touches protected continuous Hubs or intentional Masquerade watch.
     private func pauseSparksAudioForAppInactive() {
         pausedForAppInactive = true
         for player in players.allObjects {
+            if isProtected(player) { continue }
             hardSilence(player)
         }
         SparkWarmPool.shared.silenceAllBuffered()
@@ -124,13 +142,23 @@ final class MediaPlaybackCoordinator {
     /// Never resume every registered player (that stacked audio from earlier Sparks).
     private func resumeAfterInterrupt() {
         pausedForAppInactive = false
-        let target = soloPlayingThroughInterrupt
-        soloPlayingThroughInterrupt = nil
-        if let player = target, player.currentItem != nil {
-            // Re-claim solo; controllers unmute + play via the broadcast below.
+        if let watch = protectedForegroundWatchPlayer, watch.currentItem != nil {
+            soloPlayer = watch
+            ensurePlaybackAudioSession()
+            if watch.rate < 0.05 {
+                watch.play()
+            }
+        } else if let continuous = protectedContinuousPlayer, continuous.currentItem != nil {
+            soloPlayer = continuous
+            ensurePlaybackAudioSession()
+            if continuous.rate < 0.05 {
+                continuous.play()
+            }
+        } else if let player = soloPlayingThroughInterrupt, player.currentItem != nil {
             _ = soloSparkAudio(keeping: player)
             ensurePlaybackAudioSession()
         }
+        soloPlayingThroughInterrupt = nil
         NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
     }
 
@@ -149,6 +177,9 @@ final class MediaPlaybackCoordinator {
         if protectedContinuousPlayer === player {
             protectedContinuousPlayer = nil
         }
+        if protectedForegroundWatchPlayer === player {
+            protectedForegroundWatchPlayer = nil
+        }
     }
 
     /// Mark the global continuous Hubs player so tab switches never kill mini audio.
@@ -164,8 +195,36 @@ final class MediaPlaybackCoordinator {
         protectedContinuousPlayer = nil
     }
 
+    /// Mark an intentional Masquerade/archive watch so Feed silence storms cannot hard-mute it.
+    func protectForegroundWatch(_ player: AVPlayer?) {
+        protectedForegroundWatchPlayer = player
+        if let player {
+            soloPlayer = player
+            register(player)
+        }
+    }
+
+    func clearForegroundWatchProtection(for player: AVPlayer? = nil) {
+        if let player {
+            if protectedForegroundWatchPlayer === player {
+                protectedForegroundWatchPlayer = nil
+            }
+            return
+        }
+        protectedForegroundWatchPlayer = nil
+    }
+
     /// Continuous hubs player currently protected (mini/watch).
     var continuousHubPlayer: AVPlayer? { protectedContinuousPlayer }
+
+    /// True while Masquerade/archive intentional watch is protected from Feed silence storms.
+    var hasForegroundWatchProtection: Bool { protectedForegroundWatchPlayer != nil }
+
+    private func isProtected(_ player: AVPlayer) -> Bool {
+        if let keep = protectedContinuousPlayer, player === keep { return true }
+        if let keep = protectedForegroundWatchPlayer, player === keep { return true }
+        return false
+    }
 
     /// True when this player is the current Sparks/Hubs audio owner.
     func isSolo(_ player: AVPlayer?) -> Bool {
@@ -174,20 +233,49 @@ final class MediaPlaybackCoordinator {
     }
 
     /// **Hard rule:** if video is off-screen / tab changed / Sparks closed — silence everything
-    /// except the optional protected continuous Hubs mini/watch player.
+    /// except protected continuous Hubs mini/watch and intentional Masquerade/archive watch.
     func silenceAllOffScreenAudio() {
         sparkPageEpoch &+= 1
-        let keep = protectedContinuousPlayer
+        let keepContinuous = protectedContinuousPlayer
+        let keepWatch = protectedForegroundWatchPlayer
         soloPlayingThroughInterrupt = nil
+        // Feather path: continuous hubs already solo + rolling → skip the player walk
+        // (still spare an intentional Masquerade watch if one is up).
+        if let keepContinuous,
+           keepWatch == nil,
+           keepContinuous.currentItem != nil,
+           keepContinuous.rate >= 0.05,
+           soloPlayer === keepContinuous {
+            var othersLive = false
+            for player in players.allObjects {
+                if player === keepContinuous { continue }
+                if player.rate > 0.01
+                    || player.timeControlStatus == .playing
+                    || (!player.isMuted && player.volume > 0.01) {
+                    othersLive = true
+                    hardSilence(player)
+                }
+            }
+            if othersLive {
+                SparkWarmPool.shared.silencePlayingBuffered()
+            }
+            return
+        }
         for player in players.allObjects {
-            if let keep, player === keep { continue }
+            if isProtected(player) { continue }
             hardSilence(player)
         }
         SparkWarmPool.shared.silenceAllBuffered()
-        if let keep {
-            soloPlayer = keep
-            // Tab silence must never leave continuous hubs muted/stalled.
-            // (Other paths may have hard-silenced before protect was re-bound.)
+        // Prefer intentional Masquerade watch audio ownership over mini when both exist.
+        // Never call play() here — tab-hop silence must stay feather-light (play hitch).
+        if let keepWatch, keepWatch.currentItem != nil {
+            soloPlayer = keepWatch
+        } else if let keepContinuous {
+            soloPlayer = keepContinuous
+            ensurePlaybackAudioSession()
+            if keepContinuous.rate < 0.05, keepContinuous.currentItem != nil {
+                keepContinuous.play()
+            }
         } else {
             soloPlayer = nil
         }
@@ -195,16 +283,23 @@ final class MediaPlaybackCoordinator {
 
     /// After tab/nav silence: re-claim continuous hubs audio with the user's mute preference.
     /// Call whenever `hubPlaybackPost != nil` and playback should continue in mini.
-    func reassertContinuousHubsAudio(userMuted: Bool) {
+    /// No-ops when already solo + playing at the right mute/rate (tab hops must stay light).
+    func reassertContinuousHubsAudio(userMuted: Bool, rate: Float = 1.0) {
         guard let keep = protectedContinuousPlayer, keep.currentItem != nil else { return }
         soloPlayer = keep
         register(keep)
+        let playRate = max(0.25, min(rate, 3.0))
+        let muteOK = keep.isMuted == userMuted && (userMuted || keep.volume > 0.5)
+        let rateOK = keep.rate > 0.05 && abs(keep.rate - playRate) <= 0.05
+        if muteOK, rateOK, soloPlayer === keep {
+            return
+        }
         ensurePlaybackAudioSession()
         keep.isMuted = userMuted
         keep.volume = userMuted ? 0 : 1
-        if keep.rate < 0.05 {
+        if keep.rate < 0.05 || abs(keep.rate - playRate) > 0.05 {
             keep.play()
-            keep.safePlayImmediately(atRate: 1.0)
+            keep.safePlayImmediately(atRate: playRate)
         }
     }
 
@@ -334,13 +429,43 @@ final class MediaPlaybackCoordinator {
         pageEpoch: UInt64? = nil,
         aggressive: Bool = false
     ) -> Bool {
+        let continuous = protectedContinuousPlayer
+        let foregroundWatch = protectedForegroundWatchPlayer
+        // Intentional Masquerade/archive watch steals from live continuous mini.
+        let keepIsForegroundWatch = keep != nil && keep === foregroundWatch
+        // Live continuous Hubs wins over feed/Sparks claims. Paused continuous (Sparks overlay)
+        // yields so Sparks can solo without tearing the hubs film down.
+        // Foreground watch (Masquerade) is allowed to take audio from continuous.
+        if let continuous, keep !== continuous, continuous.currentItem != nil, !keepIsForegroundWatch {
+            let continuousLive = continuous.rate > 0.01
+                || continuous.timeControlStatus == .playing
+                || continuous.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            if continuousLive {
+                if let keep { hardSilence(keep) }
+                soloPlayer = continuous
+                return false
+            }
+        }
         if let pageEpoch, pageEpoch != sparkPageEpoch {
-            if let keep { hardSilence(keep) }
+            // Don't hard-mute a protected watch on a stale epoch — caller refreshes and retries.
+            if let keep, !isProtected(keep) { hardSilence(keep) }
             return false
         }
         soloPlayer = keep
         for player in players.allObjects {
             if let keep, player === keep {
+                continue
+            }
+            if let continuous, player === continuous {
+                // Soft-pause mini while Masquerade watch owns audio (keep protection).
+                if keepIsForegroundWatch {
+                    player.pause()
+                    player.isMuted = true
+                    player.volume = 0
+                }
+                continue
+            }
+            if let foregroundWatch, player === foregroundWatch {
                 continue
             }
             if aggressive {
@@ -381,18 +506,38 @@ final class MediaPlaybackCoordinator {
     /// Call before any `play()` from a Spark/feed observer. Non-solo players stay silent.
     @discardableResult
     func allowPlaybackIfSolo(_ player: AVPlayer, pageEpoch: UInt64? = nil) -> Bool {
+        if let continuous = protectedContinuousPlayer,
+           player !== continuous,
+           player !== protectedForegroundWatchPlayer,
+           continuous.currentItem != nil {
+            let continuousLive = continuous.rate > 0.01
+                || continuous.timeControlStatus == .playing
+                || continuous.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            if continuousLive {
+                hardSilence(player)
+                return false
+            }
+        }
         if let pageEpoch, pageEpoch != sparkPageEpoch {
-            hardSilence(player)
+            if !isProtected(player) {
+                hardSilence(player)
+            }
             return false
         }
         guard soloPlayer === player else {
-            hardSilence(player)
+            if !isProtected(player) {
+                hardSilence(player)
+            }
             return false
         }
         return true
     }
 
     private func hardSilence(_ player: AVPlayer) {
+        // Never pause/mute continuous Hubs or intentional Masquerade/archive watch.
+        if isProtected(player) {
+            return
+        }
         player.pause()
         player.isMuted = true
         player.volume = 0
