@@ -1,6 +1,7 @@
 /**
  * MIND-020 — Hybrid search (keyword + Voyage ANN + Voyage rerank).
- * Public posts only. Masquerade stays on its own keyword path.
+ * Expands intent (synonyms) so "dancing" can match choreo / valle / bailando
+ * without requiring the literal word. Public posts only.
  */
 import { pool } from '../db.js';
 import { annCandidates, mindEmbeddingsEnabled } from './mind-embeddings.js';
@@ -34,21 +35,125 @@ export type HybridSearchResult = {
   /** True when Voyage rerank reordered the candidate head. */
   reranked: boolean;
   rerankModel: string | null;
+  /** Synonyms / related terms used for retrieval. */
+  expandedTerms: string[];
   latencyMs: number;
 };
 
+/**
+ * Intent → related terms. Matched when the query equals or contains the key
+ * as a whole word. Keeps Search contextual instead of literal-only.
+ */
+const INTENT_SYNONYMS: Record<string, string[]> = {
+  dancing: [
+    'dance',
+    'dancer',
+    'choreography',
+    'choreo',
+    'ballet',
+    'salsa',
+    'bailando',
+    'valle',
+    'groove',
+    'ballroom',
+    'hip hop',
+    'belly dance',
+    'tallava',
+  ],
+  dance: [
+    'dancing',
+    'dancer',
+    'choreography',
+    'choreo',
+    'ballet',
+    'salsa',
+    'bailando',
+    'valle',
+    'groove',
+    'ballroom',
+  ],
+  cooking: ['cook', 'recipe', 'chef', 'kitchen', 'baking', 'food', 'cuisine'],
+  food: ['cooking', 'recipe', 'chef', 'restaurant', 'street food', 'cuisine'],
+  travel: ['trip', 'vacation', 'tourism', 'journey', 'backpack', 'explore'],
+  comedy: ['funny', 'humor', 'humour', 'sketch', 'stand up', 'joke', 'laugh'],
+  music: ['song', 'singer', 'concert', 'band', 'rap', 'melody', 'instrumental'],
+  sports: ['football', 'soccer', 'basketball', 'athletic', 'workout', 'fitness'],
+  fitness: ['workout', 'gym', 'training', 'exercise', 'sports'],
+  cats: ['cat', 'kitten', 'feline', 'meow'],
+  dogs: ['dog', 'puppy', 'canine'],
+};
+
+export type ExpandedQuery = {
+  primary: string;
+  terms: string[];
+  /** Richer string for Voyage ANN + rerank (context, not just one word). */
+  semanticQuery: string;
+};
+
+export function expandSearchQuery(raw: string): ExpandedQuery {
+  const primary = String(raw ?? '')
+    .trim()
+    .replace(/^@+/, '')
+    .slice(0, 200);
+  if (!primary) return { primary: '', terms: [], semanticQuery: '' };
+
+  const lower = primary.toLowerCase();
+  const terms = new Set<string>([primary]);
+  for (const [key, syns] of Object.entries(INTENT_SYNONYMS)) {
+    const re = new RegExp(`\\b${key.replace(/\s+/g, '\\s+')}\\b`, 'i');
+    if (re.test(lower) || lower === key) {
+      terms.add(key);
+      for (const s of syns) terms.add(s);
+    }
+  }
+  // Also split multi-word queries into tokens (≥3 chars).
+  for (const tok of lower.split(/[^a-z0-9]+/).filter((t) => t.length >= 3)) {
+    terms.add(tok);
+  }
+
+  const list = [...terms].slice(0, 16);
+  const semanticQuery = [primary, ...list.filter((t) => t.toLowerCase() !== lower)]
+    .slice(0, 12)
+    .join(' ');
+
+  return { primary, terms: list, semanticQuery };
+}
+
+function escapeLike(s: string): string {
+  return s.replace(/[%_\\]/g, '\\$&');
+}
+
 async function lexicalSearch(
-  query: string,
+  terms: string[],
   limit: number,
   viewerId: string | null
 ): Promise<HybridSearchHit[]> {
-  const term = String(query ?? '').trim().replace(/^@+/, '');
-  if (!term) return [];
-  const q = term.toLowerCase();
-  const escaped = q.replace(/[%_\\]/g, '\\$&');
-  const prefix = `${escaped}%`;
-  const contains = `%${escaped}%`;
+  const cleaned = terms
+    .map((t) => t.trim().toLowerCase())
+    .filter((t) => t.length >= 2)
+    .slice(0, 12);
+  if (cleaned.length === 0) return [];
+  const primary = cleaned[0]!;
   const max = Math.max(1, Math.min(500, limit));
+
+  // Build OR across synonym terms for title/body/username.
+  const likeParams: string[] = [];
+  const orParts: string[] = [];
+  for (let i = 0; i < cleaned.length; i++) {
+    const term = cleaned[i]!;
+    likeParams.push(`%${escapeLike(term)}%`);
+    const idx = i + 1;
+    orParts.push(
+      `(lower(coalesce(p.title, '')) like $${idx} escape '\\'
+        or lower(coalesce(pr.username, '')) like $${idx} escape '\\'
+        or lower(coalesce(pr.display_name, '')) like $${idx} escape '\\'
+        or lower(left(coalesce(p.body, ''), 240)) like $${idx} escape '\\')`
+    );
+  }
+  const viewerIdx = likeParams.length + 1;
+  const primaryExactIdx = viewerIdx + 1;
+  const primaryPrefixIdx = viewerIdx + 2;
+  const limitIdx = viewerIdx + 3;
 
   try {
     const { rows } = await pool.query<{
@@ -63,9 +168,9 @@ async function lexicalSearch(
         p.title,
         p.author_id::text,
         case
-          when lower(coalesce(pr.username, '')) = $3 then 0
-          when lower(coalesce(p.title, '')) like $2 escape '\\' then 1
-          when lower(coalesce(pr.username, '')) like $2 escape '\\' then 2
+          when lower(coalesce(pr.username, '')) = $${primaryExactIdx} then 0
+          when lower(coalesce(p.title, '')) like $${primaryPrefixIdx} escape '\\' then 1
+          when lower(coalesce(pr.username, '')) like $${primaryPrefixIdx} escape '\\' then 2
           else 3
         end as rank_bucket
       from public.posts p
@@ -74,23 +179,19 @@ async function lexicalSearch(
         and coalesce(p.media_type, '') is distinct from 'moment'
         and (
           p.visibility = 'public'
-          or ($4::uuid is not null and p.author_id = $4::uuid)
+          or ($${viewerIdx}::uuid is not null and p.author_id = $${viewerIdx}::uuid)
         )
-        and (
-          lower(coalesce(pr.username, '')) like $2 escape '\\'
-          or lower(coalesce(pr.display_name, '')) like $2 escape '\\'
-          or lower(coalesce(p.title, '')) like $2 escape '\\'
-          or ($5::int >= 3 and (
-            lower(coalesce(p.title, '')) like $1 escape '\\'
-            or lower(coalesce(pr.username, '')) like $1 escape '\\'
-            or lower(coalesce(pr.display_name, '')) like $1 escape '\\'
-            or lower(left(coalesce(p.body, ''), 240)) like $1 escape '\\'
-          ))
-        )
+        and (${orParts.join(' or ')})
       order by rank_bucket asc, p.created_at desc
-      limit $6
+      limit $${limitIdx}
       `,
-      [contains, prefix, q, viewerId, q.length, max]
+      [
+        ...likeParams,
+        viewerId,
+        primary,
+        `${escapeLike(primary)}%`,
+        max,
+      ]
     );
     return rows.map((r, i) => ({
       id: r.id,
@@ -99,12 +200,13 @@ async function lexicalSearch(
       score: 10 - r.rank_bucket - i * 0.01,
       sources: ['lexical'],
     }));
-  } catch {
+  } catch (err: any) {
+    console.warn('[mind-search] lexical', err?.message ?? err);
     return [];
   }
 }
 
-/** Reciprocal rank fusion merge. */
+/** Reciprocal rank fusion — semantic slightly heavier so context beats pure substring. */
 function rrfMerge(
   lexical: HybridSearchHit[],
   semanticIds: string[],
@@ -114,7 +216,7 @@ function rrfMerge(
   lexical.forEach((h, i) => {
     const s = 1 / (k + i + 1);
     scores.set(h.id, {
-      score: s * 1.15,
+      score: s * 1.0,
       hit: { ...h, sources: ['lexical'] },
     });
   });
@@ -122,11 +224,11 @@ function rrfMerge(
     const s = 1 / (k + i + 1);
     const prev = scores.get(id);
     if (prev) {
-      prev.score += s;
+      prev.score += s * 1.35;
       if (!prev.hit.sources.includes('semantic')) prev.hit.sources.push('semantic');
     } else {
       scores.set(id, {
-        score: s,
+        score: s * 1.35,
         hit: {
           id,
           score: 0,
@@ -142,6 +244,58 @@ function rrfMerge(
     .map((x) => ({ ...x.hit, score: Math.round(x.score * 1000) / 1000 }));
 }
 
+/**
+ * Keep contextual hits that omit the literal primary word — otherwise rerank
+ * collapses everything back to titles containing "dancing".
+ */
+function interleaveNonLiteral(
+  hits: HybridSearchHit[],
+  primary: string,
+  pageSize: number
+): HybridSearchHit[] {
+  const stem = primary.trim().toLowerCase();
+  if (stem.length < 3 || hits.length < 4) return hits;
+  const re = new RegExp(stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+  const literal: HybridSearchHit[] = [];
+  const contextual: HybridSearchHit[] = [];
+  for (const h of hits) {
+    const t = h.title || '';
+    if (!t.trim()) {
+      // Empty titles are useless in UI — park at end.
+      continue;
+    }
+    if (re.test(t)) literal.push(h);
+    else contextual.push(h);
+  }
+  if (contextual.length === 0) return hits.filter((h) => (h.title || '').trim());
+
+  const out: HybridSearchHit[] = [];
+  const seen = new Set<string>();
+  const wantContextual = Math.max(2, Math.ceil(pageSize * 0.35));
+  let ci = 0;
+  let li = 0;
+  // Lead with a few contextual hits, then weave.
+  while (out.length < hits.length && (ci < contextual.length || li < literal.length)) {
+    const preferContextual =
+      out.filter((h) => !re.test(h.title || '')).length < wantContextual;
+    if (preferContextual && ci < contextual.length) {
+      const h = contextual[ci++]!;
+      if (seen.add(h.id)) out.push(h);
+      continue;
+    }
+    if (li < literal.length) {
+      const h = literal[li++]!;
+      if (seen.add(h.id)) out.push(h);
+      continue;
+    }
+    if (ci < contextual.length) {
+      const h = contextual[ci++]!;
+      if (seen.add(h.id)) out.push(h);
+    }
+  }
+  return out;
+}
+
 export async function hybridSearch(opts: {
   query: string;
   limit?: number;
@@ -149,11 +303,11 @@ export async function hybridSearch(opts: {
   viewerId?: string | null;
 }): Promise<HybridSearchResult> {
   const started = Date.now();
-  const query = String(opts.query ?? '').trim().slice(0, 200);
+  const expanded = expandSearchQuery(opts.query ?? '');
+  const query = expanded.primary;
   const limit = Math.min(Math.max(opts.limit ?? 20, 1), 100);
   const offset = Math.max(0, Math.min(400, opts.offset ?? 0));
   const viewerId = opts.viewerId ?? null;
-  // Fetch enough ranked hits to satisfy this page (offset + limit), capped.
   const fetchCount = Math.min(500, offset + limit);
 
   if (!query) {
@@ -165,18 +319,19 @@ export async function hybridSearch(opts: {
       hybrid: false,
       reranked: false,
       rerankModel: null,
+      expandedTerms: [],
       latencyMs: Date.now() - started,
     };
   }
 
   const useHybrid = mindHybridSearchEnabled() && mindEmbeddingsEnabled();
-  const lexical = await lexicalSearch(query, fetchCount, viewerId);
+  const lexical = await lexicalSearch(expanded.terms, fetchCount, viewerId);
   let semanticIds: string[] = [];
   if (useHybrid) {
     try {
       semanticIds = await annCandidates({
-        queryText: query,
-        limit: Math.min(Math.max(fetchCount * 2, 48), 120),
+        queryText: expanded.semanticQuery || query,
+        limit: Math.min(Math.max(fetchCount * 2, 64), 120),
         excludeIds: [],
       });
     } catch {
@@ -184,9 +339,10 @@ export async function hybridSearch(opts: {
     }
   }
 
-  let ranked = useHybrid && semanticIds.length
-    ? rrfMerge(lexical, semanticIds)
-    : lexical;
+  let ranked =
+    useHybrid && semanticIds.length
+      ? rrfMerge(lexical, semanticIds)
+      : lexical;
 
   // Fill title/body for the rerank head (and page) before Voyage.
   const headN = Math.min(MIND_RERANK_CANDIDATE_CAP, ranked.length);
@@ -198,10 +354,11 @@ export async function hybridSearch(opts: {
   if (mindRerankEnabled() && ranked.length >= 2) {
     const head = ranked.slice(0, headN);
     const docs = head.map((h) =>
-      rerankPassage(h.title, (h as HybridSearchHit & { body?: string | null }).body)
+      rerankPassage(h.title, (h as HitWithBody).body)
     );
+    // Rerank with expanded semantic query so synonyms aren't punished.
     const result = await voyageRerank({
-      query,
+      query: expanded.semanticQuery || query,
       documents: docs,
       topK: head.length,
     });
@@ -222,6 +379,7 @@ export async function hybridSearch(opts: {
     }
   }
 
+  ranked = interleaveNonLiteral(ranked, query, limit);
   const items = ranked.slice(offset, offset + limit);
 
   return {
@@ -232,6 +390,7 @@ export async function hybridSearch(opts: {
     hybrid: useHybrid && semanticIds.length > 0,
     reranked,
     rerankModel,
+    expandedTerms: expanded.terms,
     latencyMs: Date.now() - started,
   };
 }
