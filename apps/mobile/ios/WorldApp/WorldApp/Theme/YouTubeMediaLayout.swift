@@ -52,8 +52,8 @@ enum YouTubeMediaLayout {
 
     /// Single max-pixel size for Hubs For you / related / shelf thumbs.
     /// Prefetch + display MUST match or ImageCache keys miss and every row re-downloads.
-    /// Sharper shelf posters for premium ~196–212pt cards (was 320).
-    static let hubsListThumbMaxPixel: CGFloat = 480
+    /// Shelf posters — 320 keeps Hubs light; 480 stampeded decode + /v1/poster.
+    static let hubsListThumbMaxPixel: CGFloat = 320
 
     /// Hubs watch stage height for a given **video aspect** (width ÷ height).
     /// Box is sized so aspect-fit shows the full picture without cropping.
@@ -763,22 +763,22 @@ struct HubsLoopingHorizontalRail<Content: View>: View {
 }
 
 /// Fixed-size horizontal shelf card (Continue watching / New on Hubs / Hubs rails).
-/// Premium cinema poster: large 16:9 thumb, soft shadow, quiet type — rows stay aligned.
+/// Light posters only — never mint `/v1/poster` Frame0 from the shelf (that froze Hubs).
 struct HubsShelfThumbCard: View {
     let post: CountryPost
-    var width: CGFloat = 196
+    var width: CGFloat = 168
     /// When true, show a one-line meta row under the title (channel · views).
     var showsMetadata: Bool = false
-    var titleFont: Font = .subheadline.weight(.semibold)
-    /// Last-resort mid-clip frame when Frame0/thumb missing — VideoFrameCache caps concurrency.
-    var extractFrameIfNeeded: Bool = true
+    var titleFont: Font = .caption.weight(.semibold)
+    /// Mid-clip extract — keep off for Hubs rails.
+    var extractFrameIfNeeded: Bool = false
     var onTap: () -> Void
 
     private var thumbHeight: CGFloat { (width / YouTubeMediaLayout.aspect).rounded() }
-    private var corner: CGFloat { 14 }
+    private var corner: CGFloat { 12 }
     /// Reserve space for exactly two caption lines so missing/short titles don't shift neighbors.
-    private var titleBlockHeight: CGFloat { 40 }
-    private var metaBlockHeight: CGFloat { showsMetadata ? 18 : 0 }
+    private var titleBlockHeight: CGFloat { 34 }
+    private var metaBlockHeight: CGFloat { showsMetadata ? 16 : 0 }
 
     var body: some View {
         Button(action: onTap) {
@@ -790,7 +790,7 @@ struct HubsShelfThumbCard: View {
                     showsPlayIcon: false,
                     frameStyle: .card,
                     embedsFrame: false,
-                    extractFrameIfNeeded: extractFrameIfNeeded,
+                    extractFrameIfNeeded: false,
                     showsHubBadge: false
                 )
                 .frame(width: width, height: thumbHeight)
@@ -801,22 +801,6 @@ struct HubsShelfThumbCard: View {
                     RoundedRectangle(cornerRadius: corner, style: .continuous)
                         .stroke(Theme.border.opacity(0.45), lineWidth: 0.5)
                 )
-                // No per-card shadow — dozens of shadowed posters froze Hubs scroll.
-                .task(id: post.id) {
-                    // Wait out fling — per-cell Frame0 mid-scroll froze Hubs everywhere.
-                    for _ in 0..<6 {
-                        if Task.isCancelled { return }
-                        if !ScrollBudget.isFlinging { break }
-                        try? await Task.sleep(nanoseconds: 220_000_000)
-                    }
-                    if Task.isCancelled || ScrollBudget.isFlinging { return }
-                    // Strip tiles must never stay black — mint Frame 0 if thumb is missing/expired.
-                    let usable = MediaURLResolver.hubsListPosterURL(for: post)
-                        .map { MediaURLResolver.isUsablePosterURL($0) } ?? false
-                    if !usable {
-                        _ = await Frame0PosterResolver.shared.posterURL(postID: post.id)
-                    }
-                }
 
                 Text(post.displayHeadline ?? " ")
                     .font(titleFont)
@@ -824,11 +808,11 @@ struct HubsShelfThumbCard: View {
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .frame(width: width, height: titleBlockHeight, alignment: .topLeading)
-                    .padding(.top, 8)
+                    .padding(.top, 6)
 
                 if showsMetadata {
                     Text(metadataLine)
-                        .font(.caption.weight(.medium))
+                        .font(.caption2)
                         .foregroundStyle(Theme.inkMuted)
                         .lineLimit(1)
                         .frame(width: width, height: metaBlockHeight, alignment: .topLeading)
@@ -841,7 +825,7 @@ struct HubsShelfThumbCard: View {
         // Lock total cell height so HStack top-aligns every card identically.
         .frame(
             width: width,
-            height: thumbHeight + 8 + titleBlockHeight + (showsMetadata ? 2 + metaBlockHeight : 0),
+            height: thumbHeight + 6 + titleBlockHeight + (showsMetadata ? 2 + metaBlockHeight : 0),
             alignment: .top
         )
     }

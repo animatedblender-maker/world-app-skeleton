@@ -25,26 +25,20 @@ final class SparkWarmPool {
         static var isConstrained: Bool { physicalGB < 3.6 }
         static var isMid: Bool { physicalGB < 5.6 }
 
-        /// Sparks swipe — Balanced light +1 for Feed→player instant (still below Max 5/4).
+        /// Balanced light — keep whole-app weight down (Hubs + Feed + Masquerade co-mounted).
         static var playerAhead: Int { playerAheadSparks }
-        /// Home feed: deep-warm focus + ahead so autoplay / tap-open claim a ready buffer.
-        static var playerAheadFeed: Int { isConstrained ? 2 : 3 }
-        static var playerAheadSparks: Int { isConstrained ? 3 : 4 }
-        /// Hubs watch/related — 1 ahead only (list is posters; dual-mount with Feed/Masquerade).
+        static var playerAheadFeed: Int { isConstrained ? 1 : 2 }
+        static var playerAheadSparks: Int { isConstrained ? 2 : 3 }
         static var playerAheadHubs: Int { 1 }
-        /// Thumbs / Frame 0 ahead of focus (Sparks player + shelves).
-        static var thumbAhead: Int { isConstrained ? 3 : 5 }
-        /// Deep-preroll next N (first-frame ready); rest of window light-buffer.
-        static var deepPrerollFeed: Int { isConstrained ? 2 : 3 }
-        static var deepPrerollSparks: Int { isConstrained ? 2 : 3 }
+        static var thumbAhead: Int { isConstrained ? 3 : 4 }
+        static var deepPrerollFeed: Int { isConstrained ? 1 : 2 }
+        static var deepPrerollSparks: Int { 2 }
         static var deepPrerollHubs: Int { 1 }
-        /// current + behind + ahead + spare — room for Feed ahead + mid-clip handoff.
-        static var maxSlots: Int { isConstrained ? 5 : 7 }
+        static var maxSlots: Int { isConstrained ? 4 : 5 }
         static var playerBehind: Int { 1 }
-        /// Parallel R2 warms — Feed/Sparks instant without restoring Max-instant storms.
-        static var maxConcurrentWarms: Int { isConstrained ? 2 : 3 }
-        static var forwardBufferDeep: Double { isConstrained ? 4 : 6 }
-        static var forwardBufferLight: Double { isConstrained ? 2 : 3 }
+        static var maxConcurrentWarms: Int { isConstrained ? 1 : 2 }
+        static var forwardBufferDeep: Double { isConstrained ? 3 : 4 }
+        static var forwardBufferLight: Double { isConstrained ? 1.5 : 2 }
     }
 
     /// How aggressively to warm the Sparks sliding window.
@@ -146,14 +140,14 @@ final class SparkWarmPool {
         guard !posts.isEmpty else { return }
         // Cold open / splash: never spin AV under a frozen MainActor (ghost audio).
         guard FeedVideoFocus.shared.allowsFeedAVWarm else { return }
-        // Mid-fling: still deep-warm the next 2 so landing + tap-open stay instant.
+        // Mid-fling: warm next 1 only — heavier ahead storms froze the shell.
         if ScrollBudget.isFlinging {
             prepare(
                 posts: posts,
                 around: index,
-                ahead: min(2, MediaBudget.playerAheadFeed),
+                ahead: 1,
                 behind: 0,
-                deepPrerollLimit: min(2, MediaBudget.deepPrerollFeed),
+                deepPrerollLimit: 1,
                 skipThumbWarm: true,
                 allowNewWarms: true
             )

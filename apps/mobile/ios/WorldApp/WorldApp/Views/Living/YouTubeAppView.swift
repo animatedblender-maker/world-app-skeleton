@@ -66,18 +66,18 @@ struct YouTubeAppView: View {
     private static let hubsCatalogMemoryCap = 2200
     /// Rank sample on the navigate hop — larger samples freeze first open.
     private static let hubsFirstPaintRankCap = 96
-    /// Cards per horizontal Netflix rail (Continue / vibe / more) — loop forever at ~15.
-    private static let hubsRailCardCount = 15
+    /// Cards per horizontal Netflix rail — enough to swipe, light enough not to freeze.
+    private static let hubsRailCardCount = 10
     /// First-hop vibe rows (expanded after paint).
-    private static let hubsVibeRailCountFirstPaint = 3
+    private static let hubsVibeRailCountFirstPaint = 2
     /// Full Netflix vibe rows after deferred densify.
-    private static let hubsVibeRailCount = 8
+    private static let hubsVibeRailCount = 5
     /// Extra “More to watch” chunk rows under the vibe shelves.
     private static let hubsMoreRailRowsFirstPaint = 1
-    private static let hubsMoreRailRows = 5
-    /// Premium shelf posters — large enough to feel cinematic, ~1.7 visible per peek.
-    private static let hubsRailCardWidth: CGFloat = 196
-    private static let hubsPeopleRailCardWidth: CGFloat = 212
+    private static let hubsMoreRailRows = 3
+    /// Premium-but-light shelf posters (196/480 froze Hubs + stampeded /v1/poster).
+    private static let hubsRailCardWidth: CGFloat = 168
+    private static let hubsPeopleRailCardWidth: CGFloat = 180
     /// True after first useful paint — rebuildCachedHubsRails uses denser counts.
     @State private var hubsRailsDense = false
     /// Skip network/warm on quick Hubs re-entry when the shell is already useful.
@@ -202,8 +202,13 @@ struct YouTubeAppView: View {
     private func scheduleHubsDensifyIfNeeded() {
         guard !hubsRailsDense else { return }
         Task(priority: .utility) { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            // Wait until the hop is idle — early densify + poster storm froze Hubs.
+            try? await Task.sleep(nanoseconds: 2_800_000_000)
             guard appState.selectedTab == .hubs else { return }
+            if ScrollBudget.isFlinging {
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                guard appState.selectedTab == .hubs else { return }
+            }
             hubsRailsDense = true
             rebuildStableHomeLists(shuffle: false, remountList: false)
         }
@@ -942,7 +947,7 @@ struct YouTubeAppView: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 30) {
+                        LazyVStack(alignment: .leading, spacing: 22) {
                             // Netflix-style: hero + horizontal rails. Categories are rows, not chips.
                             if let hero = hubsHeroPost {
                                 hubsHeroBillboard(hero)
@@ -999,14 +1004,8 @@ struct YouTubeAppView: View {
                                 hubsNetflixRail(
                                     title: rail.title,
                                     posts: rail.posts,
-                                    cardWidth: Self.hubsRailCardWidth,
-                                    onNearEnd: {
-                                        ensureMoreForYou(around: max(0, stableDiscoverVideos.count - 1))
-                                    }
+                                    cardWidth: Self.hubsRailCardWidth
                                 )
-                                .onAppear {
-                                    ensureMoreForYou(around: max(0, stableDiscoverVideos.count - 1))
-                                }
                             }
 
                             Color.clear
@@ -1271,7 +1270,7 @@ struct YouTubeAppView: View {
             ZStack(alignment: .bottomLeading) {
                 YouTubeVideoThumbnail(
                     post: post,
-                    maxPixelSize: 960,
+                    maxPixelSize: 720,
                     showsPlayIcon: false,
                     frameStyle: .card,
                     embedsFrame: false,
@@ -1279,15 +1278,8 @@ struct YouTubeAppView: View {
                     showsHubBadge: false
                 )
                 .frame(maxWidth: .infinity)
-                .frame(height: 292)
+                .frame(height: 240)
                 .clipped()
-                .task(id: post.id) {
-                    let usable = MediaURLResolver.hubsListPosterURL(for: post)
-                        .map { MediaURLResolver.isUsablePosterURL($0) } ?? false
-                    if !usable {
-                        _ = await Frame0PosterResolver.shared.posterURL(postID: post.id)
-                    }
-                }
 
                 LinearGradient(
                     colors: [
@@ -1344,10 +1336,10 @@ struct YouTubeAppView: View {
     ) -> some View {
         // Algorithm target: ~15 ranked long-form cards; rail loops so swipe never dead-ends.
         let railPosts = Array(posts.prefix(Self.hubsRailCardCount))
-        return VStack(alignment: .leading, spacing: 14) {
+        return VStack(alignment: .leading, spacing: 10) {
             if !title.isEmpty {
                 Text(title)
-                    .font(.title2.weight(.bold))
+                    .font(.title3.weight(.bold))
                     .foregroundStyle(Theme.ink)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1356,18 +1348,14 @@ struct YouTubeAppView: View {
 
             HubsLoopingHorizontalRail(
                 posts: railPosts,
-                spacing: 14,
-                onNearEnd: {
-                    onNearEnd?()
-                    ensureMoreForYou(around: max(0, stableDiscoverVideos.count - 1))
-                }
+                spacing: 12,
+                onNearEnd: onNearEnd
             ) { post, _ in
                 HubsShelfThumbCard(
                     post: post,
                     width: cardWidth,
                     showsMetadata: true,
-                    titleFont: .subheadline.weight(.semibold),
-                    // Poster/Frame0 only — mid-clip extract during rail scroll froze Hubs.
+                    titleFont: .caption.weight(.semibold),
                     extractFrameIfNeeded: false,
                     onTap: { openVideo(post) }
                 )
