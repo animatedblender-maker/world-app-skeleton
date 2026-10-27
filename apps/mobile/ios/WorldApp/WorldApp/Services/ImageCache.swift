@@ -540,10 +540,16 @@ struct CachedAsyncImage: View {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
+                    // Must claim the full proposed box — without this, .fill/.fit can
+                    // sit at intrinsic size and leave Theme.canvasMuted letterbox gaps.
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                    .clipped()
             } else if let placeholder {
                 placeholder
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
             } else {
                 Theme.canvasMuted
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
             }
         }
         .onAppear {
@@ -681,63 +687,67 @@ struct FeedPinchZoomPhoto: View {
     private var isZooming: Bool { scale > 1.01 || announcedZooming }
 
     var body: some View {
-        ZStack {
-            Theme.canvasMuted
-            if isZooming {
-                Color.black.opacity(min(0.55, Double(max(scale, 1.15) - 1) * 0.35))
-                    .allowsHitTesting(false)
+        // Overlay layout: photo paints into the parent’s exact box. A ZStack + Color
+        // background was showing Matterya paper letterbox when the bitmap lagged layout.
+        Color.clear
+            .overlay {
+                CachedAsyncImage(
+                    url: url,
+                    maxPixelSize: maxPixelSize,
+                    contentMode: contentMode,
+                    placeholder: placeholder,
+                    onImageSize: onImageSize
+                )
+                .scaleEffect(scale)
+                .offset(offset)
+                .allowsHitTesting(false)
             }
-            CachedAsyncImage(
-                url: url,
-                maxPixelSize: maxPixelSize,
-                contentMode: contentMode,
-                placeholder: placeholder,
-                onImageSize: onImageSize
-            )
-            // Fill the parent’s aspect-matched box (parent owns letterbox-free sizing).
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .scaleEffect(scale)
-            .offset(offset)
-            .allowsHitTesting(false)
-            // Pinch overlay must NOT steal 1-finger scroll (Sparks/Hubs stay smooth
-            // because they have no UIKit hit layer). Overlay only claims 2-finger / zoom.
-            FeedPhotoPinchOverlay(
-                onBegan: {
-                    setZooming(true)
-                },
-                onChanged: { next, pan in
-                    let clamped = min(max(next, 1), 4)
-                    setZooming(true)
-                    scale = clamped
-                    offset = pan
-                },
-                onEnded: {
-                    withAnimation(.interpolatingSpring(stiffness: 260, damping: 28)) {
-                        scale = 1
-                        offset = .zero
-                    } completion: {
-                        setZooming(false)
-                    }
+            .overlay {
+                if isZooming {
+                    Color.black.opacity(min(0.55, Double(max(scale, 1.15) - 1) * 0.35))
+                        .allowsHitTesting(false)
                 }
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .allowsHitTesting(true)
-        }
-        .contentShape(Rectangle())
-        // Tap lives in SwiftUI so 1-finger scroll is never owned by the UIKit overlay.
-        .onTapGesture {
-            guard !isZooming else { return }
-            onTap?()
-        }
-        .onDisappear {
-            if announcedZooming {
-                announcedZooming = false
-                onZoomingChanged?(false)
-                FeedPhotoZoomGate.shared.end()
             }
-            scale = 1
-            offset = .zero
-        }
+            .overlay {
+                // Pinch overlay must NOT steal 1-finger scroll (Sparks/Hubs stay smooth
+                // because they have no UIKit hit layer). Overlay only claims 2-finger / zoom.
+                FeedPhotoPinchOverlay(
+                    onBegan: {
+                        setZooming(true)
+                    },
+                    onChanged: { next, pan in
+                        let clamped = min(max(next, 1), 4)
+                        setZooming(true)
+                        scale = clamped
+                        offset = pan
+                    },
+                    onEnded: {
+                        withAnimation(.interpolatingSpring(stiffness: 260, damping: 28)) {
+                            scale = 1
+                            offset = .zero
+                        } completion: {
+                            setZooming(false)
+                        }
+                    }
+                )
+                .allowsHitTesting(true)
+            }
+            .clipped()
+            .contentShape(Rectangle())
+            // Tap lives in SwiftUI so 1-finger scroll is never owned by the UIKit overlay.
+            .onTapGesture {
+                guard !isZooming else { return }
+                onTap?()
+            }
+            .onDisappear {
+                if announcedZooming {
+                    announcedZooming = false
+                    onZoomingChanged?(false)
+                    FeedPhotoZoomGate.shared.end()
+                }
+                scale = 1
+                offset = .zero
+            }
     }
 
     private func setZooming(_ zooming: Bool) {

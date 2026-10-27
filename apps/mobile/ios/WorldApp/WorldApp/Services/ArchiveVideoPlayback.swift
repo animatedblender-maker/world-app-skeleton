@@ -2210,11 +2210,21 @@ final class ArchiveVideoPlayerController: UIViewController {
             player.volume = 0
             return
         }
-        // Masquerade: refresh epoch once per claim so a Feed silence bump mid-load
-        // cannot permanently mute — but do not re-protect on every tick (tab-hop weight).
-        if shouldProtectForegroundWatch,
-           activePageEpoch != MediaPlaybackCoordinator.shared.sparkPageEpoch {
+        if shouldProtectForegroundWatch {
+            // Masquerade intentional watch: always re-protect + skip page-epoch rejection.
+            // Prior path refreshed epoch but skipped protect → continuous hubs hard-muted us
+            // and we returned without ever applying mutedFlag (picture, no sound).
+            noteForegroundWatchProtection(player)
             activePageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
+            _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
+                keeping: player,
+                pageEpoch: nil,
+                aggressive: true
+            )
+            configureAudioSession()
+            player.isMuted = mutedFlag
+            player.volume = mutedFlag ? 0 : 1
+            return
         }
         guard MediaPlaybackCoordinator.shared.soloSparkAudio(
             keeping: player,

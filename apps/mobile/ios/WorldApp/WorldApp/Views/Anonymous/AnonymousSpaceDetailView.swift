@@ -650,53 +650,53 @@ struct AnonymousPostCard: View {
     @ViewBuilder
     private var mediaBlock: some View {
         if post.hasImage, let url = post.mediaURLValue {
-            // Aspect-matched frame + .fill: card height = width / photoAspect so the
-            // bitmap fills edge-to-edge — no top/bottom letterbox, no side pillarbox.
-            // Tall memes grow the card (Reddit-style); never crop to a fixed height.
+            // Full-width box sized to the photo’s real aspect; photo fills that box.
+            // Clear+overlay+clipped — never a paper Color behind the bitmap (that was
+            // the white letterbox/pillarbox). Tall memes grow the card (Reddit-style).
             let listPx: CGFloat = style == .thread ? 900 : 720
             let corner: CGFloat = style == .feed ? 0 : 10
             let aspect = photoAspect
-            FeedPinchZoomPhoto(
-                url: url,
-                maxPixelSize: listPx,
-                contentMode: .fill,
-                placeholder: AnyView(
-                    Rectangle()
-                        .fill(Theme.canvasMuted)
-                        .overlay {
-                            ProgressView()
-                                .tint(Theme.inkMuted)
+            Color.clear
+                .aspectRatio(aspect, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .overlay {
+                    FeedPinchZoomPhoto(
+                        url: url,
+                        maxPixelSize: listPx,
+                        contentMode: .fill,
+                        placeholder: AnyView(
+                            Theme.canvasMuted
+                                .overlay {
+                                    ProgressView()
+                                        .tint(Theme.inkMuted)
+                                }
+                        ),
+                        onZoomingChanged: { zooming in
+                            isPhotoPinching = zooming
+                        },
+                        onTap: {
+                            showPhotoLightbox = true
+                        },
+                        onImageSize: { size in
+                            guard size.width > 1, size.height > 1 else { return }
+                            guard photoPixelSize != size else { return }
+                            var tx = Transaction()
+                            tx.disablesAnimations = true
+                            withTransaction(tx) { photoPixelSize = size }
                         }
-                ),
-                onZoomingChanged: { zooming in
-                    isPhotoPinching = zooming
-                },
-                onTap: {
-                    showPhotoLightbox = true
-                },
-                onImageSize: { size in
-                    guard size.width > 1, size.height > 1 else { return }
-                    guard photoPixelSize != size else { return }
-                    // Avoid animating LazyVStack height jumps (scroll hitch).
-                    var tx = Transaction()
-                    tx.disablesAnimations = true
-                    withTransaction(tx) { photoPixelSize = size }
+                    )
                 }
-            )
-            .frame(maxWidth: .infinity)
-            .aspectRatio(aspect, contentMode: .fit)
-            .background(Theme.canvasMuted)
-            .clipShape(RoundedRectangle(cornerRadius: isPhotoPinching ? 0 : corner, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: corner, style: .continuous)
-                    .stroke(Theme.border.opacity(style == .feed ? 0 : 0.7), lineWidth: 0.5)
-            )
-            .onChange(of: post.id) { _, _ in
-                photoPixelSize = nil
-            }
-            .onChange(of: url.absoluteString) { _, _ in
-                photoPixelSize = nil
-            }
+                .clipShape(RoundedRectangle(cornerRadius: isPhotoPinching ? 0 : corner, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: corner, style: .continuous)
+                        .stroke(Theme.border.opacity(style == .feed ? 0 : 0.7), lineWidth: 0.5)
+                )
+                .onChange(of: post.id) { _, _ in
+                    photoPixelSize = nil
+                }
+                .onChange(of: url.absoluteString) { _, _ in
+                    photoPixelSize = nil
+                }
         } else if post.hasVideo, let url = post.mediaURLValue {
             let posterH: CGFloat = style == .thread ? 280 : 240
             if style == .thread {
@@ -724,6 +724,13 @@ struct AnonymousPostCard: View {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(Theme.border.opacity(0.7), lineWidth: 0.5)
                 )
+                .onAppear {
+                    videoMuted = false
+                    MediaPlaybackCoordinator.shared.ensurePlaybackAudioSession()
+                }
+                .onDisappear {
+                    MediaPlaybackCoordinator.shared.clearForegroundWatchProtection()
+                }
             } else {
                 let poster = post.thumbURLValue
                 let videoPoster = ZStack {
@@ -811,6 +818,11 @@ private struct MasqueradeVideoPlayerCover: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.top, 4)
             .padding(.bottom, 4)
+            .onAppear {
+                // User tapped play — always start with sound (never inherit a stale mute).
+                muted = false
+                MediaPlaybackCoordinator.shared.ensurePlaybackAudioSession()
+            }
 
             Button {
                 dismiss()
@@ -827,5 +839,8 @@ private struct MasqueradeVideoPlayerCover: View {
             .accessibilityLabel("Close")
         }
         .statusBarHidden(true)
+        .onDisappear {
+            MediaPlaybackCoordinator.shared.clearForegroundWatchProtection()
+        }
     }
 }
