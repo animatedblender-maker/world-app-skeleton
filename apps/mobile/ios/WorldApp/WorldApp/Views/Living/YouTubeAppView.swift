@@ -75,8 +75,9 @@ struct YouTubeAppView: View {
     /// Extra “More to watch” chunk rows under the vibe shelves.
     private static let hubsMoreRailRowsFirstPaint = 1
     private static let hubsMoreRailRows = 5
-    private static let hubsRailCardWidth: CGFloat = 148
-    private static let hubsPeopleRailCardWidth: CGFloat = 168
+    /// Premium shelf posters — large enough to feel cinematic, ~1.7 visible per peek.
+    private static let hubsRailCardWidth: CGFloat = 196
+    private static let hubsPeopleRailCardWidth: CGFloat = 212
     /// True after first useful paint — rebuildCachedHubsRails uses denser counts.
     @State private var hubsRailsDense = false
     /// Skip network/warm on quick Hubs re-entry when the shell is already useful.
@@ -941,11 +942,11 @@ struct YouTubeAppView: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 22) {
+                        LazyVStack(alignment: .leading, spacing: 30) {
                             // Netflix-style: hero + horizontal rails. Categories are rows, not chips.
                             if let hero = hubsHeroPost {
                                 hubsHeroBillboard(hero)
-                                    .padding(.bottom, 4)
+                                    .padding(.bottom, 6)
                             }
 
                             if !continueWatching.isEmpty {
@@ -1270,7 +1271,7 @@ struct YouTubeAppView: View {
             ZStack(alignment: .bottomLeading) {
                 YouTubeVideoThumbnail(
                     post: post,
-                    maxPixelSize: 720,
+                    maxPixelSize: 960,
                     showsPlayIcon: false,
                     frameStyle: .card,
                     embedsFrame: false,
@@ -1278,7 +1279,7 @@ struct YouTubeAppView: View {
                     showsHubBadge: false
                 )
                 .frame(maxWidth: .infinity)
-                .frame(height: 220)
+                .frame(height: 292)
                 .clipped()
                 .task(id: post.id) {
                     let usable = MediaURLResolver.hubsListPosterURL(for: post)
@@ -1289,39 +1290,47 @@ struct YouTubeAppView: View {
                 }
 
                 LinearGradient(
-                    colors: [.clear, Theme.ink.opacity(0.15), Theme.ink.opacity(0.88)],
+                    colors: [
+                        .clear,
+                        Theme.ink.opacity(0.08),
+                        Theme.ink.opacity(0.55),
+                        Theme.ink.opacity(0.92),
+                    ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
 
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 12) {
                     Text("People's cinema")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.paper.opacity(0.8))
+                        .font(.caption.weight(.bold))
+                        .tracking(1.2)
+                        .foregroundStyle(Theme.paper.opacity(0.78))
                         .textCase(.uppercase)
                     Text(post.displayHeadline ?? post.displayTitle ?? "Watch now")
-                        .font(.title3.weight(.bold))
+                        .font(.title2.weight(.bold))
                         .foregroundStyle(Theme.paper)
                         .lineLimit(2)
-                    HStack(spacing: 10) {
+                        .shadow(color: .black.opacity(0.35), radius: 8, y: 2)
+                    HStack(spacing: 12) {
                         Label("Play", systemImage: "play.fill")
                             .font(.subheadline.weight(.bold))
                             .foregroundStyle(Theme.ink)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 11)
                             .background(Theme.paper, in: Capsule())
                         if let name = ContentSanitizer.clean(post.author?.displayName)
                             ?? ContentSanitizer.clean(post.author?.username) {
                             Text(name)
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(Theme.paper.opacity(0.85))
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(Theme.paper.opacity(0.9))
                                 .lineLimit(1)
                         }
                     }
                 }
-                .padding(18)
+                .padding(22)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .shadow(color: Theme.ink.opacity(0.18), radius: 18, x: 0, y: 8)
             .padding(.horizontal, Theme.pagePadding)
         }
         .buttonStyle(.plain)
@@ -1336,10 +1345,10 @@ struct YouTubeAppView: View {
     ) -> some View {
         // Algorithm target: ~15 ranked long-form cards; rail loops so swipe never dead-ends.
         let railPosts = Array(posts.prefix(Self.hubsRailCardCount))
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 14) {
             if !title.isEmpty {
                 Text(title)
-                    .font(.title3.weight(.bold))
+                    .font(.title2.weight(.bold))
                     .foregroundStyle(Theme.ink)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1348,7 +1357,7 @@ struct YouTubeAppView: View {
 
             HubsLoopingHorizontalRail(
                 posts: railPosts,
-                spacing: 12,
+                spacing: 14,
                 onNearEnd: {
                     onNearEnd?()
                     ensureMoreForYou(around: max(0, stableDiscoverVideos.count - 1))
@@ -1358,7 +1367,7 @@ struct YouTubeAppView: View {
                     post: post,
                     width: cardWidth,
                     showsMetadata: true,
-                    titleFont: .caption.weight(.semibold),
+                    titleFont: .subheadline.weight(.semibold),
                     // Poster/Frame0 only — mid-clip extract during rail scroll froze Hubs.
                     extractFrameIfNeeded: false,
                     onTap: { openVideo(post) }
