@@ -7,12 +7,12 @@ struct AnonymousFeedView: View {
     var body: some View {
         content
             .toolbar(.hidden, for: .navigationBar)
-            // Paint cache instantly, then soft-refresh so ranked tops rotate (ledger).
+            // Paint cache instantly, then reshuffle For you so each open differs.
             .task {
                 if store.feed.isEmpty {
-                    await store.loadFeed()
+                    await store.loadFeed(force: true)
                 } else {
-                    await store.softRefreshFeedIfStale()
+                    await store.reshuffleFeedOnOpen()
                 }
                 // Prefetch comments for the first screen only — keep feed light.
                 AnonymousCommentsWarmCache.shared.warmMany(store.feed.prefix(6).map(\.id))

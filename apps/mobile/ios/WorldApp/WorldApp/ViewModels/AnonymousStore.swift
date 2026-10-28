@@ -22,12 +22,11 @@ final class AnonymousStore {
     static let shared = AnonymousStore()
 
     private let cacheKey = "matterya.anonymous.session.v1"
-    /// v5 — default sort=for_you (stronger MIND MMR than hot); drop hot-default caches.
-    private let feedCacheKey = "matterya.anonymous.feed.v5"
-    private let feedCacheSavedAtKey = "matterya.anonymous.feed.v5.savedAt"
-    /// Disk feed older than this is treated as stale — soft-refresh replaces sticky tops.
-    /// Keep painted feed longer — Masquerade should feel light, not re-fetch on every open.
-    private let feedCacheMaxAge: TimeInterval = 20 * 60
+    /// v6 — For you reshuffles on each Masquerade open (v5 stuck a 20‑min disk cache).
+    private let feedCacheKey = "matterya.anonymous.feed.v6"
+    private let feedCacheSavedAtKey = "matterya.anonymous.feed.v6.savedAt"
+    /// Instant paint from disk, then reshuffle when older than this.
+    private let feedCacheMaxAge: TimeInterval = 60
     private let wildeSeenKey = "matterya.anonymous.wildeSeen.v1"
     private let welcomeLetterSeenKey = "matterya.anonymous.welcomeLetterSeen.v1"
     private let spacesOnboardingSeenKey = "matterya.anonymous.spacesOnboardingSeen.v1"
@@ -96,10 +95,14 @@ final class AnonymousStore {
     /// When false, Root shows the offline/empty screen without a red toast.
     var shouldToastLastError = true
     var blockedProfileIds: Set<String> = []
-    /// Soft re-entry — avoid full session+feed await on every Masquerade tab hop.
+    /// Soft re-entry — avoid full session await on every Masquerade tab hop.
     private var lastBootstrapAt: Date = .distantPast
-    /// Skip network on quick Masquerade re-entry — 90s still felt heavy with Feed+Hubs mounted.
-    private let softBootstrapInterval: TimeInterval = 180
+    /// Session soft-skip window (feed reshuffle is separate — see `feedReshuffleInterval`).
+    private let softBootstrapInterval: TimeInterval = 90
+    /// Last time For you was replaced with a newly ranked first page.
+    private var lastFeedReplaceAt: Date = .distantPast
+    /// Minimum gap between automatic open-reshuffles (pull-to-refresh always reshuffles).
+    private let feedReshuffleInterval: TimeInterval = 25
 
     /// Stable Masquerade handle for Me — never swap for a regenerated suggestion.
     var displayUsername: String {
@@ -265,13 +268,17 @@ final class AnonymousStore {
         if phase == .loading {
             applySession(session, animated: false)
         }
-        // Already ready with feed painted — keep shell instant; no session/network storm.
+        // Already ready with feed painted — skip session storm, still rotate For you.
         if phase == .ready, !feed.isEmpty,
            Date().timeIntervalSince(lastBootstrapAt) < softBootstrapInterval {
+            await reshuffleFeedOnOpen()
             return
         }
         await refreshSession()
         lastBootstrapAt = Date()
+        if phase == .ready {
+            await reshuffleFeedOnOpen()
+        }
     }
 
     func refreshSession() async {
@@ -282,7 +289,7 @@ final class AnonymousStore {
         // Cached ready session: start feed immediately so Masquerade isn't blocked on /session.
         let feedTask: Task<Void, Never>? = {
             guard phase == .ready else { return nil }
-            return Task { await loadFeed(force: feed.isEmpty || isFeedCacheStale()) }
+            return Task { await self.reshuffleFeedOnOpen() }
         }()
 
         do {
@@ -687,13 +694,28 @@ final class AnonymousStore {
         sessionSeenFeedIds.insert(trimmed)
     }
 
-    /// Background reshuffle only when the painted cache is stale **and** the list
-    /// is empty. A non-empty For you must never jump mid-scroll — pull-to-refresh
-    /// is the only explicit reshuffle while browsing.
+    /// Background reshuffle only when the list is empty (cache miss).
     func softRefreshFeedIfStale() async {
         guard !feedLoading else { return }
         guard feed.isEmpty else { return }
         guard isFeedCacheStale() else { return }
+        await loadFeed(force: true)
+    }
+
+    /// Open / re-enter Masquerade → fetch a new For you page and replace the list
+    /// (unless the user is mid-fling). Instant disk paint stays until network returns.
+    func reshuffleFeedOnOpen() async {
+        guard !feedLoading else { return }
+        if !feed.isEmpty, ScrollBudget.isFlinging {
+            return
+        }
+        let due =
+            feed.isEmpty
+            || isFeedCacheStale()
+            || Date().timeIntervalSince(lastFeedReplaceAt) >= feedReshuffleInterval
+        guard due else { return }
+        allowFeedReplace = true
+        defer { allowFeedReplace = false }
         await loadFeed(force: true)
     }
 
@@ -744,11 +766,9 @@ final class AnonymousStore {
                 sessionSeenFeedIds.insert(item.id)
             }
             rememberFeedHead(merged)
-            // Mid-scroll: soft-append unseen only — never replace under the finger.
-            // Explicit pull-to-refresh sets `allowFeedReplace`.
-            let midScroll = !feed.isEmpty
-                && !allowFeedReplace
-                && (ScrollBudget.isFlinging || sessionSeenFeedIds.count > 2)
+            // Mid-fling only: soft-append unseen — never replace under the finger.
+            // Open/re-entry and pull-to-refresh set `allowFeedReplace` so tops rotate.
+            let midScroll = !feed.isEmpty && !allowFeedReplace && ScrollBudget.isFlinging
             if midScroll {
                 var seen = Set(feed.map(\.id))
                 let extras = merged.filter { seen.insert($0.id).inserted }
@@ -766,6 +786,7 @@ final class AnonymousStore {
                     feedHasMore = page.nextCursor != nil
                         && merged.count < AnonymousService.feedSoftCap
                 }
+                lastFeedReplaceAt = Date()
             }
             cacheFeed(feed, cursor: feedCursor)
             // Clear soft timeout copy once paint succeeds.

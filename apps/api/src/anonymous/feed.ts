@@ -216,8 +216,8 @@ export async function getFeed(opts: {
         // Tiny log boost from raw score — never let 98k-upvote Reddit posts own the page.
         if (isForYou) {
           score += 0.04 * Math.log1p(ups);
-          // Per-request jitter so refresh/load-more rotate when scores cluster.
-          score *= 0.82 + 0.36 * forYouJitter(requestId, String(r.id));
+          // Wide per-request jitter so each open/refresh rotates when scores cluster.
+          score *= 0.45 + 1.1 * forYouJitter(requestId, String(r.id));
         }
         return {
           row: r,
