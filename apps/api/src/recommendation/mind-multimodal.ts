@@ -281,8 +281,39 @@ function captionText(title: string | null, body: string | null): string {
   return t || 'matterya spark';
 }
 
-/** Process-local permanent skips (bad resolution / unreadable thumbs) so backfill advances. */
+/** Permanent skips (bad resolution / unreadable thumbs). Process + optional disk via MIND_MM_FRAME_DIR. */
 const mmPermanentSkip = new Set<string>();
+let mmSkipLoaded = false;
+
+function loadMmSkipDisk(): void {
+  if (mmSkipLoaded) return;
+  mmSkipLoaded = true;
+  const dir = process.env.MIND_MM_FRAME_DIR?.trim();
+  if (!dir) return;
+  try {
+    const p = pathResolve(dir, 'skip.json');
+    if (!existsSync(p)) return;
+    const arr = JSON.parse(readFileSync(p, 'utf8'));
+    if (Array.isArray(arr)) for (const id of arr) if (typeof id === 'string') mmPermanentSkip.add(id);
+  } catch {
+    /* ignore */
+  }
+}
+
+function persistMmSkip(postId: string): void {
+  mmPermanentSkip.add(postId);
+  const dir = process.env.MIND_MM_FRAME_DIR?.trim();
+  if (!dir) return;
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      pathResolve(dir, 'skip.json'),
+      JSON.stringify([...mmPermanentSkip].sort(), null, 2)
+    );
+  } catch {
+    /* ignore */
+  }
+}
 
 function isPermanentMmError(msg: string): boolean {
   const m = msg.toLowerCase();
@@ -297,6 +328,7 @@ function isPermanentMmError(msg: string): boolean {
 
 export async function upsertMultimodalForPost(postId: string): Promise<boolean> {
   if (!mindMultimodalEnabled() || !postId) return false;
+  loadMmSkipDisk();
   if (mmPermanentSkip.has(postId)) return false;
   const ok = await ensureMultimodalSchema();
   if (!ok) return false;
@@ -324,19 +356,19 @@ export async function upsertMultimodalForPost(postId: string): Promise<boolean> 
     );
     const row = rows[0];
     if (!row) {
-      mmPermanentSkip.add(postId);
+      persistMmSkip(postId);
       return false;
     }
 
     const thumbUrl = await resolveSparkThumbUrl(row);
     if (!thumbUrl) {
-      mmPermanentSkip.add(postId);
+      persistMmSkip(postId);
       return false;
     }
 
     const thumb = await thumbToBytes(thumbUrl);
     if (!thumb) {
-      mmPermanentSkip.add(postId);
+      persistMmSkip(postId);
       return false;
     }
 
@@ -379,7 +411,7 @@ export async function upsertMultimodalForPost(postId: string): Promise<boolean> 
   } catch (err: any) {
     const msg = String(err?.message ?? err);
     console.warn('[mind-multimodal] upsert failed', postId, msg);
-    if (isPermanentMmError(msg)) mmPermanentSkip.add(postId);
+    if (isPermanentMmError(msg)) persistMmSkip(postId);
     return false;
   }
 }
@@ -439,6 +471,7 @@ export async function backfillMultimodal(opts?: {
   const offset = Math.max(opts?.offset ?? 0, 0);
   const kind = opts?.kind ?? 'both';
 
+  loadMmSkipDisk();
   const skipList = [...mmPermanentSkip].filter((id) =>
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)
   );
