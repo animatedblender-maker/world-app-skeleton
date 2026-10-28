@@ -170,8 +170,23 @@ function captionText(title: string | null, body: string | null): string {
   return t || 'matterya spark';
 }
 
+/** Process-local permanent skips (bad resolution / unreadable thumbs) so backfill advances. */
+const mmPermanentSkip = new Set<string>();
+
+function isPermanentMmError(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return (
+    m.includes('resolution is not within') ||
+    m.includes('image resolution') ||
+    m.includes('not within the permitted range') ||
+    m.includes('larger than 20 mb') ||
+    m.includes('more than 16 million pixels')
+  );
+}
+
 export async function upsertMultimodalForPost(postId: string): Promise<boolean> {
   if (!mindMultimodalEnabled() || !postId) return false;
+  if (mmPermanentSkip.has(postId)) return false;
   const ok = await ensureMultimodalSchema();
   if (!ok) return false;
 
@@ -195,13 +210,22 @@ export async function upsertMultimodalForPost(postId: string): Promise<boolean> 
       [postId]
     );
     const row = rows[0];
-    if (!row) return false;
+    if (!row) {
+      mmPermanentSkip.add(postId);
+      return false;
+    }
 
     const thumbUrl = await resolveSparkThumbUrl(row);
-    if (!thumbUrl) return false;
+    if (!thumbUrl) {
+      mmPermanentSkip.add(postId);
+      return false;
+    }
 
     const dataUrl = await thumbToBase64DataUrl(thumbUrl);
-    if (!dataUrl) return false;
+    if (!dataUrl) {
+      mmPermanentSkip.add(postId);
+      return false;
+    }
 
     const text = captionText(row.title, row.body);
     const [emb] = await embedMultimodal(
@@ -237,7 +261,9 @@ export async function upsertMultimodalForPost(postId: string): Promise<boolean> 
     );
     return true;
   } catch (err: any) {
-    console.warn('[mind-multimodal] upsert failed', postId, err?.message ?? err);
+    const msg = String(err?.message ?? err);
+    console.warn('[mind-multimodal] upsert failed', postId, msg);
+    if (isPermanentMmError(msg)) mmPermanentSkip.add(postId);
     return false;
   }
 }
@@ -286,6 +312,10 @@ export async function backfillMultimodal(opts?: {
   const limit = Math.min(Math.max(opts?.limit ?? 200, 1), 2000);
   const offset = Math.max(opts?.offset ?? 0, 0);
 
+  const skipList = [...mmPermanentSkip].filter((id) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)
+  );
+
   const { rows } = await pool.query<{ id: string }>(
     `
     select p.id::text
@@ -300,11 +330,16 @@ export async function backfillMultimodal(opts?: {
         e.post_id is null
         or e.model_version is distinct from $3
       )
+      and (
+        $4::uuid[] is null
+        or cardinality($4::uuid[]) = 0
+        or p.id <> all($4::uuid[])
+      )
     order by p.created_at desc nulls last
     offset $1
     limit $2
     `,
-    [offset, limit, MIND_MM_MODEL_VERSION]
+    [offset, limit, MIND_MM_MODEL_VERSION, skipList.length ? skipList : null]
   );
 
   let upserted = 0;
