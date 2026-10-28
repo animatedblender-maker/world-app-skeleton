@@ -6,6 +6,8 @@
  * Kill-switch: MIND_MULTIMODAL_ENABLED (defaults ON when VOYAGE_API_KEY is set).
  */
 import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve as pathResolve } from 'node:path';
 import { pool } from '../db.js';
 import { freshenThumbUrlString } from '../media/r2-playback.js';
 
@@ -117,8 +119,10 @@ async function embedMultimodal(
   return sorted.map((d) => d.embedding);
 }
 
+type ThumbBytes = { dataUrl: string; buf: Buffer; mime: string; ext: string };
+
 /** Download thumb → data URL so Voyage never hits expired/robots-blocked R2 URLs. */
-async function thumbToBase64DataUrl(url: string): Promise<string | null> {
+async function thumbToBytes(url: string): Promise<ThumbBytes | null> {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 12_000);
@@ -132,7 +136,7 @@ async function thumbToBase64DataUrl(url: string): Promise<string | null> {
     // Cap ~4MB — Voyage rejects oversized images.
     if (buf.length < 64 || buf.length > 4_000_000) return null;
     const ctype = (res.headers.get('content-type') || 'image/webp').split(';')[0]!.trim();
-    const safe =
+    const mime =
       ctype === 'image/png' ||
       ctype === 'image/jpeg' ||
       ctype === 'image/jpg' ||
@@ -142,9 +146,55 @@ async function thumbToBase64DataUrl(url: string): Promise<string | null> {
           ? 'image/jpeg'
           : ctype
         : 'image/webp';
-    return `data:${safe};base64,${buf.toString('base64')}`;
+    const ext =
+      mime === 'image/png'
+        ? 'png'
+        : mime === 'image/gif'
+          ? 'gif'
+          : mime === 'image/webp'
+            ? 'webp'
+            : 'jpg';
+    return { dataUrl: `data:${mime};base64,${buf.toString('base64')}`, buf, mime, ext };
   } catch {
     return null;
+  }
+}
+
+/** Optional live gallery: set MIND_MM_FRAME_DIR to cache thumbs as they embed. */
+function cacheFrameForProgress(
+  postId: string,
+  title: string | null,
+  thumb: ThumbBytes
+): void {
+  const dir = process.env.MIND_MM_FRAME_DIR?.trim();
+  if (!dir) return;
+  try {
+    const frames = pathResolve(dir, 'frames');
+    mkdirSync(frames, { recursive: true });
+    const file = `${postId}.${thumb.ext}`;
+    writeFileSync(pathResolve(frames, file), thumb.buf);
+    const recentPath = pathResolve(dir, 'recent.json');
+    let recent: { id: string; title: string; file: string; at: string }[] = [];
+    if (existsSync(recentPath)) {
+      try {
+        recent = JSON.parse(readFileSync(recentPath, 'utf8'));
+        if (!Array.isArray(recent)) recent = [];
+      } catch {
+        recent = [];
+      }
+    }
+    recent = [
+      {
+        id: postId,
+        title: String(title ?? '').slice(0, 80),
+        file,
+        at: new Date().toISOString(),
+      },
+      ...recent.filter((r) => r.id !== postId),
+    ].slice(0, 72);
+    writeFileSync(recentPath, JSON.stringify(recent, null, 2));
+  } catch {
+    /* gallery is best-effort */
   }
 }
 
@@ -221,8 +271,8 @@ export async function upsertMultimodalForPost(postId: string): Promise<boolean> 
       return false;
     }
 
-    const dataUrl = await thumbToBase64DataUrl(thumbUrl);
-    if (!dataUrl) {
+    const thumb = await thumbToBytes(thumbUrl);
+    if (!thumb) {
       mmPermanentSkip.add(postId);
       return false;
     }
@@ -233,7 +283,7 @@ export async function upsertMultimodalForPost(postId: string): Promise<boolean> 
         {
           content: [
             { type: 'text', text },
-            { type: 'image_base64', image_base64: dataUrl },
+            { type: 'image_base64', image_base64: thumb.dataUrl },
           ],
         },
       ],
@@ -259,6 +309,7 @@ export async function upsertMultimodalForPost(postId: string): Promise<boolean> 
       `,
       [postId, MIND_MM_MODEL_VERSION, MIND_MM_DIMS, vectorLiteral(emb), MIND_MM_SOURCE, fp]
     );
+    cacheFrameForProgress(postId, row.title, thumb);
     return true;
   } catch (err: any) {
     const msg = String(err?.message ?? err);
