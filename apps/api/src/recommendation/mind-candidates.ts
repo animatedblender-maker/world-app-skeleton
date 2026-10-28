@@ -62,9 +62,9 @@ export const MIND_CANDIDATE_LANES: CandidateLaneDef[] = [
   {
     id: 'sparks_mm_thumb',
     surface: 'home_for_you',
-    label: 'Sparks · multimodal thumb',
+    label: 'Sparks + images · multimodal',
     description:
-      'Phase 4.v2: Voyage voyage-multimodal-3.5 thumb+caption ANN for Sparks (all short-form).',
+      'Phase 4.v2: Voyage voyage-multimodal-3.5 thumb/still+caption ANN for Sparks videos and image posts.',
   },
   {
     id: 'home_cold_start',

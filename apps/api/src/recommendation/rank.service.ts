@@ -260,11 +260,19 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
     [...new Set([...boostKeys, ...hubKeys])].join(' ') ||
     'matterya hubs travel music comedy food';
 
-  if (surface === 'sparks' && mindMultimodalEnabled()) {
+  // Sparks surface: multimodal ANN. Home: text ANN + multimodal (Sparks + images).
+  const wantMm =
+    mindMultimodalEnabled() &&
+    (surface === 'sparks' || surface === 'home_for_you' || surface === 'explore');
+  if (wantMm) {
     try {
       const mmIds = await multimodalAnnCandidates({
-        queryText: annQueryText || 'funny dance food travel',
-        limit: 32,
+        queryText:
+          annQueryText ||
+          (surface === 'sparks'
+            ? 'funny dance food travel'
+            : 'matterya sparks images travel food comedy'),
+        limit: surface === 'sparks' ? 32 : 20,
         excludeIds: [],
       });
       mmAnnIdSet = new Set(mmIds);
@@ -276,7 +284,8 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
     } catch {
       /* ignore */
     }
-  } else if (publicSurface && mindEmbeddingsEnabled()) {
+  }
+  if (publicSurface && surface !== 'sparks' && mindEmbeddingsEnabled()) {
     try {
       const annIds = await annCandidates({
         queryText: annQueryText,

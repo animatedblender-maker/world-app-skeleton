@@ -392,7 +392,7 @@ function mindHtml(): string {
       </div>
       <div class="card">
         <h2>Media understanding (§7)</h2>
-        <p class="muted">Phase 2a: Groq transcripts → <code>mind_content_features</code>. Phase 2b: Voyage title ANN. Phase 4.v2: Sparks multimodal thumbs (<code>voyage-multimodal-3.5</code>).</p>
+        <p class="muted">Phase 2a: Groq transcripts → <code>mind_content_features</code>. Phase 2b: Voyage title ANN. Phase 4.v2: Sparks + image multimodal (<code>voyage-multimodal-3.5</code>).</p>
         <div class="grid" id="mediaStats"></div>
         <div id="mediaCatalog" style="margin-top:12px"></div>
         <p class="muted" id="mediaNote"></p>
@@ -443,7 +443,7 @@ function mindHtml(): string {
           <div class="stat"><div class="n" style="font-size:1rem">Phase 3a</div><div class="l">Cold-start priors · offline eval</div><span class="pill ok">phase3.v1</span></div>
           <div class="stat"><div class="n" style="font-size:1rem">Phase 3b</div><div class="l">Controls · session · opportunity · logistic flag</div><span class="pill ok">phase4.v1</span></div>
           <div class="stat"><div class="n" style="font-size:1rem">Phase 4</div><div class="l">Search · Guardian · people · world · insights</div><span class="pill ok">phase4.v1</span></div>
-          <div class="stat"><div class="n" style="font-size:1rem">Phase 4.v2</div><div class="l">Sparks multimodal thumb ANN · all Sparks</div><span class="pill ok">phase4.v2</span></div>
+          <div class="stat"><div class="n" style="font-size:1rem">Phase 4.v2</div><div class="l">Sparks + image multimodal ANN</div><span class="pill ok">phase4.v2</span></div>
           <div class="stat"><div class="n" style="font-size:1rem">Phase 5</div><div class="l">Scale after measured need (ADR 0004)</div><span class="pill">gated</span></div>
         </div>
       </div>
@@ -457,10 +457,10 @@ const GAPS = [
   ['3','Architecture','shipped','This Architecture tab'],
   ['5','Events','shipped','Allowlist ingest + meta scrub + Kafka/PG'],
   ['6','Masquerade isolation','shipped','Live proofs + surface namespace guards'],
-  ['7','Media understanding','shipped','2a features + 2b title ANN + 4.v2 Sparks multimodal thumbs'],
+  ['7','Media understanding','shipped','2a features + 2b title ANN + 4.v2 Sparks+image multimodal'],
   ['8','Interest features','shipped','Personality + creator affinity + featureHits'],
   ['9','Candidates','shipped','Multi-lane + cold-start + opportunity + sparks_mm_thumb'],
-  ['10','Rank + diversity','shipped','MMR + session + controls + logistic + mm_ann soft boost'],
+  ['10','Rank + diversity','shipped','MMR + session + controls + logistic + mm_ann (Sparks+Home)'],
   ['11','Exposure ledger','shipped','feed_video_delivery on all For You surfaces'],
   ['12','Search / world','shipped','GET /v1/search hybrid+rerank · /v1/world/country'],
   ['13','Guardian','shipped','/mind Guardian panel + report/mod queues'],
@@ -788,8 +788,10 @@ async function refresh(){
     $('mediaStats').innerHTML += [
       ['Embed rows', emb.rows],
       ['Embed dims', emb.dims],
-      ['Sparks mm rows', mm.rows],
-      ['Sparks eligible', mm.sparksEligible],
+      ['MM rows', mm.rows],
+      ['MM eligible', mm.sparksEligible],
+      ['MM video', mm.videoRows],
+      ['MM images', mm.imageRows],
     ].map(([l,n]) => '<div class="stat"><div class="n">'+fmt(n)+'</div><div class="l">'+l+'</div></div>').join('');
     const rr = s.rerank || {};
     $('mediaNote').textContent +=
@@ -797,9 +799,11 @@ async function refresh(){
       + ' · embed rows ' + fmt(emb.rows)
       + ' · ' + (emb.enabled ? 'ANN ON' : 'ANN OFF')
       + ' · rerank ' + (rr.enabled ? ('ON · ' + (rr.model||'ok')) : 'OFF')
-      + ' · Sparks mm ' + (flags.mindMultimodal ? 'ON' : 'OFF')
+      + ' · Sparks+image mm ' + (flags.mindMultimodal ? 'ON' : 'OFF')
       + ' · ' + (mm.model || 'voyage-multimodal-3.5')
-      + ' · mm rows ' + fmt(mm.rows) + '/' + fmt(mm.sparksEligible)
+      + ' · mm ' + fmt(mm.rows) + '/' + fmt(mm.sparksEligible)
+      + ' (video ' + fmt(mm.videoRows) + '/' + fmt(mm.videoEligible)
+      + ' · image ' + fmt(mm.imageRows) + '/' + fmt(mm.imageEligible) + ')'
       + ' · cron POST /cron/mind-multimodal';
 
     if (!$('docNav').dataset.ready) {

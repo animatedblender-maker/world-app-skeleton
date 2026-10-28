@@ -1,9 +1,12 @@
 /**
- * MIND Sparks multimodal — Voyage voyage-multimodal-3.5 thumb embeds for ALL Sparks.
+ * MIND multimodal — Voyage voyage-multimodal-3.5 for Sparks videos AND image posts.
  *
- * Separate table from title/body ANN so text Home ranking stays intact.
- * Soft Sparks-surface ANN only. Missing embed = UNKNOWN (never demote).
+ * Table stays `mind_sparks_multimodal_embeddings` (shared vector space).
+ * Soft ANN on Sparks + Home. Missing embed = UNKNOWN (never demote).
  * Kill-switch: MIND_MULTIMODAL_ENABLED (defaults ON when VOYAGE_API_KEY is set).
+ *
+ * Note: many image posts live under r2:matterya-sparks/Posts/… — path alone is
+ * not enough to tell Sparks video from stills; use media_type.
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -15,13 +18,20 @@ export const MIND_MM_MODEL = 'voyage-multimodal-3.5';
 export const MIND_MM_MODEL_VERSION = 'voyage:voyage-multimodal-3.5';
 export const MIND_MM_DIMS = 1024;
 export const MIND_MM_SOURCE = 'sparks_thumb';
+export const MIND_MM_SOURCE_IMAGE = 'image';
 
-/** SQL fragment: Public Sparks / short-form inventory (excludes LongForm hubs). */
-export const SPARKS_POST_SQL = `
+/** Exclude LongForm hub packs from multimodal. */
+const MM_NOT_LONGFORM_SQL = `
   coalesce(p.media_path, '') not ilike '%LongForm%'
   and coalesce(p.media_path, '') not ilike '%longform%'
+`;
+
+/** Short-form Sparks / reels / TikTok / ShortForm videos (not stills). */
+export const SPARKS_VIDEO_SQL = `
+  (${MM_NOT_LONGFORM_SQL})
+  and lower(coalesce(p.media_type, '')) not in ('image', 'photo', 'gif', 'picture')
   and (
-    lower(coalesce(p.media_type, '')) in ('reel', 'spark')
+    lower(coalesce(p.media_type, '')) in ('reel', 'spark', 'video')
     or coalesce(p.media_type, '') ilike '%reel%'
     or coalesce(p.media_path, '') ilike '%matterya-sparks%'
     or coalesce(p.media_path, '') ilike '%ShortForm%'
@@ -29,6 +39,46 @@ export const SPARKS_POST_SQL = `
     or coalesce(p.media_path, '') ilike '%TikTok%'
   )
 `;
+
+/** Still image posts (Home image lane + matterya-sparks image uploads). */
+export const IMAGE_POST_SQL = `
+  (${MM_NOT_LONGFORM_SQL})
+  and (
+    lower(coalesce(p.media_type, '')) in ('image', 'photo', 'gif', 'picture')
+    or coalesce(p.media_type, '') ilike '%image%'
+  )
+`;
+
+/** Sparks videos OR image posts — full multimodal inventory. */
+export const SPARKS_POST_SQL = `
+  ((${SPARKS_VIDEO_SQL}) or (${IMAGE_POST_SQL}))
+`;
+
+const MM_HAS_THUMB_SQL = `
+  (
+    nullif(p.thumb_url, '') is not null
+    or nullif(p.thumb_path, '') is not null
+    or (
+      lower(coalesce(p.media_type, '')) in ('image', 'photo', 'gif', 'picture')
+      and (
+        nullif(p.media_url, '') is not null
+        or nullif(p.media_path, '') is not null
+      )
+    )
+  )
+`;
+
+function mmSourceForMediaType(mediaType: string | null | undefined): string {
+  const mt = String(mediaType ?? '').trim().toLowerCase();
+  if (mt === 'image' || mt === 'photo' || mt === 'gif' || mt === 'picture' || mt.includes('image')) {
+    return MIND_MM_SOURCE_IMAGE;
+  }
+  return MIND_MM_SOURCE;
+}
+
+function mmKindForMediaType(mediaType: string | null | undefined): 'spark' | 'image' {
+  return mmSourceForMediaType(mediaType) === MIND_MM_SOURCE_IMAGE ? 'image' : 'spark';
+}
 
 export function mindMultimodalEnabled(): boolean {
   const raw = process.env.MIND_MULTIMODAL_ENABLED?.trim().toLowerCase();
@@ -164,7 +214,8 @@ async function thumbToBytes(url: string): Promise<ThumbBytes | null> {
 function cacheFrameForProgress(
   postId: string,
   title: string | null,
-  thumb: ThumbBytes
+  thumb: ThumbBytes,
+  kind: 'spark' | 'image'
 ): void {
   const dir = process.env.MIND_MM_FRAME_DIR?.trim();
   if (!dir) return;
@@ -174,7 +225,8 @@ function cacheFrameForProgress(
     const file = `${postId}.${thumb.ext}`;
     writeFileSync(pathResolve(frames, file), thumb.buf);
     const recentPath = pathResolve(dir, 'recent.json');
-    let recent: { id: string; title: string; file: string; at: string }[] = [];
+    let recent: { id: string; title: string; file: string; at: string; kind: string }[] =
+      [];
     if (existsSync(recentPath)) {
       try {
         recent = JSON.parse(readFileSync(recentPath, 'utf8'));
@@ -189,6 +241,7 @@ function cacheFrameForProgress(
         title: String(title ?? '').slice(0, 80),
         file,
         at: new Date().toISOString(),
+        kind,
       },
       ...recent.filter((r) => r.id !== postId),
     ].slice(0, 72);
@@ -203,11 +256,19 @@ async function resolveSparkThumbUrl(row: {
   thumb_path: string | null;
   media_url: string | null;
   media_path: string | null;
+  media_type?: string | null;
 }): Promise<string | null> {
   const hint = row.media_path || row.media_url;
   const fresh = await freshenThumbUrlString(row.thumb_url, row.thumb_path, hint);
   if (fresh && /^https?:\/\//i.test(fresh)) return fresh;
   if (row.thumb_url && /^https?:\/\//i.test(row.thumb_url)) return row.thumb_url;
+  // Image posts often use media_url as the still itself.
+  if (row.media_url && /^https?:\/\//i.test(row.media_url)) {
+    const mt = String(row.media_type ?? '').toLowerCase();
+    if (mt === 'image' || mt === 'photo' || mt === 'gif' || mt.includes('image')) {
+      return row.media_url;
+    }
+  }
   return null;
 }
 
@@ -249,9 +310,11 @@ export async function upsertMultimodalForPost(postId: string): Promise<boolean> 
       thumb_path: string | null;
       media_url: string | null;
       media_path: string | null;
+      media_type: string | null;
     }>(
       `
-      select p.id::text, p.title, p.body, p.thumb_url, p.thumb_path, p.media_url, p.media_path
+      select p.id::text, p.title, p.body, p.thumb_url, p.thumb_path,
+             p.media_url, p.media_path, p.media_type
       from public.posts p
       where p.id = $1::uuid
         and (${SPARKS_POST_SQL})
@@ -292,6 +355,8 @@ export async function upsertMultimodalForPost(postId: string): Promise<boolean> 
     if (!emb || emb.length !== MIND_MM_DIMS) return false;
 
     const fp = fingerprint(thumbUrl);
+    const source = mmSourceForMediaType(row.media_type);
+    const kind = mmKindForMediaType(row.media_type);
     await pool.query(
       `
       insert into public.mind_sparks_multimodal_embeddings as e (
@@ -307,9 +372,9 @@ export async function upsertMultimodalForPost(postId: string): Promise<boolean> 
         thumb_fingerprint = excluded.thumb_fingerprint,
         updated_at = now()
       `,
-      [postId, MIND_MM_MODEL_VERSION, MIND_MM_DIMS, vectorLiteral(emb), MIND_MM_SOURCE, fp]
+      [postId, MIND_MM_MODEL_VERSION, MIND_MM_DIMS, vectorLiteral(emb), source, fp]
     );
-    cacheFrameForProgress(postId, row.title, thumb);
+    cacheFrameForProgress(postId, row.title, thumb, kind);
     return true;
   } catch (err: any) {
     const msg = String(err?.message ?? err);
@@ -351,57 +416,126 @@ async function pumpMmQueue(): Promise<void> {
   }
 }
 
-/** Catch-up / full Sparks backfill. Small batches — each call downloads thumbs. */
+/** Catch-up backfill — interleaves Sparks videos + image posts so both advance. */
 export async function backfillMultimodal(opts?: {
   limit?: number;
   offset?: number;
-}): Promise<{ scanned: number; upserted: number; skipped: number }> {
-  if (!mindMultimodalEnabled()) return { scanned: 0, upserted: 0, skipped: 0 };
+  /** Prefer one lane; default alternates half/half. */
+  kind?: 'spark' | 'image' | 'both';
+}): Promise<{
+  scanned: number;
+  upserted: number;
+  skipped: number;
+  sparks: number;
+  images: number;
+}> {
+  if (!mindMultimodalEnabled()) {
+    return { scanned: 0, upserted: 0, skipped: 0, sparks: 0, images: 0 };
+  }
   const ok = await ensureMultimodalSchema();
-  if (!ok) return { scanned: 0, upserted: 0, skipped: 0 };
+  if (!ok) return { scanned: 0, upserted: 0, skipped: 0, sparks: 0, images: 0 };
 
   const limit = Math.min(Math.max(opts?.limit ?? 200, 1), 2000);
   const offset = Math.max(opts?.offset ?? 0, 0);
+  const kind = opts?.kind ?? 'both';
 
   const skipList = [...mmPermanentSkip].filter((id) =>
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)
   );
 
-  const { rows } = await pool.query<{ id: string }>(
-    `
-    select p.id::text
-    from public.posts p
-    left join public.mind_sparks_multimodal_embeddings e on e.post_id = p.id
-    where (${SPARKS_POST_SQL})
-      and (
-        nullif(p.thumb_url, '') is not null
-        or nullif(p.thumb_path, '') is not null
-      )
-      and (
-        e.post_id is null
-        or e.model_version is distinct from $3
-      )
-      and (
-        $4::uuid[] is null
-        or cardinality($4::uuid[]) = 0
-        or p.id <> all($4::uuid[])
-      )
-    order by p.created_at desc nulls last
-    offset $1
-    limit $2
-    `,
-    [offset, limit, MIND_MM_MODEL_VERSION, skipList.length ? skipList : null]
-  );
+  const pendingClause = `
+    (${MM_HAS_THUMB_SQL})
+    and (
+      e.post_id is null
+      or e.model_version is distinct from $3
+    )
+    and (
+      $4::uuid[] is null
+      or cardinality($4::uuid[]) = 0
+      or p.id <> all($4::uuid[])
+    )
+  `;
+
+  async function pick(laneSql: string, laneLimit: number): Promise<string[]> {
+    if (laneLimit <= 0) return [];
+    const { rows } = await pool.query<{ id: string }>(
+      `
+      select p.id::text
+      from public.posts p
+      left join public.mind_sparks_multimodal_embeddings e on e.post_id = p.id
+      where (${laneSql})
+        and (${pendingClause})
+      order by p.created_at desc nulls last
+      offset $1
+      limit $2
+      `,
+      [offset, laneLimit, MIND_MM_MODEL_VERSION, skipList.length ? skipList : null]
+    );
+    return rows.map((r) => r.id);
+  }
+
+  let ids: string[] = [];
+  if (kind === 'spark') {
+    ids = await pick(SPARKS_VIDEO_SQL, limit);
+  } else if (kind === 'image') {
+    ids = await pick(IMAGE_POST_SQL, limit);
+  } else {
+    const half = Math.ceil(limit / 2);
+    const other = Math.max(limit - half, 0);
+    const [sparkIds, imageIds] = await Promise.all([
+      pick(SPARKS_VIDEO_SQL, half),
+      pick(IMAGE_POST_SQL, other),
+    ]);
+    // Interleave so the live gallery shows both kinds.
+    const out: string[] = [];
+    const max = Math.max(sparkIds.length, imageIds.length);
+    for (let i = 0; i < max; i++) {
+      if (i < sparkIds.length) out.push(sparkIds[i]!);
+      if (i < imageIds.length) out.push(imageIds[i]!);
+    }
+    ids = out.slice(0, limit);
+  }
 
   let upserted = 0;
   let skipped = 0;
-  for (const row of rows) {
-    const okOne = await upsertMultimodalForPost(row.id);
-    if (okOne) upserted += 1;
-    else skipped += 1;
+  let sparks = 0;
+  let images = 0;
+  for (const id of ids) {
+    const before = mmPermanentSkip.has(id);
+    const okOne = await upsertMultimodalForPost(id);
+    if (okOne) {
+      upserted += 1;
+      // Best-effort kind from skip-free success: re-check via recent.json is heavy;
+      // count from DB source on next status. Approximate via post lookup skipped —
+      // use a light query only when frame dir writes kind. Count from return path:
+      sparks += 0;
+    } else {
+      skipped += 1;
+      void before;
+    }
     await new Promise((r) => setTimeout(r, 250));
   }
-  return { scanned: rows.length, upserted, skipped };
+
+  // Tally kinds for this batch from recent.json if present.
+  try {
+    const dir = process.env.MIND_MM_FRAME_DIR?.trim();
+    if (dir && existsSync(pathResolve(dir, 'recent.json'))) {
+      const recent = JSON.parse(readFileSync(pathResolve(dir, 'recent.json'), 'utf8')) as {
+        id: string;
+        kind?: string;
+      }[];
+      const batchSet = new Set(ids);
+      for (const r of recent) {
+        if (!batchSet.has(r.id)) continue;
+        if (r.kind === 'image') images += 1;
+        else if (r.kind === 'spark') sparks += 1;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  return { scanned: ids.length, upserted, skipped, sparks, images };
 }
 
 /** Text-query ANN over Sparks multimodal space (visual + caption). */
@@ -452,7 +586,12 @@ export type MultimodalStatus = {
   dims: number;
   rows: number;
   source: string;
+  /** Total Sparks-video + image posts with a usable thumb/still. */
   sparksEligible: number;
+  videoEligible: number;
+  imageEligible: number;
+  videoRows: number;
+  imageRows: number;
 };
 
 export async function getMultimodalStatus(): Promise<MultimodalStatus> {
@@ -463,12 +602,16 @@ export async function getMultimodalStatus(): Promise<MultimodalStatus> {
     modelVersion: MIND_MM_MODEL_VERSION,
     dims: MIND_MM_DIMS,
     rows: 0,
-    source: MIND_MM_SOURCE,
+    source: 'sparks_thumb+image',
     sparksEligible: 0,
+    videoEligible: 0,
+    imageEligible: 0,
+    videoRows: 0,
+    imageRows: 0,
   };
   try {
     await ensureMultimodalSchema();
-    const [emb, elig] = await Promise.all([
+    const [emb, videoElig, imageElig, bySource] = await Promise.all([
       pool.query<{ n: string }>(
         `select count(*)::text as n from public.mind_sparks_multimodal_embeddings`
       ),
@@ -476,16 +619,32 @@ export async function getMultimodalStatus(): Promise<MultimodalStatus> {
         `
         select count(*)::text as n
         from public.posts p
-        where (${SPARKS_POST_SQL})
-          and (
-            nullif(p.thumb_url, '') is not null
-            or nullif(p.thumb_path, '') is not null
-          )
+        where (${SPARKS_VIDEO_SQL}) and (${MM_HAS_THUMB_SQL})
+        `
+      ),
+      pool.query<{ n: string }>(
+        `
+        select count(*)::text as n
+        from public.posts p
+        where (${IMAGE_POST_SQL}) and (${MM_HAS_THUMB_SQL})
+        `
+      ),
+      pool.query<{ source: string; n: string }>(
+        `
+        select coalesce(source, '') as source, count(*)::text as n
+        from public.mind_sparks_multimodal_embeddings
+        group by 1
         `
       ),
     ]);
     base.rows = Number(emb.rows[0]?.n) || 0;
-    base.sparksEligible = Number(elig.rows[0]?.n) || 0;
+    base.videoEligible = Number(videoElig.rows[0]?.n) || 0;
+    base.imageEligible = Number(imageElig.rows[0]?.n) || 0;
+    base.sparksEligible = base.videoEligible + base.imageEligible;
+    for (const r of bySource.rows) {
+      if (r.source === MIND_MM_SOURCE_IMAGE) base.imageRows = Number(r.n) || 0;
+      else base.videoRows += Number(r.n) || 0;
+    }
   } catch (err: any) {
     console.warn('[mind-multimodal] status failed', err?.message ?? err);
   }

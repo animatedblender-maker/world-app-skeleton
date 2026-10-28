@@ -694,8 +694,12 @@ async function buildMindStatus(): Promise<MindStatus> {
       modelVersion: 'voyage:voyage-multimodal-3.5',
       dims: 1024,
       rows: 0,
-      source: 'sparks_thumb',
+      source: 'sparks_thumb+image',
       sparksEligible: 0,
+      videoEligible: 0,
+      imageEligible: 0,
+      videoRows: 0,
+      imageRows: 0,
     };
     console.warn('[mind-status] multimodal', err?.message ?? err);
   }
