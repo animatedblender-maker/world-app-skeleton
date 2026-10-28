@@ -10,6 +10,8 @@ struct MainTabView: View {
     @State private var hubsDismountTask: Task<Void, Never>?
     /// Masquerade stays mounted after first visit — remount + bootstrap on every hop froze the UI.
     @State private var anonymousShellMounted = false
+    /// Messages stays mounted after first visit — remount re-waited GraphQL every hop.
+    @State private var messagesShellMounted = false
 
     var body: some View {
         // Mini player lives OUTSIDE NavigationStack so chat / search / profile pushes
@@ -30,23 +32,17 @@ struct MainTabView: View {
                     if anonymousShellMounted || appState.selectedTab == .anonymous {
                         persistentTab(.anonymous) { AnonymousRootView() }
                     }
+                    if messagesShellMounted || appState.selectedTab == .messages {
+                        persistentTab(.messages) { MessagesView() }
+                    }
 
-                    // Messages / Profile remount (lighter than keeping them live off-screen).
-                    if appState.selectedTab == .messages || appState.selectedTab == .profile {
-                        Group {
-                            switch appState.selectedTab {
-                            case .messages:
-                                MessagesView()
-                            case .profile:
-                                ProfileView()
-                            default:
-                                EmptyView()
-                            }
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .safeAreaPadding(.bottom, tabContentBottomInset)
-                        .zIndex(1)
-                        .id(appState.selectedTab.rawValue)
+                    // Profile remounts (lighter than keeping it live off-screen).
+                    if appState.selectedTab == .profile {
+                        ProfileView()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .safeAreaPadding(.bottom, tabContentBottomInset)
+                            .zIndex(1)
+                            .id(AppTab.profile.rawValue)
                     }
 
                     // Tab bar is drawn in the OUTER ZStack (below) so the mini player
@@ -169,6 +165,9 @@ struct MainTabView: View {
                 hubsShellMounted = true
                 EngagementTracker.shared.hubsOpened()
             }
+            if appState.selectedTab == .messages {
+                messagesShellMounted = true
+            }
             // Pre-mount Hubs shell after Feed settles — first tap is opacity-only, not a remount.
             // YouTubeAppView .task/.onAppear no-op until selectedTab == .hubs (no thumb storm).
             if !hubsShellMounted {
@@ -201,6 +200,9 @@ struct MainTabView: View {
             }
             if tab == .anonymous {
                 anonymousShellMounted = true
+            }
+            if tab == .messages {
+                messagesShellMounted = true
             }
             // Clear election now; silence feed/Sparks on the next beat so the tab morph
             // stays light. Continuous Hubs mini is spared. (clearElectionOnly alone left

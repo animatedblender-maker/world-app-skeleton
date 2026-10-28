@@ -334,6 +334,12 @@ final class AppState {
             guard !Task.isCancelled else { return }
             await refreshAllInBackground()
         }
+        // Warm Messages inbox early — disk paint + soft GraphQL so the tab is instant.
+        Task(priority: .utility) {
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            guard !Task.isCancelled, isAuthenticated else { return }
+            MessagesService.shared.warmPrimaryInboxIfNeeded()
+        }
     }
 
     /// One open-generation bump per process. Prevents Feed/Hubs `.task(id:)` from

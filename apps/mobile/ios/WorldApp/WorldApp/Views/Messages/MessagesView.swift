@@ -110,7 +110,17 @@ struct MessagesView: View {
             isReady: appState.isSessionReady,
             isAuthenticated: appState.isAuthenticated
         )) {
-            guard appState.isAuthenticated, appState.isSessionReady else { return }
+            // Disk/memory first — never gate the spinner on session ready when we can paint.
+            MessagesService.shared.restoreDiskCacheIfNeeded()
+            if inboxFolder == .primary {
+                let cached = MessagesService.shared.cachedConversationsSnapshot()
+                    .filter { !ConversationInboxStore.isHidden($0.id) }
+                if !cached.isEmpty {
+                    conversations = cached
+                    isLoading = false
+                }
+            }
+            guard appState.isAuthenticated else { return }
             PerformanceTelemetry.mark("messages_task_start")
             if !conversations.isEmpty {
                 PerformanceTelemetry.milestone(
@@ -120,6 +130,8 @@ struct MessagesView: View {
                     meta: ["source": "cache"]
                 )
             }
+            // Session still booting: keep cache on screen; refresh when ready.
+            guard appState.isSessionReady else { return }
             await loadConversations()
             PerformanceTelemetry.milestone(
                 "messages_inbox_interactive",
@@ -131,8 +143,17 @@ struct MessagesView: View {
                 await openPendingConversation(conversationID)
             }
         }
-        .onChange(of: inboxFolder) { _, _ in
-            conversations = []
+        .onChange(of: inboxFolder) { _, folder in
+            // Prefer cache for Primary; never blank the list into a spinner flash.
+            if folder == .primary {
+                let cached = MessagesService.shared.cachedConversationsSnapshot()
+                    .filter { !ConversationInboxStore.isHidden($0.id) }
+                if !cached.isEmpty {
+                    conversations = cached
+                    isLoading = false
+                    errorMessage = nil
+                }
+            }
             Task { await loadConversations(forceNetwork: true) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .authTokenDidRefresh)) { _ in
@@ -394,8 +415,7 @@ private struct ConversationRow: View {
                     Text(title)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Theme.ink)
-                    if otherMember?.isVerified == true
-                        || otherMember?.username?.lowercased() == "matterya" {
+                    if otherMember?.showsVerifiedBadge == true {
                         MatteryaVerifiedBadge(size: 14)
                     }
                 }

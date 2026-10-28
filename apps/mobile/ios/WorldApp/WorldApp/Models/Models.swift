@@ -1509,7 +1509,7 @@ struct Profile: Identifiable, Hashable, Sendable, Codable {
     }
 }
 
-struct Message: Identifiable, Hashable, Sendable {
+struct Message: Identifiable, Hashable, Sendable, Codable {
     let id: String
     let conversationID: String
     let senderID: String
@@ -2152,7 +2152,7 @@ struct CallLogInfo: Hashable, Sendable {
     let duration: Int
 }
 
-struct Conversation: Identifiable, Hashable, Sendable {
+struct Conversation: Identifiable, Hashable, Sendable, Codable {
     let id: String
     let isDirect: Bool
     let createdAt: String

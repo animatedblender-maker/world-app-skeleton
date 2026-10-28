@@ -9,12 +9,80 @@ final class MessagesService {
     private var cacheUserID: String?
     /// Skip network thrash when inbox was just fetched (tab hop / call-log spam).
     private var lastConversationsFetchAt: Date = .distantPast
-    private let conversationsFreshTTL: TimeInterval = 12
+    /// Memory is fresh for 60s; disk paints cold open instantly (stale-while-revalidate).
+    private let conversationsFreshTTL: TimeInterval = 60
+    private var didRestoreDiskCache = false
+    private var backgroundInboxRefreshTask: Task<Void, Never>?
     /// Keeps chat threads warm so re-opening a conversation paints instantly.
     private var cachedMessagesByConversation: [String: [Message]] = [:]
     private var cachedPeerReadByConversation: [String: String] = [:]
 
-    private init() {}
+    private init() {
+        restoreDiskCacheIfNeeded()
+    }
+
+    private struct InboxDiskPayload: Codable {
+        let userID: String
+        let savedAt: Date
+        let conversations: [Conversation]
+    }
+
+    private var inboxDiskURL: URL? {
+        guard let userID = AuthService.shared.currentUser?.id ?? cacheUserID,
+              !userID.isEmpty
+        else { return nil }
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let dir = base.appendingPathComponent("MatteryaInboxCache", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("\(userID).v1.json")
+    }
+
+    /// Load last inbox from disk once — cold open must not wait on GraphQL.
+    func restoreDiskCacheIfNeeded() {
+        guard !didRestoreDiskCache else { return }
+        didRestoreDiskCache = true
+        guard cachedConversations.isEmpty else { return }
+        guard let url = inboxDiskURL,
+              let data = try? Data(contentsOf: url),
+              let payload = try? JSONDecoder().decode(InboxDiskPayload.self, from: data)
+        else { return }
+        if let userID = AuthService.shared.currentUser?.id, payload.userID != userID {
+            return
+        }
+        cachedConversations = payload.conversations
+        cacheUserID = payload.userID
+        // Treat disk as stale so first soft-refresh still hits network after paint.
+        lastConversationsFetchAt = payload.savedAt
+        #if DEBUG
+        print("[Messages] disk inbox restore count=\(payload.conversations.count) age=\(Int(Date().timeIntervalSince(payload.savedAt)))s")
+        #endif
+    }
+
+    private func persistInboxToDisk() {
+        guard let userID = AuthService.shared.currentUser?.id ?? cacheUserID,
+              !userID.isEmpty,
+              !cachedConversations.isEmpty,
+              let url = inboxDiskURL
+        else { return }
+        let payload = InboxDiskPayload(
+            userID: userID,
+            savedAt: Date(),
+            conversations: Array(cachedConversations.prefix(60))
+        )
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+        Task.detached(priority: .utility) {
+            try? data.write(to: url, options: [.atomic])
+        }
+    }
+
+    /// Warm primary inbox after session ready — Messages tab paints from memory.
+    func warmPrimaryInboxIfNeeded() {
+        restoreDiskCacheIfNeeded()
+        Task(priority: .utility) { @MainActor in
+            _ = try? await listConversations(limit: 40, forceNetwork: false, inbox: "primary")
+        }
+    }
 
     func cachedMessages(for conversationID: String) -> [Message]? {
         let id = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -35,8 +103,9 @@ final class MessagesService {
         return cachedConversations.first { $0.id == id }
     }
 
-    /// Inbox paint-first (profile-style): return memory cache without touching the network.
+    /// Inbox paint-first (profile-style): return memory/disk cache without touching the network.
     func cachedConversationsSnapshot() -> [Conversation] {
+        restoreDiskCacheIfNeeded()
         if let userID = AuthService.shared.currentUser?.id {
             if cacheUserID == nil || cacheUserID == userID {
                 return cachedConversations
@@ -95,6 +164,7 @@ final class MessagesService {
                 lastMessageAt: now,
                 isRequest: prev.isRequest,
                 requestStatus: prev.requestStatus,
+                surface: prev.surface,
                 members: prev.members,
                 lastMessage: message
             )
@@ -184,7 +254,7 @@ final class MessagesService {
         }
     }
 
-    /// inbox: primary | requests | all
+    /// inbox: primary | requests | all | masquerade
     func listConversations(
         limit: Int = 40,
         forceNetwork: Bool = false,
@@ -196,29 +266,62 @@ final class MessagesService {
 
         let folder = inbox.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let usePrimaryCache = folder == "primary" || folder.isEmpty
+        restoreDiskCacheIfNeeded()
 
-        // Fresh memory cache — return instantly (Messages tab hop must not re-hit GraphQL).
+        // Stale-while-revalidate: paint memory/disk instantly; refresh behind when stale.
         if usePrimaryCache,
            !forceNetwork,
            let userID = AuthService.shared.currentUser?.id,
-           cacheUserID == userID,
-           !cachedConversations.isEmpty,
-           Date().timeIntervalSince(lastConversationsFetchAt) < conversationsFreshTTL {
+           (cacheUserID == nil || cacheUserID == userID),
+           !cachedConversations.isEmpty {
+            cacheUserID = userID
+            let age = Date().timeIntervalSince(lastConversationsFetchAt)
+            if age < conversationsFreshTTL {
+                return cachedConversations
+            }
+            scheduleBackgroundInboxRefresh(limit: limit, inbox: folder.isEmpty ? "primary" : folder)
             return cachedConversations
         }
 
+        return try await fetchAndStoreConversations(
+            limit: limit,
+            inbox: folder.isEmpty ? "primary" : folder,
+            usePrimaryCache: usePrimaryCache
+        )
+    }
+
+    private func scheduleBackgroundInboxRefresh(limit: Int, inbox: String) {
+        backgroundInboxRefreshTask?.cancel()
+        backgroundInboxRefreshTask = Task(priority: .utility) { @MainActor in
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard !Task.isCancelled else { return }
+            _ = try? await fetchAndStoreConversations(
+                limit: limit,
+                inbox: inbox,
+                usePrimaryCache: true
+            )
+            NotificationCenter.default.post(name: .conversationMessagesDidChange, object: nil)
+        }
+    }
+
+    private func fetchAndStoreConversations(
+        limit: Int,
+        inbox: String,
+        usePrimaryCache: Bool
+    ) async throws -> [Conversation] {
         _ = try await AuthService.shared.ensureValidToken()
 
         do {
             let conversations = try await fetchConversations(
                 limit: limit,
-                inbox: folder.isEmpty ? "primary" : folder,
+                inbox: inbox,
                 retryingAuth: true
             )
             if usePrimaryCache, let userID = AuthService.shared.currentUser?.id {
                 cacheUserID = userID
                 cachedConversations = conversations
                 lastConversationsFetchAt = Date()
+                persistInboxToDisk()
                 prefetchRecentThreads(limit: 2)
             }
             return conversations
@@ -243,7 +346,7 @@ final class MessagesService {
             id is_direct created_at updated_at last_message_at
             is_request request_status
             members {
-              user_id display_name username avatar_url country_name country_code last_read_at is_verified is_verified
+              user_id display_name username avatar_url country_name country_code last_read_at is_verified
             }
             last_message {
               id conversation_id sender_id body media_type media_path media_name created_at updated_at
@@ -291,7 +394,7 @@ final class MessagesService {
         query Conversations($limit: Int, $inbox: String) {
           conversations(limit: $limit, inbox: $inbox) {
             id is_direct created_at updated_at last_message_at
-            is_request request_status
+            is_request request_status surface
             members {
               user_id display_name username avatar_url country_name country_code last_read_at is_verified
             }
@@ -308,7 +411,7 @@ final class MessagesService {
                 query: query,
                 variables: ["limit": limit, "inbox": inbox]
             )
-            return result.conversations.map(\.toModel)
+            return Self.filterConversations(result.conversations.map(\.toModel), inbox: inbox)
         } catch {
             let message = error.localizedDescription.lowercased()
             let authFailure = message.contains("auth")
@@ -321,15 +424,78 @@ final class MessagesService {
                 }.value
                 return try await fetchConversations(limit: limit, inbox: inbox, retryingAuth: false)
             }
-            // Older API without inbox arg — fall back to primary list.
+            // Older API without `surface` / inbox — retry without surface, then legacy.
+            if message.contains("surface") {
+                return try await fetchConversationsWithoutSurface(
+                    limit: limit,
+                    inbox: inbox,
+                    retryingAuth: false
+                )
+            }
             if message.contains("inbox") || message.contains("unknown") {
-                return try await fetchConversationsLegacy(limit: limit)
+                return try await fetchConversationsLegacy(limit: limit, inbox: inbox)
             }
             throw error
         }
     }
 
-    private func fetchConversationsLegacy(limit: Int) async throws -> [Conversation] {
+    /// Client belt-and-suspenders: Messages never shows masquerade threads, and vice versa.
+    private static func filterConversations(_ list: [Conversation], inbox: String) -> [Conversation] {
+        let folder = inbox.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if folder == "masquerade" {
+            return list.filter(\.isMasqueradeSurface)
+        }
+        // primary / requests / all / empty
+        return list.filter { !$0.isMasqueradeSurface }
+    }
+
+    private func fetchConversationsWithoutSurface(
+        limit: Int,
+        inbox: String,
+        retryingAuth: Bool
+    ) async throws -> [Conversation] {
+        struct Response: Decodable {
+            let conversations: [GraphQLConversation]
+        }
+        let query = """
+        query Conversations($limit: Int, $inbox: String) {
+          conversations(limit: $limit, inbox: $inbox) {
+            id is_direct created_at updated_at last_message_at
+            is_request request_status
+            members {
+              user_id display_name username avatar_url country_name country_code last_read_at is_verified
+            }
+            last_message {
+              id conversation_id sender_id body media_type media_path media_name media_mime media_size created_at updated_at
+              sender { user_id display_name username avatar_url country_name country_code is_verified }
+            }
+          }
+        }
+        """
+        do {
+            let result: Response = try await gql.authenticatedRequest(
+                query: query,
+                variables: ["limit": limit, "inbox": inbox]
+            )
+            // Without surface field, keep primary lists only — never invent masquerade threads.
+            let models = result.conversations.map(\.toModel)
+            let folder = inbox.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if folder == "masquerade" { return [] }
+            return models
+        } catch {
+            if messageContainsInboxOrUnknown(error), retryingAuth {
+                return try await fetchConversationsLegacy(limit: limit, inbox: inbox)
+            }
+            throw error
+        }
+    }
+
+    private func messageContainsInboxOrUnknown(_ error: Error) -> Bool {
+        let message = error.localizedDescription.lowercased()
+        return message.contains("inbox") || message.contains("unknown")
+    }
+
+    private func fetchConversationsLegacy(limit: Int, inbox: String = "primary") async throws -> [Conversation] {
         struct Response: Decodable {
             let conversations: [GraphQLConversation]
         }
@@ -351,7 +517,7 @@ final class MessagesService {
             query: query,
             variables: ["limit": limit]
         )
-        return result.conversations.map(\.toModel)
+        return Self.filterConversations(result.conversations.map(\.toModel), inbox: inbox)
     }
 
     func listMessages(conversationID: String, limit: Int = 50) async throws -> [Message] {
@@ -471,6 +637,7 @@ final class MessagesService {
                 lastMessageAt: conversation.lastMessageAt,
                 isRequest: conversation.isRequest,
                 requestStatus: conversation.requestStatus,
+                surface: conversation.surface,
                 members: conversation.members,
                 lastMessage: await hydrateMedia(last)
             )
@@ -615,6 +782,7 @@ private struct GraphQLConversation: Decodable {
     let lastMessageAt: String?
     let isRequest: Bool?
     let requestStatus: String?
+    let surface: String?
     let members: [GraphQLAuthor]
     let lastMessage: GraphQLMessage?
 
@@ -626,6 +794,7 @@ private struct GraphQLConversation: Decodable {
         case lastMessageAt = "last_message_at"
         case isRequest = "is_request"
         case requestStatus = "request_status"
+        case surface
         case members
         case lastMessage = "last_message"
     }
@@ -639,6 +808,7 @@ private struct GraphQLConversation: Decodable {
             lastMessageAt: lastMessageAt,
             isRequest: isRequest ?? false,
             requestStatus: requestStatus,
+            surface: surface ?? "primary",
             members: members.compactMap(\.toModelIfValid),
             lastMessage: lastMessage?.toModel
         )
