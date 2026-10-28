@@ -459,9 +459,10 @@ def main() -> int:
             pass
         import time
 
-        for attempt in range(1, 9):
+        # Long DNS/pooler blips (ENOTFOUND / EADDRNOTAVAIL) can last several minutes.
+        for attempt in range(1, 21):
             try:
-                time.sleep(min(60, 2**attempt))
+                time.sleep(min(120, 3 * (2 ** min(attempt - 1, 5))))
                 conn = connect()
                 cur = conn.cursor(cursor_factory=RealDictCursor)
                 print(f"  reconnected (attempt {attempt})", flush=True)
