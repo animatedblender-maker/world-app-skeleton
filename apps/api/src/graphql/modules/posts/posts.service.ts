@@ -1418,8 +1418,12 @@ export class PostsService {
     // MIND Phase 2b — Voyage title/body embed (best-effort; catch-up cron fills gaps).
     if (visibility === 'public' && !isMoment) {
       void import('../../../recommendation/mind-embeddings.js')
-        .then(({ scheduleEmbeddingForPost }) => {
+        .then(async ({ scheduleEmbeddingForPost }) => {
           scheduleEmbeddingForPost(String(createdId));
+          const { scheduleMultimodalForPost } = await import(
+            '../../../recommendation/mind-multimodal.js'
+          );
+          scheduleMultimodalForPost(String(createdId));
         })
         .catch(() => {});
     }
@@ -1652,8 +1656,12 @@ export class PostsService {
       (input.title !== undefined || input.body !== undefined)
     ) {
       void import('../../../recommendation/mind-embeddings.js')
-        .then(({ scheduleEmbeddingForPost }) => {
+        .then(async ({ scheduleEmbeddingForPost }) => {
           scheduleEmbeddingForPost(String(updatedId));
+          const { scheduleMultimodalForPost } = await import(
+            '../../../recommendation/mind-multimodal.js'
+          );
+          scheduleMultimodalForPost(String(updatedId));
         })
         .catch(() => {});
     }

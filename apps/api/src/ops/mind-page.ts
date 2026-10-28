@@ -254,10 +254,10 @@ function mindHtml(): string {
             </ul>
           </div>
           <div>
-            <h3>Phase 1 + 2a</h3>
+            <h3>Phase 1 → 4.v2</h3>
             <ul class="help">
-              <li>Gap matrix §1–§6, §7 media (2a), §8–§11, §19 are <strong>shipped</strong>.</li>
-              <li>§14 ads / §15 GraphQL remain roadmap. §18 eval stub + Phase 3a cold-start shipped; Phase 4–5 ADRs 0004/0005.</li>
+              <li>Gap matrix §1–§13, §19 shipped (incl. Sparks multimodal thumbs).</li>
+              <li>§14 ads / §15 GraphQL remain roadmap. §18 eval stub; Phase 5 gated (ADR 0004).</li>
             </ul>
           </div>
         </div>
@@ -392,7 +392,7 @@ function mindHtml(): string {
       </div>
       <div class="card">
         <h2>Media understanding (§7)</h2>
-        <p class="muted">Phase 2a: Groq transcripts → <code>mind_content_features</code> (topics/language). pgvector embeddings = Phase 2b.</p>
+        <p class="muted">Phase 2a: Groq transcripts → <code>mind_content_features</code>. Phase 2b: Voyage title ANN. Phase 4.v2: Sparks multimodal thumbs (<code>voyage-multimodal-3.5</code>).</p>
         <div class="grid" id="mediaStats"></div>
         <div id="mediaCatalog" style="margin-top:12px"></div>
         <p class="muted" id="mediaNote"></p>
@@ -443,6 +443,7 @@ function mindHtml(): string {
           <div class="stat"><div class="n" style="font-size:1rem">Phase 3a</div><div class="l">Cold-start priors · offline eval</div><span class="pill ok">phase3.v1</span></div>
           <div class="stat"><div class="n" style="font-size:1rem">Phase 3b</div><div class="l">Controls · session · opportunity · logistic flag</div><span class="pill ok">phase4.v1</span></div>
           <div class="stat"><div class="n" style="font-size:1rem">Phase 4</div><div class="l">Search · Guardian · people · world · insights</div><span class="pill ok">phase4.v1</span></div>
+          <div class="stat"><div class="n" style="font-size:1rem">Phase 4.v2</div><div class="l">Sparks multimodal thumb ANN · all Sparks</div><span class="pill ok">phase4.v2</span></div>
           <div class="stat"><div class="n" style="font-size:1rem">Phase 5</div><div class="l">Scale after measured need (ADR 0004)</div><span class="pill">gated</span></div>
         </div>
       </div>
@@ -456,10 +457,10 @@ const GAPS = [
   ['3','Architecture','shipped','This Architecture tab'],
   ['5','Events','shipped','Allowlist ingest + meta scrub + Kafka/PG'],
   ['6','Masquerade isolation','shipped','Live proofs + surface namespace guards'],
-  ['7','Media understanding','shipped','2a features + 2b Voyage/pgvector title embeddings'],
+  ['7','Media understanding','shipped','2a features + 2b title ANN + 4.v2 Sparks multimodal thumbs'],
   ['8','Interest features','shipped','Personality + creator affinity + featureHits'],
-  ['9','Candidates','shipped','Multi-lane + cold-start + opportunity'],
-  ['10','Rank + diversity','shipped','MMR + session + controls + logistic flag'],
+  ['9','Candidates','shipped','Multi-lane + cold-start + opportunity + sparks_mm_thumb'],
+  ['10','Rank + diversity','shipped','MMR + session + controls + logistic + mm_ann soft boost'],
   ['11','Exposure ledger','shipped','feed_video_delivery on all For You surfaces'],
   ['12','Search / world','shipped','GET /v1/search hybrid+rerank · /v1/world/country'],
   ['13','Guardian','shipped','/mind Guardian panel + report/mod queues'],
@@ -580,6 +581,7 @@ async function openPerson(id){
         +esc((x.at||'').toString().slice(0,19).replace('T',' '))
         +' · served '+fmt(x.served)+' · '+fmt(x.latencyMs)+'ms'
         +(x.annHits!=null?' · annHits '+fmt(x.annHits):'')
+        +(x.mmAnnHits!=null?' · mmAnn '+fmt(x.mmAnnHits):'')
         +(x.topicHits!=null?' · topics '+fmt(x.topicHits):'')
         +'</span></span><span class="pill">'+esc(x.policy||'')+'</span></div>'
       ).join('')
@@ -781,16 +783,24 @@ async function refresh(){
       + ' · missing transcript = UNKNOWN (never demoted)';
 
     const emb = s.embeddings || {};
+    const mm = s.multimodal || {};
+    const flags = s.flags || {};
     $('mediaStats').innerHTML += [
       ['Embed rows', emb.rows],
       ['Embed dims', emb.dims],
+      ['Sparks mm rows', mm.rows],
+      ['Sparks eligible', mm.sparksEligible],
     ].map(([l,n]) => '<div class="stat"><div class="n">'+fmt(n)+'</div><div class="l">'+l+'</div></div>').join('');
     const rr = s.rerank || {};
     $('mediaNote').textContent +=
       ' · Voyage ' + (emb.configured ? (emb.model||'ok') : 'missing key')
       + ' · embed rows ' + fmt(emb.rows)
       + ' · ' + (emb.enabled ? 'ANN ON' : 'ANN OFF')
-      + ' · rerank ' + (rr.enabled ? ('ON · ' + (rr.model||'ok')) : 'OFF');
+      + ' · rerank ' + (rr.enabled ? ('ON · ' + (rr.model||'ok')) : 'OFF')
+      + ' · Sparks mm ' + (flags.mindMultimodal ? 'ON' : 'OFF')
+      + ' · ' + (mm.model || 'voyage-multimodal-3.5')
+      + ' · mm rows ' + fmt(mm.rows) + '/' + fmt(mm.sparksEligible)
+      + ' · cron POST /cron/mind-multimodal';
 
     if (!$('docNav').dataset.ready) {
       $('docNav').dataset.ready = '1';

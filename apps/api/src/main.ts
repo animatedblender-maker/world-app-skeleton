@@ -56,6 +56,7 @@ import {
 } from './recommendation/rank.service.js';
 import { rebuildNeighborsForEntity } from './recommendation/knn.service.js';
 import { backfillEmbeddings } from './recommendation/mind-embeddings.js';
+import { backfillMultimodal } from './recommendation/mind-multimodal.js';
 import {
   fetchForYouPage,
   fetchHomeFeedPage,
@@ -1469,6 +1470,33 @@ app.post('/cron/mind-embeddings', async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('[cron/mind-embeddings]', err?.message ?? err);
     return res.status(500).json({ error: err?.message ?? 'embed_catchup_failed' });
+  }
+});
+
+/**
+ * Catch-up: Sparks multimodal thumb embeds (voyage-multimodal-3.5).
+ * Auth: same cron secret as content-pipeline / mind-embeddings.
+ * Cron: POST /cron/mind-multimodal?limit=200
+ * New Sparks also schedule inline — this fills the historical library.
+ */
+app.post('/cron/mind-multimodal', async (req: Request, res: Response) => {
+  const secret = req.headers['x-cron-secret'] || req.query.secret;
+  const expected =
+    process.env.CONTENT_CRON_SECRET?.trim() ||
+    process.env.INSIGHTS_CRON_SECRET?.trim() ||
+    INSIGHTS_CRON_SECRET;
+  if (!expected || String(secret ?? '') !== expected) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  try {
+    const rawLimit = Number(req.query.limit ?? req.body?.limit ?? 200);
+    const limit =
+      Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 2000) : 200;
+    const out = await backfillMultimodal({ limit });
+    return res.json({ ok: true, ...out, limit });
+  } catch (err: any) {
+    console.error('[cron/mind-multimodal]', err?.message ?? err);
+    return res.status(500).json({ error: err?.message ?? 'multimodal_catchup_failed' });
   }
 });
 

@@ -469,11 +469,14 @@ export async function getUserDossier(userId: string): Promise<Record<string, unk
 
   const annHitsRecent = decisionsRes.rows
     .map((d) => {
-      const meta = d.meta as { featureHits?: { annHits?: number; topicHits?: number } } | null;
+      const meta = d.meta as {
+        featureHits?: { annHits?: number; mmAnnHits?: number; topicHits?: number };
+      } | null;
       return {
         at: d.created_at,
         surface: d.surface,
         annHits: meta?.featureHits?.annHits ?? null,
+        mmAnnHits: meta?.featureHits?.mmAnnHits ?? null,
         topicHits: meta?.featureHits?.topicHits ?? null,
         served: Number(d.served_count) || 0,
         latencyMs: Number(d.latency_ms) || 0,

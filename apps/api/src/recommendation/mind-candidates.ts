@@ -12,6 +12,7 @@ export type CandidateLaneId =
   | 'home_hub'
   | 'home_image'
   | 'home_ann_title'
+  | 'sparks_mm_thumb'
   | 'home_cold_start'
   | 'home_new_creator'
   | 'hubs_slug_rotate'
@@ -57,6 +58,13 @@ export const MIND_CANDIDATE_LANES: CandidateLaneDef[] = [
     surface: 'home_for_you',
     label: 'Home · ANN title/body',
     description: 'Phase 2b pgvector nearest neighbors (Voyage voyage-4-lite).',
+  },
+  {
+    id: 'sparks_mm_thumb',
+    surface: 'home_for_you',
+    label: 'Sparks · multimodal thumb',
+    description:
+      'Phase 4.v2: Voyage voyage-multimodal-3.5 thumb+caption ANN for Sparks (all short-form).',
   },
   {
     id: 'home_cold_start',

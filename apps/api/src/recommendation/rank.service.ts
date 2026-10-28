@@ -22,6 +22,10 @@ import {
 import { mmrPick } from './social-score.js';
 import { loadMediaFeaturesForPosts } from './mind-media.js';
 import { annCandidates, mindEmbeddingsEnabled } from './mind-embeddings.js';
+import {
+  mindMultimodalEnabled,
+  multimodalAnnCandidates,
+} from './mind-multimodal.js';
 import { loadInterestControls } from './mind-interest-controls.js';
 import {
   loadSessionFeatures,
@@ -246,14 +250,33 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
   const mutedHubSet = new Set(controls.mutedHubs);
   const boostedTopicSet = new Set(controls.boostedTopics);
 
-  // Phase 2b ANN — after bubbles so we can bias the query; never blocks ranking hard.
+  // Phase 2b text ANN (Home/Hubs) + Phase 4.v2 Sparks multimodal thumb ANN.
+  // Never blocks ranking hard; missing embed = UNKNOWN.
   let annIdSet = new Set<string>();
-  if (publicSurface && mindEmbeddingsEnabled()) {
-    const hubKeys = [...(bubbles?.hubs ? bubbles.hubs.keys() : [])].slice(0, 6);
-    const boostKeys = [...boostedTopicSet].slice(0, 4);
-    const annQueryText =
-      [...new Set([...boostKeys, ...hubKeys])].join(' ') ||
-      'matterya hubs travel music comedy food';
+  let mmAnnIdSet = new Set<string>();
+  const hubKeys = [...(bubbles?.hubs ? bubbles.hubs.keys() : [])].slice(0, 6);
+  const boostKeys = [...boostedTopicSet].slice(0, 4);
+  const annQueryText =
+    [...new Set([...boostKeys, ...hubKeys])].join(' ') ||
+    'matterya hubs travel music comedy food';
+
+  if (surface === 'sparks' && mindMultimodalEnabled()) {
+    try {
+      const mmIds = await multimodalAnnCandidates({
+        queryText: annQueryText || 'funny dance food travel',
+        limit: 32,
+        excludeIds: [],
+      });
+      mmAnnIdSet = new Set(mmIds);
+      const missing = mmIds.filter((id) => !postMeta.has(id) && isUuid(id));
+      if (missing.length) {
+        const extraMeta = await loadPostMeta(missing);
+        for (const [k, v] of extraMeta) postMeta.set(k, v);
+      }
+    } catch {
+      /* ignore */
+    }
+  } else if (publicSurface && mindEmbeddingsEnabled()) {
     try {
       const annIds = await annCandidates({
         queryText: annQueryText,
@@ -271,7 +294,7 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
     }
   }
 
-  const scorePool = [...new Set([...candidateIds, ...annIdSet])];
+  const scorePool = [...new Set([...candidateIds, ...annIdSet, ...mmAnnIdSet])];
   const authorIdsForOpp = [
     ...new Set(
       [...scorePool]
@@ -298,6 +321,7 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
   let transcriptReadyHits = 0;
   let topicHitCount = 0;
   let annHitCount = 0;
+  let mmAnnHitCount = 0;
   let coldStartHits = 0;
   let sessionHits = 0;
   let opportunityHits = 0;
@@ -457,6 +481,14 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
       feat.ann = 1;
       if (coldStart) gotColdPrior = true;
     }
+    // Phase 4.v2 — Sparks multimodal thumb ANN (visual + caption).
+    if (mmAnnIdSet.has(id)) {
+      score += (coldStart ? 2.1 : 1.65) * chronoMul;
+      sources.push(coldStart ? 'cold_prior_mm_ann' : 'mm_ann');
+      mmAnnHitCount += 1;
+      feat.ann = 1;
+      if (coldStart) gotColdPrior = true;
+    }
 
     // MIND-017 session soft blend
     const sess = sessionMatchScore(sessionFeatures, {
@@ -544,6 +576,7 @@ export async function rankCandidates(input: RankRequest): Promise<RankResponse> 
     transcriptReady: transcriptReadyHits,
     topicHits: topicHitCount,
     annHits: annHitCount,
+    mmAnnHits: mmAnnHitCount,
     coldStart,
     coldStartHits,
     sessionHits,

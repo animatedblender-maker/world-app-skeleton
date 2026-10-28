@@ -497,7 +497,13 @@ async function ingestOriginal(
 
   // MIND Phase 2b — queue Voyage title/body embed (catch-up cron covers misses).
   void import('../recommendation/mind-embeddings.js')
-    .then(({ scheduleEmbeddingForPost }) => scheduleEmbeddingForPost(postId))
+    .then(async ({ scheduleEmbeddingForPost }) => {
+      scheduleEmbeddingForPost(postId);
+      const { scheduleMultimodalForPost } = await import(
+        '../recommendation/mind-multimodal.js'
+      );
+      scheduleMultimodalForPost(postId);
+    })
     .catch(() => undefined);
 
   // Optional media_caption table (used by insights / web) — best-effort.
@@ -772,7 +778,13 @@ async function createHubOriginShare(opts: {
   if (!shareId) return false;
 
   void import('../recommendation/mind-embeddings.js')
-    .then(({ scheduleEmbeddingForPost }) => scheduleEmbeddingForPost(shareId))
+    .then(async ({ scheduleEmbeddingForPost }) => {
+      scheduleEmbeddingForPost(shareId);
+      const { scheduleMultimodalForPost } = await import(
+        '../recommendation/mind-multimodal.js'
+      );
+      scheduleMultimodalForPost(shareId);
+    })
     .catch(() => undefined);
 
   try {
@@ -924,7 +936,13 @@ async function createSparkShare(opts: {
   if (!shareId) return false;
 
   void import('../recommendation/mind-embeddings.js')
-    .then(({ scheduleEmbeddingForPost }) => scheduleEmbeddingForPost(shareId))
+    .then(async ({ scheduleEmbeddingForPost }) => {
+      scheduleEmbeddingForPost(shareId);
+      const { scheduleMultimodalForPost } = await import(
+        '../recommendation/mind-multimodal.js'
+      );
+      scheduleMultimodalForPost(shareId);
+    })
     .catch(() => undefined);
 
   try {

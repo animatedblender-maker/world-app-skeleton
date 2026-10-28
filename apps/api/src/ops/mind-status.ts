@@ -38,6 +38,11 @@ import {
   type EmbeddingsStatus,
 } from '../recommendation/mind-embeddings.js';
 import {
+  getMultimodalStatus,
+  mindMultimodalEnabled,
+  type MultimodalStatus,
+} from '../recommendation/mind-multimodal.js';
+import {
   getRerankStatus,
   type RerankStatus,
 } from '../recommendation/mind-rerank.js';
@@ -81,6 +86,7 @@ export type MindStatus = {
     mindTrainedRanker: boolean;
     mindHybridSearch: boolean;
     mindRerank: boolean;
+    mindMultimodal: boolean;
   };
   guardian?: {
     openPostReports: number;
@@ -120,6 +126,9 @@ export type MindStatus = {
       served: number;
       latencyMs: number;
       requestId: string;
+      annHits?: number | null;
+      mmAnnHits?: number | null;
+      topicHits?: number | null;
     }[];
   };
   candidates: {
@@ -145,6 +154,7 @@ export type MindStatus = {
   };
   mediaUnderstanding: MediaUnderstandingStatus;
   embeddings: EmbeddingsStatus;
+  multimodal: MultimodalStatus;
   rerank: RerankStatus;
   masquerade: {
     rooms: { slug: string; title: string; posts: number }[];
@@ -440,25 +450,33 @@ async function buildMindStatus(): Promise<MindStatus> {
       served_count: number;
       latency_ms: number;
       request_id: string;
+      meta: { featureHits?: { annHits?: number; mmAnnHits?: number; topicHits?: number } } | null;
     }>(`
-      select created_at, surface, policy_version, served_count, latency_ms, request_id
+      select created_at, surface, policy_version, served_count, latency_ms, request_id, meta
       from public.recommendation_decisions
       order by created_at desc
       limit 10
     `);
-    decisions.recent = rows.map((r) => ({
-      at: new Date(r.created_at).toISOString(),
-      surface: r.surface,
-      policy: r.policy_version,
-      served: Number(r.served_count) || 0,
-      latencyMs: Number(r.latency_ms) || 0,
-      requestId: String(r.request_id).slice(0, 36),
-    }));
+    decisions.recent = rows.map((r) => {
+      const fh = r.meta?.featureHits;
+      return {
+        at: new Date(r.created_at).toISOString(),
+        surface: r.surface,
+        policy: r.policy_version,
+        served: Number(r.served_count) || 0,
+        latencyMs: Number(r.latency_ms) || 0,
+        requestId: String(r.request_id).slice(0, 36),
+        annHits: fh?.annHits ?? null,
+        mmAnnHits: fh?.mmAnnHits ?? null,
+        topicHits: fh?.topicHits ?? null,
+      };
+    });
     for (const r of decisions.recent.slice(0, 5)) {
+      const mm = r.mmAnnHits != null ? ` · mmAnn=${r.mmAnnHits}` : '';
       recent.push({
         kind: 'decision',
         at: r.at,
-        text: `${r.surface} · served=${r.served} · ${r.latencyMs}ms · ${r.policy}`,
+        text: `${r.surface} · served=${r.served} · ${r.latencyMs}ms · ${r.policy}${mm}`,
       });
     }
   } catch {
@@ -665,6 +683,23 @@ async function buildMindStatus(): Promise<MindStatus> {
     console.warn('[mind-status] embeddings', err?.message ?? err);
   }
 
+  let multimodal: MultimodalStatus;
+  try {
+    multimodal = await getMultimodalStatus();
+  } catch (err: any) {
+    multimodal = {
+      enabled: mindMultimodalEnabled(),
+      configured: !!process.env.VOYAGE_API_KEY?.trim(),
+      model: 'voyage-multimodal-3.5',
+      modelVersion: 'voyage:voyage-multimodal-3.5',
+      dims: 1024,
+      rows: 0,
+      source: 'sparks_thumb',
+      sparksEligible: 0,
+    };
+    console.warn('[mind-status] multimodal', err?.message ?? err);
+  }
+
   const rerank = getRerankStatus();
 
   let guardian;
@@ -691,13 +726,14 @@ async function buildMindStatus(): Promise<MindStatus> {
       mindTrainedRanker: mindTrainedRankerEnabled(),
       mindHybridSearch: mindHybridSearchEnabled(),
       mindRerank: rerank.enabled,
+      mindMultimodal: multimodal.enabled,
     },
     ledger,
     engagement,
     masquerade,
     seed: readSeedProgress(),
-    // Phase 3b+4: adaptive + surfaces; missing = §14 ads auction / §15 GraphQL FeedItem
-    gapSummary: { shipped: 16, partial: 4, missing: 2 },
+    // Phase 3b+4.v2 (+ Sparks multimodal); missing = §14 ads auction / §15 GraphQL FeedItem
+    gapSummary: { shipped: 17, partial: 3, missing: 2 },
     docs: listDocs(),
     recent,
     decisions,
@@ -706,6 +742,7 @@ async function buildMindStatus(): Promise<MindStatus> {
     purpose,
     mediaUnderstanding,
     embeddings,
+    multimodal,
     rerank,
     guardian,
   };
