@@ -235,6 +235,27 @@ function cacheFrameForProgress(
         recent = [];
       }
     }
+    const titleNorm = String(title ?? '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 120);
+    // Don't re-push the same caption into the live gallery ring.
+    if (
+      titleNorm.length >= 6 &&
+      recent.some(
+        (r) =>
+          r.id !== postId &&
+          r.kind === kind &&
+          String(r.title ?? '')
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 120) === titleNorm
+      )
+    ) {
+      return;
+    }
     recent = [
       {
         id: postId,
@@ -366,10 +387,60 @@ export async function upsertMultimodalForPost(postId: string): Promise<boolean> 
       return false;
     }
 
+    // Skip near-duplicates already embedded (same caption).
+    // Inventory often re-scrapes the same Spark under a new post id.
+    try {
+      const cap = captionText(row.title, row.body).toLowerCase().replace(/\s+/g, ' ').trim();
+      if (cap.length >= 12 && mmKindForMediaType(row.media_type) === 'spark') {
+        const { rows: titleHit } = await pool.query<{ post_id: string }>(
+          `
+          select e.post_id::text
+          from public.mind_sparks_multimodal_embeddings e
+          join public.posts p on p.id = e.post_id
+          where e.source = $1
+            and e.post_id is distinct from $2::uuid
+            and left(lower(trim(regexp_replace(
+              coalesce(nullif(trim(p.title), ''), p.body, ''),
+              '\\s+', ' ', 'g'
+            ))), 120) = left($3, 120)
+          limit 1
+          `,
+          [MIND_MM_SOURCE, postId, cap.slice(0, 120)]
+        );
+        if (titleHit[0]) {
+          persistMmSkip(postId);
+          return false;
+        }
+      }
+    } catch {
+      /* best-effort dedupe — still try embed */
+    }
+
     const thumb = await thumbToBytes(thumbUrl);
     if (!thumb) {
       persistMmSkip(postId);
       return false;
+    }
+
+    // Content hash (not URL — signed R2 URLs change every freshen).
+    const fp = createHash('sha256').update(thumb.buf).digest('hex').slice(0, 32);
+    try {
+      const { rows: fpHit } = await pool.query<{ post_id: string }>(
+        `
+        select post_id::text
+        from public.mind_sparks_multimodal_embeddings
+        where thumb_fingerprint = $1
+          and post_id is distinct from $2::uuid
+        limit 1
+        `,
+        [fp, postId]
+      );
+      if (fpHit[0]) {
+        persistMmSkip(postId);
+        return false;
+      }
+    } catch {
+      /* best-effort */
     }
 
     const text = captionText(row.title, row.body);
@@ -386,7 +457,6 @@ export async function upsertMultimodalForPost(postId: string): Promise<boolean> 
     );
     if (!emb || emb.length !== MIND_MM_DIMS) return false;
 
-    const fp = fingerprint(thumbUrl);
     const source = mmSourceForMediaType(row.media_type);
     const kind = mmKindForMediaType(row.media_type);
     await pool.query(
