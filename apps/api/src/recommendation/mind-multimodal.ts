@@ -343,7 +343,9 @@ function isPermanentMmError(msg: string): boolean {
     m.includes('image resolution') ||
     m.includes('not within the permitted range') ||
     m.includes('larger than 20 mb') ||
-    m.includes('more than 16 million pixels')
+    m.includes('more than 16 million pixels') ||
+    m.includes('valid utf-8') ||
+    m.includes('properly escaped')
   );
 }
 
