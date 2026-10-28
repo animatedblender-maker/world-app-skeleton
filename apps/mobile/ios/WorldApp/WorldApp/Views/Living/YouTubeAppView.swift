@@ -165,24 +165,30 @@ struct YouTubeAppView: View {
         let focus = homeFilter.hubSlug
         let displayLimit = hubsDisplayLimit
         let firstWindow = Self.hubsFirstWindow
-        // Personalize from Continue-watching / recordWatch trail.
-        let affinity = catalog.watchAffinity(from: allVideos)
+        // Affinity from Continue strip only — scanning allVideos here froze first Hubs hop.
+        let affinity = catalog.watchAffinity(from: Array(continueWatching.prefix(24)))
 
-        // Tiny catalogs only — never rank hundreds on MainActor (first-nav lag).
-        if rankInput.count <= 48 {
-            let ranked = catalog.rankForYouBySlugs(
-                rankInput,
-                followingIDs: following,
-                myUserID: myID,
-                sessionSeed: seed,
-                focusSlug: focus,
-                affinity: affinity
-            )
-            applyRankedHome(ranked, shuffle: shuffle, remountList: remountList, displayLimit: displayLimit, firstWindow: firstWindow)
-            scheduleHubsDensifyIfNeeded()
-            return
+        // Provisional paint NOW so the hop never waits on ranking (blank/spinner froze feel).
+        let needsProvisional = stableDiscoverVideos.isEmpty
+        if needsProvisional {
+            let provisional = Array(rankInput.prefix(firstWindow))
+            var txn = Transaction()
+            txn.disablesAnimations = true
+            withTransaction(txn) {
+                hubsForYouPool = provisional
+                hubsDisplayLimit = provisional.count
+                stableHomeVideos = provisional
+                stableDiscoverVideos = provisional
+            }
+            // Light rails on next beat — never on this navigate frame.
+            Task(priority: .userInitiated) { @MainActor in
+                try? await Task.sleep(nanoseconds: 1_000_000)
+                guard appState.selectedTab == .hubs else { return }
+                rebuildCachedHubsRails()
+            }
         }
 
+        // Always rank off MainActor — even small samples + affinity froze first Hubs hop.
         Task { @MainActor in
             let ranked = await Task.detached(priority: .userInitiated) {
                 return YouTubeCatalogService.rankForYouBySlugsPure(
@@ -252,9 +258,15 @@ struct YouTubeAppView: View {
             stableHomeVideos = window
             stableDiscoverVideos = window
         }
-        rebuildCachedHubsRails()
         if remountList {
             homeListEpoch &+= 1
+        }
+        // Rails AFTER the hop paints — sync rebuild on this frame froze navigate-to-Hubs.
+        let dense = hubsRailsDense
+        Task(priority: dense ? .utility : .userInitiated) { @MainActor in
+            try? await Task.sleep(nanoseconds: dense ? 40_000_000 : 1_000_000)
+            guard appState.selectedTab == .hubs else { return }
+            rebuildCachedHubsRails()
         }
     }
 
@@ -1075,67 +1087,80 @@ struct YouTubeAppView: View {
         !stableDiscoverVideos.isEmpty && hubsForYouPool.count >= 8
     }
 
+    /// Cheap media fingerprint for rail dedupe — avoid `homeFeedContentKey` regex on the hop.
+    private static func hubsRailMediaKey(_ post: CountryPost) -> String {
+        if let r2 = post.mediaPayload?.r2Key?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+           !r2.isEmpty {
+            return "r2:\(r2)"
+        }
+        if let url = post.playableVideoURL?.absoluteString
+            ?? post.mediaURL
+            ?? post.mediaPayload?.primaryURL {
+            let bare = url.split(separator: "?").first.map(String.init) ?? url
+            return "media:\(bare.lowercased())"
+        }
+        return "id:\(post.id.lowercased())"
+    }
+
     private func rebuildCachedHubsRails() {
         let heroID = hubsHeroPost?.id
         let ranked = hubsForYouPool.isEmpty ? stableDiscoverVideos : hubsForYouPool
-        let catalogPool = allVideos.filter { PlayPlatformBridge.isHubsForYouLongForm($0) }
         let railN = Self.hubsRailCardCount
+        // First hop: soft floor so thin instant-paint inventory still paints shelves.
+        // After densify: hard floor of 15 — skip thin categories, pick the next library slug.
+        let minRail = hubsRailsDense ? railN : min(6, railN)
         let vibeCount = hubsRailsDense ? Self.hubsVibeRailCount : Self.hubsVibeRailCountFirstPaint
         let moreRows = hubsRailsDense ? Self.hubsMoreRailRows : Self.hubsMoreRailRowsFirstPaint
-        let affinity = catalog.watchAffinity(from: allVideos)
+        // Affinity from Continue strip only — never walk the full catalog on the hop.
+        let affinity = catalog.watchAffinity(from: Array(continueWatching.prefix(24)))
 
-        // Global claim — post id + media fingerprint so the same clip from two channels
-        // cannot sit adjacent (or even appear twice) across home rails this paint.
+        // ONE-PASS slug buckets (ranked order). Never re-scan catalog per slug —
+        // that O(slugs×N) path froze first navigate into Hubs.
+        var buckets: [String: [CountryPost]] = [:]
+        buckets.reserveCapacity(24)
+        var mediaKeys: [String: String] = [:]
+        mediaKeys.reserveCapacity(ranked.count + 16)
+        func mediaKey(_ post: CountryPost) -> String {
+            if let cached = mediaKeys[post.id] { return cached }
+            let key = Self.hubsRailMediaKey(post)
+            mediaKeys[post.id] = key
+            return key
+        }
+        var bucketSeenMedia: [String: Set<String>] = [:]
+        for post in ranked {
+            guard PlayPlatformBridge.isHubsForYouLongForm(post) || (post.hasVideo && !post.isReel) else { continue }
+            let slug = YouTubeCatalogService.parentHubSlug(for: post)
+            let key = mediaKey(post)
+            var seen = bucketSeenMedia[slug] ?? []
+            guard seen.insert(key).inserted else { continue }
+            bucketSeenMedia[slug] = seen
+            var list = buckets[slug] ?? []
+            // Cap per bucket — densify can refill; hop must stay O(n).
+            if list.count < railN * 2 {
+                list.append(post)
+                buckets[slug] = list
+            }
+        }
+
         var claimedIDs = Set([heroID].compactMap { $0 })
         var claimedMedia = Set<String>()
         if let hero = hubsHeroPost {
-            claimedMedia.insert(hero.homeFeedContentKey)
+            claimedMedia.insert(mediaKey(hero))
         }
         for post in continueWatching.prefix(railN) {
             claimedIDs.insert(post.id)
-            claimedMedia.insert(post.homeFeedContentKey)
-        }
-
-        func mediaKey(_ post: CountryPost) -> String { post.homeFeedContentKey }
-
-        // Full same-slug inventories (ranked first, then catalog) so shelves stay on-category.
-        // Dedupe by media key so two channels posting the same file never sit back-to-back.
-        func sameSlugQueue(_ slug: String) -> [CountryPost] {
-            var seenIDs = Set<String>()
-            var seenMedia = Set<String>()
-            var out: [CountryPost] = []
-            for post in ranked + catalogPool {
-                guard YouTubeCatalogService.parentHubSlug(for: post) == slug else { continue }
-                guard seenIDs.insert(post.id).inserted else { continue }
-                guard seenMedia.insert(mediaKey(post)).inserted else { continue }
-                out.append(post)
-            }
-            return out
-        }
-
-        /// Peek how many unique (unclaimed) titles a slug can still fill — no claim yet.
-        func available(_ posts: [CountryPost], limit: Int) -> [CountryPost] {
-            var out: [CountryPost] = []
-            var localIDs = Set<String>()
-            var localMedia = Set<String>()
-            for post in posts {
-                guard !claimedIDs.contains(post.id), localIDs.insert(post.id).inserted else { continue }
-                let key = mediaKey(post)
-                guard !claimedMedia.contains(key), localMedia.insert(key).inserted else { continue }
-                if let last = out.last, mediaKey(last) == key { continue }
-                out.append(post)
-                if out.count >= limit { break }
-            }
-            return out
+            claimedMedia.insert(mediaKey(post))
         }
 
         func claim(_ posts: [CountryPost], limit: Int) -> [CountryPost] {
             var out: [CountryPost] = []
+            out.reserveCapacity(min(limit, posts.count))
             for post in posts {
                 guard !claimedIDs.contains(post.id) else { continue }
                 let key = mediaKey(post)
                 guard !claimedMedia.contains(key) else { continue }
-                if let last = out.last, mediaKey(last) == key { continue }
                 claimedIDs.insert(post.id)
                 claimedMedia.insert(key)
                 out.append(post)
@@ -1144,36 +1169,18 @@ struct YouTubeAppView: View {
             return out
         }
 
-        // Because you watched — same-slug / related only (never pad with random genres).
-        let becauseSeed: CountryPost?
+        // Because you watched — dense only; same-slug from buckets (no relatedVideos over allVideos).
         if hubsRailsDense {
-            let historyOrdered = catalog.historyVideos(from: allVideos)
-                .filter { !$0.isReel && PlayPlatformBridge.isHubsForYouLongForm($0) }
-            becauseSeed =
-                historyOrdered.first
-                ?? continueWatching.first
+            let seed =
+                continueWatching.first
                 ?? appState.hubPlaybackPost
-            if let seed = becauseSeed {
+            if let seed {
                 claimedIDs.insert(seed.id)
                 claimedMedia.insert(mediaKey(seed))
                 let seedSlug = YouTubeCatalogService.parentHubSlug(for: seed)
-                var related = catalog.relatedVideos(to: seed, from: allVideos, limit: railN * 2)
-                    .filter {
-                        $0.id != seed.id
-                            && YouTubeCatalogService.parentHubSlug(for: $0) == seedSlug
-                    }
-                if related.count < railN {
-                    let moreSame = sameSlugQueue(seedSlug).filter { $0.id != seed.id }
-                    var seen = Set(related.map(\.id))
-                    var seenMedia = Set(related.map(mediaKey))
-                    for post in moreSame where seen.insert(post.id).inserted {
-                        guard seenMedia.insert(mediaKey(post)).inserted else { continue }
-                        related.append(post)
-                        if related.count >= railN { break }
-                    }
-                }
+                let related = (buckets[seedSlug] ?? []).filter { $0.id != seed.id }
                 let becausePosts = claim(related, limit: railN)
-                if becausePosts.count >= railN {
+                if becausePosts.count >= minRail {
                     cachedBecauseYouWatched = HubsMoreRail(
                         id: "because-\(seed.id)",
                         title: Self.becauseYouWatchedTitle(for: seed),
@@ -1186,12 +1193,9 @@ struct YouTubeAppView: View {
                 cachedBecauseYouWatched = nil
             }
         } else {
-            becauseSeed = nil
             cachedBecauseYouWatched = nil
         }
 
-        // Vibe shelves — affinity-ordered; STRICT same-slug; ≥15 unique media or skip
-        // and pick the next library category that can hold the floor.
         var slugOrder = HubVideoSeedService.hubOrder
         if !affinity.isEmpty {
             slugOrder.sort {
@@ -1201,31 +1205,35 @@ struct YouTubeAppView: View {
                 return $0 < $1
             }
         }
-        let extras = Set((ranked + catalogPool).map { YouTubeCatalogService.parentHubSlug(for: $0) })
-            .subtracting(slugOrder)
+        let extras = buckets.keys.filter { !slugOrder.contains($0) }
             .sorted { affinity.slugWeight($0) > affinity.slugWeight($1) }
         slugOrder.append(contentsOf: extras)
 
         var vibe: [HubsVibeRail] = []
         for slug in slugOrder {
             guard vibe.count < vibeCount else { break }
-            let candidates = available(sameSlugQueue(slug), limit: railN)
-            // Thin category — leave inventory unclaimed and try the next library slug.
-            guard candidates.count >= railN else { continue }
-            let posts = claim(candidates, limit: railN)
-            guard posts.count >= railN else { continue }
+            let seed = buckets[slug] ?? []
+            let posts = claim(seed, limit: railN)
+            // Thin category — leave unclaimed leftovers for later rails; try next library slug.
+            // First hop accepts soft floor; dense requires the full 15.
+            guard posts.count >= minRail else {
+                // Unclaim so a later slug/people rail can use these titles.
+                for post in posts {
+                    claimedIDs.remove(post.id)
+                    claimedMedia.remove(mediaKey(post))
+                }
+                continue
+            }
             let title = YouTubeHomeFilter(rawValue: slug)?.title ?? slug.capitalized
             vibe.append(HubsVibeRail(slug: slug, title: title, posts: posts))
         }
         cachedVibeRails = vibe
 
-        // People like you — remaining ranked stream, media-unique, no repeats.
         let peopleCandidates = ranked.filter {
             !claimedIDs.contains($0.id) && !claimedMedia.contains(mediaKey($0))
         }
         cachedPeopleRail = claim(peopleCandidates, limit: railN)
 
-        // More-to-watch chunks — leftover ranked titles only (still unique).
         var more: [HubsMoreRail] = []
         let rest = ranked.filter {
             !claimedIDs.contains($0.id) && !claimedMedia.contains(mediaKey($0))
@@ -1236,11 +1244,12 @@ struct YouTubeAppView: View {
         ]
         var offset = 0
         var row = 0
+        let moreFloor = hubsRailsDense ? railN : max(4, minRail)
         while offset < rest.count, row < moreRows {
             let window = Array(rest[offset..<min(offset + railN * 2, rest.count)])
             let slice = claim(window, limit: railN)
             offset += railN
-            guard slice.count >= railN else { break }
+            guard slice.count >= moreFloor else { break }
             let title = fillerTitles[min(row, fillerTitles.count - 1)]
             more.append(HubsMoreRail(id: "more-\(row)", title: title, posts: slice))
             row += 1
@@ -2335,10 +2344,13 @@ struct YouTubeAppView: View {
             return
         }
         let thumbPx = YouTubeMediaLayout.hubsListThumbMaxPixel
-        // Visible head only — never refilter vibe rails or slug-prefetch on warm.
-        let head = stableDiscoverVideos.isEmpty
-            ? videos.filter { !$0.isReel && $0.playableVideoURL != nil }
-            : stableDiscoverVideos
+        // Visible head only — never filter the full catalog on MainActor (that froze Hubs).
+        let head: [CountryPost]
+        if !stableDiscoverVideos.isEmpty {
+            head = stableDiscoverVideos
+        } else {
+            head = Array(videos.prefix(12))
+        }
         let warmBand = Array(head.prefix(4))
         ImageCache.shared.prefetchHubsListThumbnails(warmBand, maxPixelSize: thumbPx)
         let needFrame0 = warmBand
