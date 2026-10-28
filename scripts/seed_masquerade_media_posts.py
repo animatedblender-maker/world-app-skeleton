@@ -437,16 +437,40 @@ def main() -> int:
         print("dry-run only — re-run with --apply to write")
         return 0
 
-    conn = psycopg2.connect(
-        db_url,
-        connect_timeout=30,
-        keepalives=1,
-        keepalives_idle=30,
-        keepalives_interval=10,
-        keepalives_count=5,
-        options="-c statement_timeout=120000",
-    )
-    conn.autocommit = False
+    def connect():
+        c = psycopg2.connect(
+            db_url,
+            connect_timeout=30,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=5,
+            options="-c statement_timeout=120000",
+        )
+        c.autocommit = False
+        return c
+
+    def reconnect(reason: str):
+        nonlocal conn, cur
+        print(f"  reconnecting after: {reason}", flush=True)
+        try:
+            conn.close()
+        except Exception:
+            pass
+        import time
+
+        for attempt in range(1, 9):
+            try:
+                time.sleep(min(60, 2**attempt))
+                conn = connect()
+                cur = conn.cursor(cursor_factory=RealDictCursor)
+                print(f"  reconnected (attempt {attempt})", flush=True)
+                return
+            except Exception as exc:
+                print(f"  reconnect failed {attempt}: {exc}", flush=True)
+        raise RuntimeError(f"could not reconnect after: {reason}")
+
+    conn = connect()
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
     # Resolve spaces
@@ -519,13 +543,51 @@ def main() -> int:
                 inserted += 1
                 comments_n += seed_comments(cur, row["id"], author_id, cand.get("pack"), personas)
         except Exception as exc:
-            print(f"  error {cand['pack_id']}: {exc}", file=sys.stderr)
-            conn.rollback()
-            personas = ensure_seed_personas(cur, min_available=32)
+            msg = str(exc)
+            print(f"  error {cand['pack_id']}: {msg}", file=sys.stderr)
+            transient = any(
+                x in msg.lower()
+                for x in (
+                    "ssl",
+                    "eof",
+                    "timeout",
+                    "timed out",
+                    "can't assign",
+                    "eaddrnotavail",
+                    "enotfound",
+                    "connection",
+                    "server closed",
+                    "could not receive",
+                    "could not send",
+                )
+            )
+            try:
+                conn.rollback()
+            except Exception:
+                transient = True
+            if transient:
+                try:
+                    reconnect(msg[:120])
+                    personas = ensure_seed_personas(cur, min_available=32)
+                    conn.commit()
+                except Exception as recon_exc:
+                    print(f"  FATAL reconnect: {recon_exc}", file=sys.stderr)
+                    return 1
+            else:
+                try:
+                    personas = ensure_seed_personas(cur, min_available=32)
+                except Exception:
+                    reconnect(msg[:120])
+                    personas = ensure_seed_personas(cur, min_available=32)
+                    conn.commit()
             continue
 
         if i % 50 == 0:
-            conn.commit()
+            try:
+                conn.commit()
+            except Exception as exc:
+                reconnect(str(exc)[:120])
+                continue
             print(
                 f"  … {i}/{len(planned)} inserted={inserted} skipped={skipped} comments={comments_n}",
                 flush=True,
