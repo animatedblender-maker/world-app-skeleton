@@ -38,7 +38,9 @@ SPACE_SOURCES = {
 # Mixed high-comment dump (progress :8782) — one Space per source subreddit.
 MIX_ROOT = PACKS_ROOT / "SecretsStrangeMix"
 CONFESSION_MIX_ROOT = PACKS_ROOT / "ConfessionAdultMix"
-# Extra mix roots (confession adult mix → secrets only)
+# Confession adult mix → Secrets + Confessions (+ any themed slug on the pack).
+CONFESSION_MIX_SPACES = ("secrets", "confessions")
+# Extra mix roots
 EXTRA_MIX_ROOTS = [CONFESSION_MIX_ROOT] if CONFESSION_MIX_ROOT.exists() else []
 
 # Canonical catalog (no duplicate rooms).
@@ -570,13 +572,23 @@ def ensure_seed_personas(cur, min_available: int = 32) -> List[Dict[str, Any]]:
 
 
 def ensure_space(cur, slug: str) -> Optional[Dict[str, Any]]:
-    """Create or revive an adult_public free Space for Masquerade (canonical slug)."""
+    """Create or revive an adult_public free Space for Masquerade (canonical slug).
+
+    Unknown slugs get a new room (title-cased) instead of collapsing into secrets —
+    confession mix and themed packs may need extra Spaces on the fly.
+    """
     slug = canonical_space_slug(slug)
     meta = THEMED_SPACES.get(slug)
     if not meta:
-        # Do not create legacy duplicate rooms — map unknown → secrets hub.
-        slug = "secrets"
-        meta = THEMED_SPACES["secrets"]
+        # Create a fresh themed room when required (do not silently dump into secrets).
+        pretty = slug.replace("_", " ").replace("-", " ").strip().title() or "Community"
+        meta = (
+            pretty,
+            f"Anonymous posts in {pretty}. Leave your identity outside.",
+            "confessions",
+            [slug, "confessions"],
+        )
+        print(f"  creating new space: {slug} ({pretty})", flush=True)
     title, description, category, tags = meta
     display_slug = "HighlyStrange" if slug == "highlystrange" else slug
     cur.execute(
@@ -954,28 +966,77 @@ def main() -> int:
             total_inserted += inserted
             total_skipped += skipped
 
-    # Confession adult mix → Masquerade secrets ONLY (anonymous adult-interest + ~40% legal NSFW).
+    # Confession adult mix → Secrets + Confessions (and any pack-declared themed space).
+    # Anonymous adult-interest + ~40% legal NSFW. Create missing Spaces on the fly.
     if CONFESSION_MIX_ROOT.exists():
         conf_packs = pack_dirs(CONFESSION_MIX_ROOT)[:LIMIT]
-        print(f"confession_mix: {len(conf_packs)} packs in {CONFESSION_MIX_ROOT} → secrets only")
-        space = spaces_by_slug.get("secrets") or ensure_space(cur, "secrets")
-        if space and conf_packs:
-            spaces_by_slug["secrets"] = space
-            # Prefer confession_mix upload log when present
-            if "confession_mix" not in upload_indexes:
-                upload_indexes["confession_mix"] = load_upload_log_index(
-                    PACKS_ROOT / "uploaded_confession_mix_r2.jsonl"
-                )
+        targets = list(CONFESSION_MIX_SPACES)
+        print(
+            f"confession_mix: {len(conf_packs)} packs in {CONFESSION_MIX_ROOT} → {', '.join(targets)}",
+            flush=True,
+        )
+        if "confession_mix" not in upload_indexes:
+            upload_indexes["confession_mix"] = load_upload_log_index(
+                PACKS_ROOT / "uploaded_confession_mix_r2.jsonl"
+            )
+        # Extra rooms only when the pack explicitly names a Masquerade space
+        # (or maps to a known themed slug). Raw Reddit sub names do not mint rooms.
+        by_extra: Dict[str, List[Path]] = {}
+        known = set(THEMED_SPACES) | set(SPACE_MERGE_INTO.values()) | set(targets)
+        for pack in conf_packs:
+            post_path = pack / "post.json"
+            if not post_path.exists():
+                continue
+            try:
+                post = json.loads(post_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            explicit = post.get("masquerade_space") or post.get("space")
+            raw = str(explicit or post.get("subreddit") or "").strip().lower()
+            if not raw:
+                continue
+            extra = canonical_space_slug(raw)
+            if not extra or extra in targets or extra == "confession_mix":
+                continue
+            # Explicit field → create room if needed. Subreddit → only known themes.
+            if explicit or extra in known:
+                by_extra.setdefault(extra, []).append(pack)
+
+        for slug in targets:
+            space = spaces_by_slug.get(slug) or ensure_space(cur, slug)
+            if not space or not conf_packs:
+                continue
+            spaces_by_slug[slug] = space
             inserted, skipped = seed_pack_list(
-                "secrets",
+                slug,
                 space,
                 conf_packs,
                 "confession_mix",
-                source_prefix="reddit:confession_mix:secrets",
+                source_prefix=f"reddit:confession_mix:{slug}",
             )
             refresh_space_count(space)
             print(
-                f"  confession_mix→secrets: inserted={inserted} skipped={skipped} packs={len(conf_packs)}",
+                f"  confession_mix→{slug}: inserted={inserted} skipped={skipped} packs={len(conf_packs)}",
+                flush=True,
+            )
+            total_inserted += inserted
+            total_skipped += skipped
+
+        for slug, packs in sorted(by_extra.items()):
+            space = spaces_by_slug.get(slug) or ensure_space(cur, slug)
+            if not space or not packs:
+                continue
+            spaces_by_slug[slug] = space
+            inserted, skipped = seed_pack_list(
+                slug,
+                space,
+                packs,
+                "confession_mix",
+                source_prefix=f"reddit:confession_mix:{slug}",
+            )
+            refresh_space_count(space)
+            print(
+                f"  confession_mix→{slug} (extra): inserted={inserted} skipped={skipped} packs={len(packs)}",
                 flush=True,
             )
             total_inserted += inserted
