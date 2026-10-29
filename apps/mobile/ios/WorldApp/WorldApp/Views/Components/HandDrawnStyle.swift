@@ -33,8 +33,8 @@ struct HandDrawnPlusIcon: View {
     }
 }
 
-/// Matterya like / dislike mark — hand-inked thumb, never the system SF Symbol.
-/// `up: true` = like; `up: false` = dislike (same glyph, flipped).
+/// Matterya like / dislike mark — crisp custom icon (not SF Symbol, not sketch).
+/// Pad carries a cut Matterya **M**. `up: true` = like; `up: false` = dislike (flipped).
 struct MatteryaThumbIcon: View {
     var up: Bool = true
     var filled: Bool = false
@@ -43,15 +43,33 @@ struct MatteryaThumbIcon: View {
 
     var body: some View {
         Canvas { context, canvasSize in
-            let w = canvasSize.width
-            let h = canvasSize.height
-            let thumb = Self.thumbPath(width: w, height: h)
+            let thumb = Self.thumbPath(in: canvasSize)
+            let strokeW = max(1.35, size * 0.085)
 
             if filled {
-                HandDrawnStroke.brushFill(thumb, in: context, color: color)
-                HandDrawnStroke.sketch(thumb, in: context, color: color, width: max(1.35, size * 0.08))
+                // Solid thumb with M punched out of the pad (brand cut).
+                let cut = Self.mRibbonPath(in: canvasSize)
+                context.drawLayer { layer in
+                    layer.fill(thumb, with: .color(color))
+                    layer.blendMode = .destinationOut
+                    layer.fill(cut, with: .color(.black))
+                }
             } else {
-                HandDrawnStroke.sketch(thumb, in: context, color: color, width: max(1.55, size * 0.095))
+                // Clean outline + stroked M monogram in the pad.
+                context.stroke(
+                    thumb,
+                    with: .color(color),
+                    style: StrokeStyle(lineWidth: strokeW, lineCap: .round, lineJoin: .round)
+                )
+                context.stroke(
+                    Self.mStrokePath(in: canvasSize),
+                    with: .color(color),
+                    style: StrokeStyle(
+                        lineWidth: max(1.1, size * 0.07),
+                        lineCap: .round,
+                        lineJoin: .round
+                    )
+                )
             }
         }
         .frame(width: size, height: size)
@@ -59,37 +77,91 @@ struct MatteryaThumbIcon: View {
         .accessibilityHidden(true)
     }
 
-    /// Organic thumb pad + slightly crooked stalk — paper-ink feel.
-    private static func thumbPath(width w: CGFloat, height h: CGFloat) -> Path {
+    /// Geometric thumb: rounded pad + straight knuckle column (icon, not ink blob).
+    private static func thumbPath(in size: CGSize) -> Path {
+        let w = size.width
+        let h = size.height
         var path = Path()
-        // Pad (top blob)
-        let padTop = CGPoint(x: w * 0.52, y: h * 0.08)
-        let padRight = CGPoint(x: w * 0.88, y: h * 0.34)
-        let padBot = CGPoint(x: w * 0.62, y: h * 0.52)
-        let padLeft = CGPoint(x: w * 0.28, y: h * 0.30)
-        path.move(to: padTop)
-        path.addQuadCurve(to: padRight, control: CGPoint(x: w * 0.86, y: h * 0.10))
-        path.addQuadCurve(to: padBot, control: CGPoint(x: w * 0.96, y: h * 0.48))
-        path.addQuadCurve(to: padLeft, control: CGPoint(x: w * 0.38, y: h * 0.54))
-        path.addQuadCurve(to: padTop, control: CGPoint(x: w * 0.22, y: h * 0.12))
 
-        // Stalk / knuckle column under the pad
-        var stalk = Path()
-        stalk.move(to: CGPoint(x: w * 0.40, y: h * 0.46))
-        stalk.addQuadCurve(
-            to: CGPoint(x: w * 0.36, y: h * 0.92),
-            control: CGPoint(x: w * 0.30, y: h * 0.68)
+        // Pad — upright rounded tip above a crisp stalk.
+        path.move(to: CGPoint(x: w * 0.42, y: h * 0.46))
+        path.addQuadCurve(
+            to: CGPoint(x: w * 0.38, y: h * 0.18),
+            control: CGPoint(x: w * 0.30, y: h * 0.36)
         )
-        stalk.addQuadCurve(
-            to: CGPoint(x: w * 0.64, y: h * 0.90),
-            control: CGPoint(x: w * 0.50, y: h * 0.98)
+        path.addQuadCurve(
+            to: CGPoint(x: w * 0.58, y: h * 0.06),
+            control: CGPoint(x: w * 0.42, y: h * 0.04)
         )
-        stalk.addQuadCurve(
-            to: CGPoint(x: w * 0.60, y: h * 0.48),
-            control: CGPoint(x: w * 0.72, y: h * 0.70)
+        path.addQuadCurve(
+            to: CGPoint(x: w * 0.86, y: h * 0.28),
+            control: CGPoint(x: w * 0.78, y: h * 0.08)
         )
-        stalk.closeSubpath()
-        path.addPath(stalk)
+        path.addQuadCurve(
+            to: CGPoint(x: w * 0.70, y: h * 0.48),
+            control: CGPoint(x: w * 0.92, y: h * 0.44)
+        )
+
+        // Knuckle column — rounded rectangle under the pad.
+        path.addLine(to: CGPoint(x: w * 0.70, y: h * 0.78))
+        path.addQuadCurve(
+            to: CGPoint(x: w * 0.58, y: h * 0.92),
+            control: CGPoint(x: w * 0.70, y: h * 0.92)
+        )
+        path.addLine(to: CGPoint(x: w * 0.30, y: h * 0.92))
+        path.addQuadCurve(
+            to: CGPoint(x: w * 0.22, y: h * 0.78),
+            control: CGPoint(x: w * 0.22, y: h * 0.92)
+        )
+        path.addLine(to: CGPoint(x: w * 0.22, y: h * 0.50))
+        path.addQuadCurve(
+            to: CGPoint(x: w * 0.42, y: h * 0.46),
+            control: CGPoint(x: w * 0.22, y: h * 0.46)
+        )
+        path.closeSubpath()
+        return path
+    }
+
+    private static func mBox(in size: CGSize) -> (left: CGFloat, right: CGFloat, top: CGFloat, bot: CGFloat, midX: CGFloat, midY: CGFloat) {
+        let w = size.width
+        let h = size.height
+        let left = w * 0.48
+        let right = w * 0.78
+        let top = h * 0.15
+        let bot = h * 0.39
+        return (left, right, top, bot, (left + right) / 2, top + (bot - top) * 0.62)
+    }
+
+    /// Open polyline M for outline mode.
+    private static func mStrokePath(in size: CGSize) -> Path {
+        let b = mBox(in: size)
+        var m = Path()
+        m.move(to: CGPoint(x: b.left, y: b.bot))
+        m.addLine(to: CGPoint(x: b.left, y: b.top))
+        m.addLine(to: CGPoint(x: b.midX, y: b.midY))
+        m.addLine(to: CGPoint(x: b.right, y: b.top))
+        m.addLine(to: CGPoint(x: b.right, y: b.bot))
+        return m
+    }
+
+    /// Thick closed M for destinationOut cut when filled.
+    private static func mRibbonPath(in size: CGSize) -> Path {
+        let b = mBox(in: size)
+        let t = max(size.width * 0.048, 1.15)
+        var path = Path()
+        path.move(to: CGPoint(x: b.left - t, y: b.bot))
+        path.addLine(to: CGPoint(x: b.left - t, y: b.top))
+        path.addLine(to: CGPoint(x: b.left + t, y: b.top))
+        path.addLine(to: CGPoint(x: b.midX, y: b.midY - t * 0.2))
+        path.addLine(to: CGPoint(x: b.right - t, y: b.top))
+        path.addLine(to: CGPoint(x: b.right + t, y: b.top))
+        path.addLine(to: CGPoint(x: b.right + t, y: b.bot))
+        path.addLine(to: CGPoint(x: b.right - t, y: b.bot))
+        path.addLine(to: CGPoint(x: b.right - t, y: b.top + (b.bot - b.top) * 0.40))
+        path.addLine(to: CGPoint(x: b.midX, y: b.midY + t * 1.05))
+        path.addLine(to: CGPoint(x: b.left + t, y: b.top + (b.bot - b.top) * 0.40))
+        path.addLine(to: CGPoint(x: b.left + t, y: b.bot))
+        path.closeSubpath()
         return path
     }
 }

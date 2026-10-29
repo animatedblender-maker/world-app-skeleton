@@ -392,7 +392,7 @@ struct AnonymousPostCard: View {
 
     private var myVote: Int { post.myVote ?? 0 }
 
-    /// 👍 score 👎 — Matterya hand-inked thumbs (like = upvote, dislike = downvote).
+    /// 👍 score 👎 — Matterya M-mark thumb icons (like = upvote, dislike = downvote).
     private var likeDislikeCluster: some View {
         let liked = myVote > 0
         let disliked = myVote < 0
