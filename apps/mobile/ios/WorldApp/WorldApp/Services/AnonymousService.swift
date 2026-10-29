@@ -154,9 +154,10 @@ enum AnonymousService {
     static func listComments(
         postId: String,
         cursor: String? = nil,
-        limit: Int = 40
+        limit: Int = 500
     ) async throws -> AnonymousPage<AnonymousComment> {
-        var q: [String: String] = ["limit": "\(min(max(limit, 1), 80))"]
+        // API returns a nested tree (up to 500). Keep headroom so sibling replies aren't clipped.
+        var q: [String: String] = ["limit": "\(min(max(limit, 1), 500))"]
         if let cursor, !cursor.isEmpty { q["cursor"] = cursor }
         // Dedicated path — generic getPage + convertFromSnakeCase silently dropped comments.
         let req = try await makeRequest(

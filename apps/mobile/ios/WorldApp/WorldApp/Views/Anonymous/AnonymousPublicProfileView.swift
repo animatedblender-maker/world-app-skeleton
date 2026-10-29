@@ -90,10 +90,9 @@ struct AnonymousPublicProfileView: View {
                                     store.pushSpace(slug: slug)
                                 }
                             },
-                            onToggleLike: {
+                            onVote: { value in
                                 Task {
-                                    let next = (post.myVote ?? 0) > 0 ? 0 : 1
-                                    if let updated = await store.vote(post: post, value: next) {
+                                    if let updated = await store.vote(post: post, value: value) {
                                         if let i = posts.firstIndex(where: { $0.id == updated.id }) {
                                             posts[i] = updated
                                         }

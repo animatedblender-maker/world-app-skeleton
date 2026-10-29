@@ -31,10 +31,9 @@ struct AnonymousPostDetailView: View {
                             store.pushSpace(slug: slug)
                         }
                     },
-                    onToggleLike: {
+                    onVote: { value in
                         Task {
-                            let next = (localPost.myVote ?? 0) > 0 ? 0 : 1
-                            if let updated = await store.vote(post: localPost, value: next) {
+                            if let updated = await store.vote(post: localPost, value: value) {
                                 localPost = updated
                             }
                         }
@@ -78,10 +77,9 @@ struct AnonymousPostDetailView: View {
                                 comment: row.comment,
                                 depth: row.depth,
                                 isPostAuthor: row.comment.authorProfileId == localPost.authorProfileId,
-                                onToggleLike: {
+                                onVote: { value in
                                     Task {
-                                        let next = (row.comment.myVote ?? 0) > 0 ? 0 : 1
-                                        if let updated = await store.voteComment(row.comment, value: next) {
+                                        if let updated = await store.voteComment(row.comment, value: value) {
                                             replaceComment(updated)
                                         }
                                     }
@@ -125,13 +123,53 @@ struct AnonymousPostDetailView: View {
             for (index, item) in items.enumerated() {
                 let rowId = "\(prefix)\(item.id)#\(depth)-\(index)"
                 out.append((rowId, item, depth))
+                // Every sibling reply stays in this same thread — walk the full replies array.
                 if let replies = item.replies, !replies.isEmpty {
                     walk(replies, depth: depth + 1, prefix: rowId + "/")
                 }
             }
         }
-        walk(comments, depth: 0, prefix: "")
+        walk(Self.nestCommentTree(comments), depth: 0, prefix: "")
         return out
+    }
+
+    /// Rebuild a proper tree so every sibling reply hangs under its parent (not only the first).
+    private static func nestCommentTree(_ items: [AnonymousComment]) -> [AnonymousComment] {
+        var flat: [AnonymousComment] = []
+        func flatten(_ list: [AnonymousComment]) {
+            for var c in list {
+                let kids = c.replies ?? []
+                c.replies = nil
+                flat.append(c)
+                if !kids.isEmpty { flatten(kids) }
+            }
+        }
+        flatten(items)
+
+        var byId: [String: AnonymousComment] = [:]
+        byId.reserveCapacity(flat.count)
+        for c in flat { byId[c.id] = c }
+
+        var childIds: [String: [String]] = [:]
+        var rootIds: [String] = []
+        var seen = Set<String>()
+        for c in flat {
+            guard seen.insert(c.id).inserted else { continue }
+            let parent = c.parentCommentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !parent.isEmpty, byId[parent] != nil {
+                childIds[parent, default: []].append(c.id)
+            } else {
+                rootIds.append(c.id)
+            }
+        }
+
+        func attach(_ id: String) -> AnonymousComment? {
+            guard var node = byId[id] else { return nil }
+            let kids = (childIds[id] ?? []).compactMap(attach)
+            node.replies = kids.isEmpty ? nil : kids
+            return node
+        }
+        return rootIds.compactMap(attach)
     }
 
     private var commentsSectionHeader: some View {
@@ -247,34 +285,32 @@ struct AnonymousPostDetailView: View {
         commentsError = nil
         // Paint warm/disk cache immediately so the thread never sits empty.
         if comments.isEmpty, let warm = AnonymousCommentsWarmCache.shared.cached(localPost.id) {
-            comments = warm
+            comments = Self.nestCommentTree(warm)
             hasCompletedInitialLoad = true
         }
 
-        let loaded = await AnonymousCommentsWarmCache.shared.load(localPost.id)
-        if !loaded.isEmpty {
-            comments = loaded
-            if localPost.commentCount == nil || (localPost.commentCount ?? 0) < countComments(loaded) {
-                localPost.commentCount = countComments(loaded)
-            }
-            hasCompletedInitialLoad = true
-            return
-        }
-
-        // Cache miss / empty warm — one direct fetch (API no longer signs media first).
+        // Always refresh from network so every sibling reply lands in the tree
+        // (warm cache alone can freeze a truncated / flat snapshot).
         do {
-            let page = try await AnonymousService.listComments(postId: localPost.id)
-            comments = page.items
-            if !page.items.isEmpty {
-                AnonymousCommentsWarmCache.shared.store(localPost.id, comments: page.items)
+            let page = try await AnonymousService.listComments(postId: localPost.id, limit: 500)
+            let nested = Self.nestCommentTree(page.items)
+            comments = nested
+            if !nested.isEmpty {
+                AnonymousCommentsWarmCache.shared.store(localPost.id, comments: nested)
             }
-            let n = countComments(page.items)
+            let n = countComments(nested)
             if localPost.commentCount == nil || (localPost.commentCount ?? 0) < n {
                 localPost.commentCount = n
             }
         } catch let err as AnonymousError {
             if comments.isEmpty {
-                commentsError = err.errorDescription ?? "Couldn’t load comments."
+                // Fall back to warm load when offline / cold API.
+                let loaded = await AnonymousCommentsWarmCache.shared.load(localPost.id, limit: 500)
+                if !loaded.isEmpty {
+                    comments = Self.nestCommentTree(loaded)
+                } else {
+                    commentsError = err.errorDescription ?? "Couldn’t load comments."
+                }
             }
         } catch {
             if comments.isEmpty {
@@ -304,7 +340,8 @@ struct AnonymousPostDetailView: View {
                 postId: localPost.id,
                 input: AnonymousCreateCommentInput(body: body, parentCommentId: replyParentId)
             )
-            comments.append(created)
+            // Nest under the parent so sibling replies share one thread.
+            comments = Self.nestCommentTree(comments + [created])
             AnonymousCommentsWarmCache.shared.store(localPost.id, comments: comments)
             replyBody = ""
             replyParentId = nil
@@ -321,7 +358,12 @@ struct AnonymousPostDetailView: View {
         func walk(_ items: inout [AnonymousComment]) -> Bool {
             for i in items.indices {
                 if items[i].id == updated.id {
-                    items[i] = updated
+                    var merged = updated
+                    // Keep nested replies when a vote payload omits them.
+                    if merged.replies == nil {
+                        merged.replies = items[i].replies
+                    }
+                    items[i] = merged
                     return true
                 }
                 if var replies = items[i].replies, walk(&replies) {
@@ -342,13 +384,64 @@ private struct AnonymousCommentRowView: View {
     let depth: Int
     /// Matterya term for the post writer (never Reddit “OP”).
     var isPostAuthor: Bool = false
-    var onToggleLike: (() -> Void)? = nil
+    var onVote: ((Int) -> Void)? = nil
     var onReply: () -> Void
 
     private var isOfficialMatterya: Bool {
         comment.authorUsername
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() == "matterya"
+    }
+
+    private var myVote: Int { comment.myVote ?? 0 }
+
+    private var commentLikeDislikeCluster: some View {
+        let liked = myVote > 0
+        let disliked = myVote < 0
+        return HStack(spacing: 0) {
+            Button {
+                onVote?(liked ? 0 : 1)
+            } label: {
+                MatteryaThumbIcon(
+                    up: true,
+                    filled: liked,
+                    size: 13,
+                    color: liked ? Theme.accent : Theme.inkMuted
+                )
+                .padding(.horizontal, 7)
+                .padding(.vertical, 5)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(liked ? "Remove like" : "Like")
+
+            Text("\((comment.score ?? 0))")
+                .font(.caption.weight(.bold))
+                .monospacedDigit()
+                .foregroundStyle(liked ? Theme.accent : (disliked ? Theme.danger : Theme.inkMuted))
+                .padding(.horizontal, 1)
+
+            Button {
+                onVote?(disliked ? 0 : -1)
+            } label: {
+                MatteryaThumbIcon(
+                    up: false,
+                    filled: disliked,
+                    size: 13,
+                    color: disliked ? Theme.danger : Theme.inkMuted
+                )
+                .padding(.horizontal, 7)
+                .padding(.vertical, 5)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(disliked ? "Remove dislike" : "Dislike")
+        }
+        .background(
+            (liked || disliked) ? Theme.canvasMuted : Color.clear,
+            in: Capsule()
+        )
+        .disabled(onVote == nil)
     }
 
     var body: some View {
@@ -412,28 +505,7 @@ private struct AnonymousCommentRowView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 HStack(spacing: 14) {
-                    Button {
-                        onToggleLike?()
-                    } label: {
-                        let liked = (comment.myVote ?? 0) > 0
-                        HStack(spacing: 4) {
-                            Image(systemName: liked ? "heart.fill" : "heart")
-                                .font(.system(size: 12, weight: .semibold))
-                            Text("\((comment.score ?? 0))")
-                                .font(.caption.weight(.bold))
-                                .monospacedDigit()
-                        }
-                        .foregroundStyle(liked ? Theme.danger : Theme.inkMuted)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
-                        .background(
-                            (liked ? Theme.danger.opacity(0.10) : Color.clear),
-                            in: Capsule()
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(onToggleLike == nil)
-                    .accessibilityLabel((comment.myVote ?? 0) > 0 ? "Unlike" : "Like")
+                    commentLikeDislikeCluster
 
                     Button(action: onReply) {
                         Text("Reply")

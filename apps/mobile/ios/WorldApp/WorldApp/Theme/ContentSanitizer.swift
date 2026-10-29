@@ -42,7 +42,7 @@ enum ContentSanitizer {
 
     static func clean(_ value: String?) -> String? {
         guard let value else { return nil }
-        let trimmed = rebrandCompetitorNames(stripInternalMarkers(value))
+        let trimmed = rebrandCompetitorNames(stripInternalMarkers(stripSquareBracketTags(value)))
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !looksLikeId(trimmed) else { return nil }
         // Final gate: pure control / stamp leftovers never reach UI.
@@ -55,40 +55,85 @@ enum ContentSanitizer {
         return trimmed
     }
 
-    /// User-facing copy never says competitor brand names — hashtags, captions, comments, bios.
-    /// Longer tokens first so `subreddit` → `matterya` (not `submatterya`).
-    /// `#tiktok` / `tik tok` / Arabic `تيك توك` / `تيكتوك` → `matterya`.
-    /// Compiled once — Reddit image cards hit `clean` many times per SwiftUI body pass.
-    private static let rebrandRegexes: [NSRegularExpression] = {
-        let tokens = [
-            "تيك توك",
-            "تيك\u{200C}توك",
-            "تيك-توك",
-            "تيكتوك",
-            "tik tok",
-            "subreddit",
-            "reddit",
-            "tiktok",
+    /// User-facing copy: never show competitor / source-platform names.
+    /// `subreddit` → `space`, `reddit` → `masquerade`, TikTok → `matterya`.
+    /// Longer tokens first so `subreddit` is not partially rewritten.
+    /// Compiled once — image cards hit `clean` many times per SwiftUI body pass.
+    private static let rebrandPairs: [(NSRegularExpression, String)] = {
+        // Patterns (not literal escape) so word boundaries / slash forms work.
+        let pairs: [(String, String)] = [
+            ("تيك توك", "matterya"),
+            ("تيك\u{200C}توك", "matterya"),
+            ("تيك-توك", "matterya"),
+            ("تيكتوك", "matterya"),
+            ("tik\\s*tok", "matterya"),
+            ("subreddits", "spaces"),
+            ("subreddit", "space"),
+            // Whole word only — never rewrite "credited" etc.
+            ("\\breddit\\b", "masquerade"),
+            ("\\btiktok\\b", "matterya"),
+            // Reddit path shorthand r/funny → space/funny
+            ("\\br/", "space/"),
         ]
-        return tokens.compactMap { token in
-            let pattern = NSRegularExpression.escapedPattern(for: token)
-            return try? NSRegularExpression(pattern: pattern, options: .caseInsensitive)
+        return pairs.compactMap { pattern, replacement in
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
+                return nil
+            }
+            return (regex, replacement)
         }
     }()
 
     static func rebrandCompetitorNames(_ value: String) -> String {
         var out = value
-        for regex in rebrandRegexes {
-            // Cheap pre-check: skip compile-path work when the needle is absent.
-            // NSRegularExpression has no cheap contains; firstMatch is fine for short captions.
+        for (regex, replacement) in rebrandPairs {
             let full = NSRange(out.startIndex..<out.endIndex, in: out)
             guard regex.firstMatch(in: out, options: [], range: full) != nil else { continue }
             out = regex.stringByReplacingMatches(
                 in: out,
                 options: [],
                 range: full,
-                withTemplate: "matterya"
+                withTemplate: replacement
             )
+        }
+        // Reddit shorthand " sub " (spaces required) → Masquerade " space ".
+        out = rebrandStandaloneSub(out)
+        return out
+    }
+
+    /// Always safe for UI — rebrands even when `clean` would drop the string.
+    /// Prefer this over `clean(x) ?? x` so raw "subreddit"/"reddit" never leak.
+    static func displayText(_ value: String?) -> String {
+        guard let value else { return "" }
+        if let cleaned = clean(value) { return cleaned }
+        let rebranded = rebrandCompetitorNames(stripInternalMarkers(stripSquareBracketTags(value)))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return rebranded
+    }
+
+    /// Drop `[pic]`, `[SFW]`, `[CONFESS #N]`, and any other `[...]` tags from Masquerade copy.
+    static func stripSquareBracketTags(_ value: String) -> String {
+        guard value.contains("[") else { return value }
+        var out = value
+        if let regex = try? NSRegularExpression(pattern: #"\[[^\]]*\]"#) {
+            let full = NSRange(out.startIndex..<out.endIndex, in: out)
+            out = regex.stringByReplacingMatches(in: out, options: [], range: full, withTemplate: "")
+        }
+        // Collapse leftover double spaces from removed tags; keep newlines.
+        while out.contains("  ") {
+            out = out.replacingOccurrences(of: "  ", with: " ")
+        }
+        return out
+            .replacingOccurrences(of: " .", with: ".")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Only the bare word with a space on both sides — never touch submit/subtle/subreddit.
+    private static func rebrandStandaloneSub(_ value: String) -> String {
+        var out = value
+        let pairs = [(" SUB ", " SPACE "), (" Sub ", " Space "), (" sub ", " space ")]
+        for (from, to) in pairs {
+            guard out.contains(from) else { continue }
+            out = out.replacingOccurrences(of: from, with: to)
         }
         return out
     }

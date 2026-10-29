@@ -33,6 +33,67 @@ struct HandDrawnPlusIcon: View {
     }
 }
 
+/// Matterya like / dislike mark — hand-inked thumb, never the system SF Symbol.
+/// `up: true` = like; `up: false` = dislike (same glyph, flipped).
+struct MatteryaThumbIcon: View {
+    var up: Bool = true
+    var filled: Bool = false
+    var size: CGFloat = 18
+    var color: Color = Theme.ink
+
+    var body: some View {
+        Canvas { context, canvasSize in
+            let w = canvasSize.width
+            let h = canvasSize.height
+            let thumb = Self.thumbPath(width: w, height: h)
+
+            if filled {
+                HandDrawnStroke.brushFill(thumb, in: context, color: color)
+                HandDrawnStroke.sketch(thumb, in: context, color: color, width: max(1.35, size * 0.08))
+            } else {
+                HandDrawnStroke.sketch(thumb, in: context, color: color, width: max(1.55, size * 0.095))
+            }
+        }
+        .frame(width: size, height: size)
+        .rotationEffect(.degrees(up ? 0 : 180))
+        .accessibilityHidden(true)
+    }
+
+    /// Organic thumb pad + slightly crooked stalk — paper-ink feel.
+    private static func thumbPath(width w: CGFloat, height h: CGFloat) -> Path {
+        var path = Path()
+        // Pad (top blob)
+        let padTop = CGPoint(x: w * 0.52, y: h * 0.08)
+        let padRight = CGPoint(x: w * 0.88, y: h * 0.34)
+        let padBot = CGPoint(x: w * 0.62, y: h * 0.52)
+        let padLeft = CGPoint(x: w * 0.28, y: h * 0.30)
+        path.move(to: padTop)
+        path.addQuadCurve(to: padRight, control: CGPoint(x: w * 0.86, y: h * 0.10))
+        path.addQuadCurve(to: padBot, control: CGPoint(x: w * 0.96, y: h * 0.48))
+        path.addQuadCurve(to: padLeft, control: CGPoint(x: w * 0.38, y: h * 0.54))
+        path.addQuadCurve(to: padTop, control: CGPoint(x: w * 0.22, y: h * 0.12))
+
+        // Stalk / knuckle column under the pad
+        var stalk = Path()
+        stalk.move(to: CGPoint(x: w * 0.40, y: h * 0.46))
+        stalk.addQuadCurve(
+            to: CGPoint(x: w * 0.36, y: h * 0.92),
+            control: CGPoint(x: w * 0.30, y: h * 0.68)
+        )
+        stalk.addQuadCurve(
+            to: CGPoint(x: w * 0.64, y: h * 0.90),
+            control: CGPoint(x: w * 0.50, y: h * 0.98)
+        )
+        stalk.addQuadCurve(
+            to: CGPoint(x: w * 0.60, y: h * 0.48),
+            control: CGPoint(x: w * 0.72, y: h * 0.70)
+        )
+        stalk.closeSubpath()
+        path.addPath(stalk)
+        return path
+    }
+}
+
 struct HandDrawnGlobeStoryRing: View {
     var size: CGFloat = 62
     var highlighted: Bool = true
@@ -250,6 +311,120 @@ struct MatteryaHubsLogoView: View {
         )
         path.closeSubpath()
         return path
+    }
+}
+
+/// Masquerade mark: simple Venetian half-mask (same glyph in header + tab bar).
+struct MatteryaMasqueradeLogoView: View {
+    var size: CGFloat = 26
+    var ink: Color = Color(red: 0.22, green: 0.20, blue: 0.18)
+    var fill: Color = Color(red: 0.97, green: 0.96, blue: 0.93)
+
+    var body: some View {
+        Canvas { context, canvasSize in
+            let w = canvasSize.width
+            let h = canvasSize.height
+            let stroke = max(1.4, size * 0.07)
+
+            // Clean domino silhouette — wide across the eyes, soft cheek dips, no flourishes.
+            var mask = Path()
+            mask.move(to: CGPoint(x: w * 0.06, y: h * 0.46))
+            mask.addQuadCurve(
+                to: CGPoint(x: w * 0.22, y: h * 0.22),
+                control: CGPoint(x: w * 0.05, y: h * 0.28)
+            )
+            mask.addQuadCurve(
+                to: CGPoint(x: w * 0.50, y: h * 0.16),
+                control: CGPoint(x: w * 0.34, y: h * 0.12)
+            )
+            mask.addQuadCurve(
+                to: CGPoint(x: w * 0.78, y: h * 0.22),
+                control: CGPoint(x: w * 0.66, y: h * 0.12)
+            )
+            mask.addQuadCurve(
+                to: CGPoint(x: w * 0.94, y: h * 0.46),
+                control: CGPoint(x: w * 0.95, y: h * 0.28)
+            )
+            mask.addQuadCurve(
+                to: CGPoint(x: w * 0.78, y: h * 0.64),
+                control: CGPoint(x: w * 0.96, y: h * 0.58)
+            )
+            mask.addQuadCurve(
+                to: CGPoint(x: w * 0.50, y: h * 0.72),
+                control: CGPoint(x: w * 0.66, y: h * 0.78)
+            )
+            mask.addQuadCurve(
+                to: CGPoint(x: w * 0.22, y: h * 0.64),
+                control: CGPoint(x: w * 0.34, y: h * 0.78)
+            )
+            mask.addQuadCurve(
+                to: CGPoint(x: w * 0.06, y: h * 0.46),
+                control: CGPoint(x: w * 0.04, y: h * 0.58)
+            )
+            mask.closeSubpath()
+
+            context.fill(mask, with: .color(fill.opacity(0.97)))
+            HandDrawnStroke.sketch(mask, in: context, color: ink, width: stroke)
+
+            // Two simple almond eyes — solid, readable at tab-bar size.
+            func eye(cx: CGFloat) -> Path {
+                var p = Path()
+                let left = cx - w * 0.11
+                let right = cx + w * 0.11
+                let midY = h * 0.44
+                p.move(to: CGPoint(x: left, y: midY))
+                p.addQuadCurve(
+                    to: CGPoint(x: right, y: midY),
+                    control: CGPoint(x: cx, y: midY - h * 0.11)
+                )
+                p.addQuadCurve(
+                    to: CGPoint(x: left, y: midY),
+                    control: CGPoint(x: cx, y: midY + h * 0.10)
+                )
+                p.closeSubpath()
+                return p
+            }
+            HandDrawnStroke.brushFill(eye(cx: w * 0.32), in: context, color: ink.opacity(0.9))
+            HandDrawnStroke.brushFill(eye(cx: w * 0.68), in: context, color: ink.opacity(0.9))
+
+            // Tiny bridge notch between the eyes (classic mask cue).
+            var bridge = Path()
+            bridge.move(to: CGPoint(x: w * 0.46, y: h * 0.36))
+            bridge.addQuadCurve(
+                to: CGPoint(x: w * 0.54, y: h * 0.36),
+                control: CGPoint(x: w * 0.50, y: h * 0.32)
+            )
+            HandDrawnStroke.sketch(bridge, in: context, color: ink.opacity(0.45), width: max(1.0, size * 0.04))
+        }
+        .frame(width: size, height: size)
+        .accessibilityLabel(MatteryaCopy.matteryaMasquerade)
+    }
+}
+
+/// Header brand mark — parallel to PlayBrandMark (Matterya Hubs).
+struct MasqueradeBrandMark: View {
+    var compact: Bool = false
+    var ringSize: CGFloat = 24
+
+    private var wordmark: Text {
+        Text(AppConfig.appName)
+            .font(.system(size: compact ? 16 : 19, weight: .regular, design: .serif))
+            .tracking(0.35)
+        + Text("\u{00A0}Masquerade")
+            .font(compact ? .headline.weight(.bold) : .title3.weight(.bold))
+    }
+
+    var body: some View {
+        HStack(spacing: compact ? 5 : 6) {
+            // Match BottomTabBar Masquerade glyph (same art, same optical size band).
+            MatteryaMasqueradeLogoView(size: compact ? 24 : max(ringSize, 26))
+            wordmark
+                .foregroundStyle(Theme.ink)
+                .matteryaBrandLine(minScale: compact ? 0.78 : 0.84)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(MatteryaCopy.matteryaMasquerade)
     }
 }
 

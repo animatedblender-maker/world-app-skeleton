@@ -50,11 +50,8 @@ struct AnonymousFeedView: View {
                                     store.pushSpace(slug: slug)
                                 }
                             },
-                            onToggleLike: {
-                                Task {
-                                    let next = (post.myVote ?? 0) > 0 ? 0 : 1
-                                    await store.vote(post: post, value: next)
-                                }
+                            onVote: { value in
+                                Task { await store.vote(post: post, value: value) }
                             }
                         ) {
                             store.pushPost(post)

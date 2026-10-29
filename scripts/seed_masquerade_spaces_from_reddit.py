@@ -199,19 +199,18 @@ def pack_dirs(folder: Path) -> List[Path]:
     )
 
 
-_CONFESS_TAG = re.compile(r"\[\s*CONFESS\s*#\s*\d+\s*\]\s*", re.I)
 _CONFESS_BARE = re.compile(r"^\s*CONFESS\s*#\s*\d+\s*[:\-–—]?\s*", re.I | re.M)
-_NUM_BRACKET = re.compile(r"^\s*\[\s*#?\s*\d+\s*\]\s*")
+_ANY_BRACKET = re.compile(r"\[[^\]]*\]")
 
 
 def strip_confess_number_tags(text: str) -> str:
-    """Remove [CONFESS #01774] / CONFESS #N / leading [12] number tags from titles/bodies."""
+    """Remove every `[...]` tag plus bare CONFESS #N prefixes from titles/bodies."""
     if not text:
         return text
-    out = _CONFESS_TAG.sub("", text)
+    out = _ANY_BRACKET.sub("", text)
     out = _CONFESS_BARE.sub("", out)
-    out = _NUM_BRACKET.sub("", out)
-    out = re.sub(r"[ \t]{2,}", " ", out).strip()
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"\s+\.", ".", out).strip()
     return out or text.strip()
 
 

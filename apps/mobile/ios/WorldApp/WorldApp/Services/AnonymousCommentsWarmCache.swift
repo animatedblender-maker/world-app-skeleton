@@ -8,7 +8,8 @@ final class AnonymousCommentsWarmCache {
     private var cache: [String: [AnonymousComment]] = [:]
     private var inflight: [String: Task<[AnonymousComment], Never>] = [:]
     private let maxEntries = 64
-    private let diskKey = "matterya.anonymous.comments.warm.v2"
+    // v3 — full sibling reply trees (invalidate truncated / flat warm snapshots).
+    private let diskKey = "matterya.anonymous.comments.warm.v3"
     private let diskMaxPosts = 24
 
     private init() {
@@ -21,7 +22,7 @@ final class AnonymousCommentsWarmCache {
         return hit
     }
 
-    func warm(_ postID: String, limit: Int = 80) {
+    func warm(_ postID: String, limit: Int = 500) {
         let key = normalized(postID)
         guard !key.isEmpty else { return }
         if let hit = cache[key], !hit.isEmpty { return }
@@ -42,13 +43,13 @@ final class AnonymousCommentsWarmCache {
     }
 
     /// Prefetch several visible feed posts so open feels instant.
-    func warmMany(_ postIDs: [String], limitEach: Int = 80) {
+    func warmMany(_ postIDs: [String], limitEach: Int = 500) {
         for id in postIDs.prefix(12) {
             warm(id, limit: limitEach)
         }
     }
 
-    func load(_ postID: String, limit: Int = 80) async -> [AnonymousComment] {
+    func load(_ postID: String, limit: Int = 500) async -> [AnonymousComment] {
         let key = normalized(postID)
         guard !key.isEmpty else { return [] }
         if let hit = cache[key], !hit.isEmpty { return hit }

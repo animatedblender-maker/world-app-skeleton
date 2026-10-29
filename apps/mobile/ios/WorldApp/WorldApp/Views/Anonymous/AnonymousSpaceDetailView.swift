@@ -270,11 +270,8 @@ struct AnonymousSpaceDetailView: View {
                                 store.pushSpace(slug: slug)
                             }
                         },
-                        onToggleLike: {
-                            Task {
-                                let next = (post.myVote ?? 0) > 0 ? 0 : 1
-                                await store.vote(post: post, value: next)
-                            }
+                        onVote: { value in
+                            Task { await store.vote(post: post, value: value) }
                         }
                     ) {
                         store.pushPost(post)
@@ -333,8 +330,8 @@ struct AnonymousPostCard: View {
     var style: Style = .feed
     /// Opens the Space from the feed meta chip.
     var onOpenSpace: (() -> Void)? = nil
-    /// Toggles like (heart) on this post.
-    var onToggleLike: (() -> Void)? = nil
+    /// Like (1) / dislike (-1) / clear (0). Tap active side again to clear.
+    var onVote: ((Int) -> Void)? = nil
     /// Opens the full post (See more / comments / media). Trailing closure target.
     var onOpenPost: (() -> Void)? = nil
 
@@ -390,6 +387,56 @@ struct AnonymousPostCard: View {
         post.authorUsername
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() == "matterya"
+    }
+
+    private var myVote: Int { post.myVote ?? 0 }
+
+    /// 👍 score 👎 — Matterya hand-inked thumbs (like = upvote, dislike = downvote).
+    private var likeDislikeCluster: some View {
+        let liked = myVote > 0
+        let disliked = myVote < 0
+        return HStack(spacing: 0) {
+            Button {
+                onVote?(liked ? 0 : 1)
+            } label: {
+                MatteryaThumbIcon(
+                    up: true,
+                    filled: liked,
+                    size: 18,
+                    color: liked ? Theme.accent : Theme.ink
+                )
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(liked ? "Remove like" : "Like")
+
+            Text("\((post.score ?? 0))")
+                .font(.subheadline.weight(.bold))
+                .monospacedDigit()
+                .foregroundStyle(liked ? Theme.accent : (disliked ? Theme.danger : Theme.ink))
+                .padding(.horizontal, 2)
+                .accessibilityLabel("Score \((post.score ?? 0))")
+
+            Button {
+                onVote?(disliked ? 0 : -1)
+            } label: {
+                MatteryaThumbIcon(
+                    up: false,
+                    filled: disliked,
+                    size: 18,
+                    color: disliked ? Theme.danger : Theme.ink
+                )
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(disliked ? "Remove dislike" : "Dislike")
+        }
+        .background(Theme.canvasMuted, in: Capsule())
+        .disabled(onVote == nil)
     }
 
     var body: some View {
@@ -497,30 +544,9 @@ struct AnonymousPostCard: View {
                     refreshCommentTease()
                 }
 
-            // Heart · comments — tactile, score-forward (Matterya hearts, Reddit rhythm).
+            // Matterya thumbs · score · comments — like / dislike (upvote / downvote).
             HStack(spacing: 14) {
-                Button {
-                    onToggleLike?()
-                } label: {
-                    let liked = (post.myVote ?? 0) > 0
-                    HStack(spacing: 6) {
-                        Image(systemName: liked ? "heart.fill" : "heart")
-                            .font(.system(size: 18, weight: .semibold))
-                        Text("\((post.score ?? 0))")
-                            .font(.subheadline.weight(.bold))
-                            .monospacedDigit()
-                    }
-                    .foregroundStyle(liked ? Theme.danger : Theme.ink)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(
-                        (liked ? Theme.danger.opacity(0.12) : Theme.canvasMuted),
-                        in: Capsule()
-                    )
-                }
-                .buttonStyle(.plain)
-                .disabled(onToggleLike == nil)
-                .accessibilityLabel((post.myVote ?? 0) > 0 ? "Unlike" : "Like")
+                likeDislikeCluster
 
                 Button {
                     onOpenPost?()
