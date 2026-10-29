@@ -4,6 +4,7 @@ import { getSpaceById } from './spaces.js';
 import type { AnonymousProfilePublic } from './identity.js';
 import { withResolvedMedia, withResolvedMediaMany } from './media.js';
 import { createAnonymousNotification } from './notifications.js';
+import { scheduleAnonymousModeration } from '../moderation/anonymous-auto.js';
 
 export type PostPublic = {
   id: string;
@@ -369,6 +370,17 @@ export async function createPost(opts: {
     );
     await client.query('commit');
     const r = rows[0];
+    // Local auto-mod (text + video frames). Fire-and-forget — never block create.
+    scheduleAnonymousModeration({
+      postId: r.id,
+      spaceId: space.id,
+      spaceSlug: space.slug,
+      spaceCategory: space.category ?? null,
+      title: r.title,
+      body: r.body,
+      mediaType: r.media_type ?? null,
+      mediaUrl: r.media_url ?? null,
+    });
     const post = await withResolvedMedia({
       id: r.id,
       space_id: r.space_id,

@@ -1,7 +1,8 @@
 # Text Moderation MVP (Matterya)
 
 **Status:** code on `ios-native` — apply SQL before `moderation_results` persists.  
-**Scope:** posts + comments text only. NudeNet / Frame-0 video = Phase 2.
+**Scope:** posts + comments text only.  
+**Video (Masquerade):** see `01-VIDEO-LOCAL.md` — local ffmpeg frames + on-box NSFW (no OpenAI).
 
 ## Rule
 
@@ -49,4 +50,5 @@ Detoxify / LibreTranslate-style stacks may carry AGPL or other obligations. **Do
 
 ## Feed eligibility
 
-Public Home / Sparks / Hubs queries already exclude `moderation_status in ('hidden','deleted')`. LIMITED → `sensitive` (still visible).
+Public Home / Sparks / Hubs queries exclude `moderation_status in ('hidden','deleted','sensitive')`.
+R2 packs marked `sensitive` ingest into Masquerade `secrets` only (no feed / spark / hub shares).
