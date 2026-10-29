@@ -465,12 +465,12 @@ struct AnonymousPost: Identifiable, Codable, Hashable, Sendable {
     var hasVideo: Bool { mediaType == "video" }
 
     var mediaURLValue: URL? {
-        guard let mediaURL, let url = URL(string: mediaURL) else { return nil }
+        guard let mediaURL, let url = URL(string: mediaURL), url.scheme?.lowercased() != "r2" else { return nil }
         return url
     }
 
     var thumbURLValue: URL? {
-        guard let thumbURL, let url = URL(string: thumbURL) else { return nil }
+        guard let thumbURL, let url = URL(string: thumbURL), url.scheme?.lowercased() != "r2" else { return nil }
         return url
     }
 

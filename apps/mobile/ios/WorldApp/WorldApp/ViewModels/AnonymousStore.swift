@@ -560,6 +560,7 @@ final class AnonymousStore {
                 spacePosts = spaceOwn
                 spacePostsCursor = page.nextCursor
                 spacePostsHasMore = page.nextCursor != nil
+                prefetchSpaceMedia(spaceOwn)
                 return
             }
 
@@ -578,6 +579,7 @@ final class AnonymousStore {
             spacePosts = spaceOwn
             spacePostsCursor = page.nextCursor
             spacePostsHasMore = page.nextCursor != nil
+            prefetchSpaceMedia(spaceOwn)
         } catch let err as AnonymousError {
             lastError = err.errorDescription
             shouldToastLastError = currentSpace?.slug != trimmed
@@ -609,6 +611,7 @@ final class AnonymousStore {
             }
             if !appended.isEmpty {
                 spacePosts.append(contentsOf: appended)
+                prefetchSpaceMedia(appended)
             }
             spacePostsCursor = page.nextCursor
             spacePostsHasMore = page.nextCursor != nil && !page.items.isEmpty
@@ -616,6 +619,23 @@ final class AnonymousStore {
             // Soft — keep what we have; user can scroll again.
             spacePostsHasMore = spacePostsCursor != nil
         }
+    }
+
+    /// Warm image/poster bytes as soon as a Space page lands — no spinner wait on scroll.
+    private func prefetchSpaceMedia(_ posts: [AnonymousPost]) {
+        var urls: [URL] = []
+        urls.reserveCapacity(posts.count * 2)
+        for post in posts {
+            if post.hasImage, let u = post.mediaURLValue, u.scheme?.lowercased() != "r2" {
+                urls.append(u)
+            } else if let t = post.thumbURLValue, t.scheme?.lowercased() != "r2" {
+                urls.append(t)
+            } else if let m = post.mediaURLValue, m.scheme?.lowercased() != "r2" {
+                urls.append(m)
+            }
+        }
+        guard !urls.isEmpty else { return }
+        ImageCache.shared.prefetch(urls, maxPixelSize: 540, aggressive: true)
     }
 
     @discardableResult

@@ -80,6 +80,11 @@ struct AnonymousRootView: View {
                     showNotificationsMenu = false
                     searchFieldFocused = false
                 } else {
+                    // Entering Masquerade — kill any leftover Sparks voice immediately.
+                    if appState.reelsViewerContext != nil {
+                        appState.closeReelsViewer()
+                    }
+                    MediaPlaybackCoordinator.shared.silenceFeedSparksAudioPreservingHubsMini()
                     syncMasqueradeTabBar()
                     // Re-entry only — first paint is owned by `.task` on mount.
                     if store.phase == .ready {

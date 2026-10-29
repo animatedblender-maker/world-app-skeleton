@@ -208,11 +208,20 @@ struct MainTabView: View {
             // stays light. Continuous Hubs mini is spared. (clearElectionOnly alone left
             // feed audio playing under other tabs / Search.)
             FeedVideoFocus.shared.clearElectionOnly()
+            // Closed or still-open Sparks must not keep talking under Masquerade / other tabs.
+            if tab != .feed, appState.reelsViewerContext != nil {
+                appState.closeReelsViewer()
+            }
             let leftFeed = oldTab == .feed && tab != .feed
             let leftHubs = oldTab == .hubs
             let openedHubs = tab == .hubs
+            let openedMasquerade = tab == .anonymous
+            if leftFeed || tab != .feed || openedMasquerade {
+                MediaPlaybackCoordinator.shared.silenceFeedSparksAudioPreservingHubsMini()
+            }
             Task(priority: .utility) { @MainActor in
-                if leftFeed || tab != .feed {
+                if leftFeed || tab != .feed || openedMasquerade {
+                    // Second pass after close/cover teardown — catch late warm-pool claims.
                     MediaPlaybackCoordinator.shared.silenceFeedSparksAudioPreservingHubsMini()
                 }
                 if leftHubs { EngagementTracker.shared.hubsLeft() }

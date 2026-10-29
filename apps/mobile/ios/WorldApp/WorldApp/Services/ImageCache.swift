@@ -13,8 +13,8 @@ final class ImageCache: @unchecked Sendable {
 
     private let memoryCache = NSCache<NSString, UIImage>()
     private let inflight = InflightTable()
-    /// Cap concurrent image loads — keep low so Feed+Hubs dual-mount never storms the radio.
-    private let downloadGate = DownloadGate(maxConcurrent: 3)
+    /// Cap concurrent image loads — high enough for Masquerade space pages, low enough to spare scroll.
+    private let downloadGate = DownloadGate(maxConcurrent: 6)
     private let session: URLSession
     private let diskDirectory: URL
     private let ioQueue = DispatchQueue(label: "com.matterya.imagecache.io", qos: .utility)
@@ -54,12 +54,12 @@ final class ImageCache: @unchecked Sendable {
     /// May reuse a **larger-or-equal** size bucket for the same URL — never a smaller one
     /// (that made full-width feed photos look soft after a 420px prefetch).
     func imageIfCached(for url: URL, maxPixelSize: CGFloat) -> UIImage? {
-        let fetchURL = Self.cacheableURL(from: url)
+        let identity = Self.stableCacheIdentity(for: url)
         let want = Int(maxPixelSize)
-        let primary = cacheKey(for: fetchURL, maxPixelSize: maxPixelSize)
+        let primary = cacheKey(forIdentity: identity, maxPixelSize: maxPixelSize)
         if let hit = memoryCache.object(forKey: primary as NSString) { return hit }
         for size in Self.sizeBuckets where Int(size) >= want && Int(size) != want {
-            let key = cacheKey(for: fetchURL, maxPixelSize: size)
+            let key = cacheKey(forIdentity: identity, maxPixelSize: size)
             if let hit = memoryCache.object(forKey: key as NSString) { return hit }
         }
         return nil
@@ -248,6 +248,8 @@ final class ImageCache: @unchecked Sendable {
     func image(for url: URL, maxPixelSize: CGFloat) async -> UIImage? {
         // Never fetch banned pub-*.r2.dev (CF 1010) — callers should fall through to Frame0.
         if MediaURLResolver.isBlockedR2PublicURL(url) { return nil }
+        // Unresolved `r2:bucket/key` refs are not http — skip (API should have signed these).
+        if url.scheme?.lowercased() == "r2" { return nil }
         if !MediaURLResolver.isUsablePosterURL(url), MediaURLResolver.looksLikeR2HostedURL(url) {
             return nil
         }
@@ -256,8 +258,10 @@ final class ImageCache: @unchecked Sendable {
             return hit
         }
 
+        // Fetch the live signed URL; cache under a signature-stable identity so re-presigns hit.
         let fetchURL = Self.cacheableURL(from: url)
-        let key = cacheKey(for: fetchURL, maxPixelSize: maxPixelSize)
+        let identity = Self.stableCacheIdentity(for: url)
+        let key = cacheKey(forIdentity: identity, maxPixelSize: maxPixelSize)
         let want = Int(maxPixelSize)
 
         // Disk: exact key, then only larger-or-equal buckets (never serve a soft 420 as 1080).
@@ -266,7 +270,7 @@ final class ImageCache: @unchecked Sendable {
             return diskImage
         }
         for size in Self.sizeBuckets where Int(size) >= want && Int(size) != want {
-            let altKey = cacheKey(for: fetchURL, maxPixelSize: size)
+            let altKey = cacheKey(forIdentity: identity, maxPixelSize: size)
             if let diskImage = await loadFromDiskAsync(key: altKey) {
                 memoryCache.setObject(diskImage, forKey: key as NSString, cost: estimateCost(diskImage))
                 return diskImage
@@ -294,7 +298,7 @@ final class ImageCache: @unchecked Sendable {
                     guard let image = Self.downsample(data: data, maxPixelSize: maxPixelSize) else {
                         continue
                     }
-                    // Store under the *requested* URL key so the list hits even if we used a fallback host.
+                    // Store under stable identity so the next signed URL for the same object hits.
                     cache.memoryCache.setObject(image, forKey: key as NSString, cost: data.count)
                     cache.saveToDiskAsync(image: image, key: key)
                     return image
@@ -331,8 +335,22 @@ final class ImageCache: @unchecked Sendable {
         return max(1, w * h * 4)
     }
 
-    private func cacheKey(for url: URL, maxPixelSize: CGFloat) -> String {
-        "\(url.absoluteString)|\(Int(maxPixelSize))"
+    private func cacheKey(forIdentity identity: String, maxPixelSize: CGFloat) -> String {
+        "\(identity)|\(Int(maxPixelSize))"
+    }
+
+    /// Host+path without Amz/signature query — re-presigned Masquerade/R2 URLs must share one cache entry.
+    private static func stableCacheIdentity(for url: URL) -> String {
+        let base = cacheableURL(from: url)
+        if MediaURLResolver.isPresignedObjectURL(base) || MediaURLResolver.looksLikeR2HostedURL(base),
+           var comps = URLComponents(url: base, resolvingAgainstBaseURL: false) {
+            comps.query = nil
+            comps.fragment = nil
+            if let stable = comps.url?.absoluteString, !stable.isEmpty {
+                return stable
+            }
+        }
+        return base.absoluteString
     }
 
     private func diskFileURL(for key: String) -> URL {
@@ -526,6 +544,8 @@ struct CachedAsyncImage: View {
     var maxPixelSize: CGFloat = 720
     var contentMode: ContentMode = .fill
     var placeholder: AnyView?
+    /// Skip fling debounce — Masquerade space images must paint immediately.
+    var urgent: Bool = false
     /// Called when the URL is blocked or the download/decode returns nil — parents can try the next poster.
     var onLoadFailed: ((URL) -> Void)? = nil
     /// Pixel size of the decoded bitmap (for aspect-matched feed frames — no letterbox).
@@ -575,8 +595,9 @@ struct CachedAsyncImage: View {
                 loadedURL = nil
                 return
             }
-            // Dead pub-*.r2.dev / expired R2 embeds — skip fetch so Frame0 / YouTube can win.
-            if MediaURLResolver.isBlockedR2PublicURL(url)
+            // Dead pub-*.r2.dev / expired R2 embeds / unresolved r2: keys — skip fetch.
+            if url.scheme?.lowercased() == "r2"
+                || MediaURLResolver.isBlockedR2PublicURL(url)
                 || (!MediaURLResolver.isUsablePosterURL(url) && MediaURLResolver.looksLikeR2HostedURL(url)) {
                 image = nil
                 loadedURL = nil
@@ -593,20 +614,22 @@ struct CachedAsyncImage: View {
             } else if image != nil {
                 return
             }
-            // Fast fling: wait longer — if the cell is recycled, .task cancels and we never download.
-            // Feed photos (≥480) wait out the fling so decoding does not hitch scroll
-            // (Sparks/Hubs cards skip this path and stay butter-smooth).
-            let photoHeavy = maxPixelSize >= 480
-            let delayNs: UInt64 = ScrollBudget.isFlinging
-                ? (photoHeavy ? 180_000_000 : 110_000_000)
-                : 24_000_000
-            try? await Task.sleep(nanoseconds: delayNs)
-            guard !Task.isCancelled else { return }
-            if photoHeavy {
-                // Still flinging after wait — skip apply; next settle .task will paint.
-                while ScrollBudget.isFlinging {
-                    try? await Task.sleep(nanoseconds: 50_000_000)
-                    guard !Task.isCancelled else { return }
+            if !urgent {
+                // Fast fling: wait longer — if the cell is recycled, .task cancels and we never download.
+                // Feed photos (≥480) wait out the fling so decoding does not hitch scroll
+                // (Sparks/Hubs cards skip this path and stay butter-smooth).
+                let photoHeavy = maxPixelSize >= 480
+                let delayNs: UInt64 = ScrollBudget.isFlinging
+                    ? (photoHeavy ? 180_000_000 : 110_000_000)
+                    : 24_000_000
+                try? await Task.sleep(nanoseconds: delayNs)
+                guard !Task.isCancelled else { return }
+                if photoHeavy {
+                    // Still flinging after wait — skip apply; next settle .task will paint.
+                    while ScrollBudget.isFlinging {
+                        try? await Task.sleep(nanoseconds: 50_000_000)
+                        guard !Task.isCancelled else { return }
+                    }
                 }
             }
             if let cached = ImageCache.shared.imageIfCached(for: url, maxPixelSize: maxPixelSize) {
@@ -618,7 +641,7 @@ struct CachedAsyncImage: View {
             let loaded = await ImageCache.shared.image(for: url, maxPixelSize: maxPixelSize)
             guard !Task.isCancelled else { return }
             // Avoid assigning a large bitmap mid-fling (main-thread hitch on meme cards).
-            if photoHeavy, ScrollBudget.isFlinging { return }
+            if !urgent, maxPixelSize >= 480, ScrollBudget.isFlinging { return }
             if let loaded {
                 image = loaded
                 loadedURL = url.absoluteString
@@ -631,7 +654,14 @@ struct CachedAsyncImage: View {
 
     private var taskID: String {
         guard let url else { return "nil" }
-        return "\(url.absoluteString)|\(Int(maxPixelSize))"
+        // Signature-stable id so a re-presign does not cancel an in-flight paint.
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        if MediaURLResolver.isPresignedObjectURL(url) {
+            comps?.query = nil
+            comps?.fragment = nil
+        }
+        let id = comps?.url?.absoluteString ?? url.absoluteString
+        return "\(id)|\(Int(maxPixelSize))|\(urgent ? "u" : "n")"
     }
 
     private func reportSizeIfNeeded(_ img: UIImage?) {
@@ -676,6 +706,8 @@ struct FeedPinchZoomPhoto: View {
     /// Prefer `.fill` inside an aspect-matched parent — `.fit` letterboxes (ugly margins).
     var contentMode: ContentMode = .fill
     var placeholder: AnyView = AnyView(Theme.canvasMuted)
+    /// Masquerade spaces: paint immediately (no fling debounce).
+    var urgent: Bool = false
     var onZoomingChanged: ((Bool) -> Void)? = nil
     var onTap: (() -> Void)? = nil
     var onImageSize: ((CGSize) -> Void)? = nil
@@ -696,6 +728,7 @@ struct FeedPinchZoomPhoto: View {
                     maxPixelSize: maxPixelSize,
                     contentMode: contentMode,
                     placeholder: placeholder,
+                    urgent: urgent,
                     onImageSize: onImageSize
                 )
                 .scaleEffect(scale)

@@ -701,13 +701,9 @@ struct AnonymousPostCard: View {
                         url: url,
                         maxPixelSize: listPx,
                         contentMode: .fill,
-                        placeholder: AnyView(
-                            Theme.canvasMuted
-                                .overlay {
-                                    ProgressView()
-                                        .tint(Theme.inkMuted)
-                                }
-                        ),
+                        // Static muted tile — never an infinite spinner on failed/slow R2.
+                        placeholder: AnyView(Theme.canvasMuted),
+                        urgent: true,
                         onZoomingChanged: { zooming in
                             isPhotoPinching = zooming
                         },
@@ -783,7 +779,8 @@ struct AnonymousPostCard: View {
                             url: poster,
                             maxPixelSize: 540,
                             contentMode: .fill,
-                            placeholder: AnyView(Color.black)
+                            placeholder: AnyView(Color.black),
+                            urgent: true
                         )
                         .frame(maxWidth: .infinity)
                         .frame(height: posterH)
