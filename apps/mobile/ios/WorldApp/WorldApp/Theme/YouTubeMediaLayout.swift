@@ -726,9 +726,9 @@ struct YouTubeWatchPlayer<Content: View>: View {
     }
 }
 
-/// Netflix-style endless horizontal rail — two LazyHStack cycles; wrap jumps back
-/// one set with animations disabled so sideways swipe never hits a hard end.
-/// First card starts fully in-frame (no middle landing). `onNearEnd` densifies.
+/// Netflix-style endless horizontal rail — **HStack** (not Lazy) so all ~15×2
+/// cells exist and silent `scrollTo` wrap actually works. Swipe past the last
+/// card → first, second, … forever. First card starts fully in-frame.
 struct HubsLoopingHorizontalRail<Content: View>: View {
     let posts: [CountryPost]
     var spacing: CGFloat = 14
@@ -739,6 +739,7 @@ struct HubsLoopingHorizontalRail<Content: View>: View {
 
     /// Need a few cards before looping is meaningful; short rails stay finite.
     private var shouldLoop: Bool { posts.count >= 3 }
+    /// Two full cycles — light for a 15-card rail (30 cells).
     private let copies = 2
     @State private var wrapArmed = false
     @State private var isJumping = false
@@ -753,7 +754,9 @@ struct HubsLoopingHorizontalRail<Content: View>: View {
         let total = n > 0 ? (shouldLoop ? n * copies : n) : 0
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: spacing) {
+                // Eager HStack: LazyHStack + scrollTo failed because off-screen
+                // ids were never laid out, so the loop hit a hard end.
+                HStack(alignment: .top, spacing: spacing) {
                     ForEach(0..<total, id: \.self) { index in
                         let logical = n > 0 ? index % n : 0
                         let post = posts[logical]
@@ -769,8 +772,8 @@ struct HubsLoopingHorizontalRail<Content: View>: View {
                                     }
                                 }
                                 guard shouldLoop, wrapArmed else { return }
-                                // Far end of second copy → jump back one set (seamless loop).
-                                if index >= n + (n - 2) {
+                                // Near end of second cycle → jump back one set (seamless).
+                                if index >= n + max(1, n - 3) {
                                     isJumping = true
                                     let target = index - n
                                     var t = Transaction()
@@ -791,7 +794,7 @@ struct HubsLoopingHorizontalRail<Content: View>: View {
             .onAppear {
                 wrapArmed = false
                 isJumping = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                     wrapArmed = shouldLoop
                 }
             }
@@ -803,7 +806,7 @@ struct HubsLoopingHorizontalRail<Content: View>: View {
                 withTransaction(t) {
                     proxy.scrollTo(0, anchor: .leading)
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                     wrapArmed = shouldLoop
                 }
             }

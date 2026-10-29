@@ -1108,9 +1108,9 @@ struct YouTubeAppView: View {
         let heroID = hubsHeroPost?.id
         let ranked = hubsForYouPool.isEmpty ? stableDiscoverVideos : hubsForYouPool
         let railN = Self.hubsRailCardCount
-        // First hop: soft floor so thin instant-paint inventory still paints shelves.
+        // Product: every painted row aims for 15. Soft floor only on the first thin hop.
         // After densify: hard floor of 15 — skip thin categories, pick the next library slug.
-        let minRail = hubsRailsDense ? railN : min(6, railN)
+        let minRail = hubsRailsDense ? railN : min(10, railN)
         let vibeCount = hubsRailsDense ? Self.hubsVibeRailCount : Self.hubsVibeRailCountFirstPaint
         let moreRows = hubsRailsDense ? Self.hubsMoreRailRows : Self.hubsMoreRailRowsFirstPaint
         // Affinity from Continue strip only — never walk the full catalog on the hop.
@@ -1209,15 +1209,30 @@ struct YouTubeAppView: View {
             .sorted { affinity.slugWeight($0) > affinity.slugWeight($1) }
         slugOrder.append(contentsOf: extras)
 
+        // Leftovers used to pad a near-full rail up to the product floor of 15.
+        func padToRailN(_ seed: [CountryPost]) -> [CountryPost] {
+            guard seed.count < railN else { return Array(seed.prefix(railN)) }
+            var out = seed
+            let filler = ranked.filter {
+                !claimedIDs.contains($0.id) && !claimedMedia.contains(mediaKey($0))
+            }
+            let extra = claim(filler, limit: railN - out.count)
+            out.append(contentsOf: extra)
+            return out
+        }
+
         var vibe: [HubsVibeRail] = []
         for slug in slugOrder {
             guard vibe.count < vibeCount else { break }
             let seed = buckets[slug] ?? []
-            let posts = claim(seed, limit: railN)
+            var posts = claim(seed, limit: railN)
+            // Pad toward 15 from unclaimed ranked leftovers (still unique media).
+            if posts.count < railN, posts.count >= max(4, minRail - 4) {
+                posts = padToRailN(posts)
+            }
             // Thin category — leave unclaimed leftovers for later rails; try next library slug.
             // First hop accepts soft floor; dense requires the full 15.
             guard posts.count >= minRail else {
-                // Unclaim so a later slug/people rail can use these titles.
                 for post in posts {
                     claimedIDs.remove(post.id)
                     claimedMedia.remove(mediaKey(post))
@@ -1225,14 +1240,14 @@ struct YouTubeAppView: View {
                 continue
             }
             let title = YouTubeHomeFilter(rawValue: slug)?.title ?? slug.capitalized
-            vibe.append(HubsVibeRail(slug: slug, title: title, posts: posts))
+            vibe.append(HubsVibeRail(slug: slug, title: title, posts: Array(posts.prefix(railN))))
         }
         cachedVibeRails = vibe
 
         let peopleCandidates = ranked.filter {
             !claimedIDs.contains($0.id) && !claimedMedia.contains(mediaKey($0))
         }
-        cachedPeopleRail = claim(peopleCandidates, limit: railN)
+        cachedPeopleRail = Array(padToRailN(claim(peopleCandidates, limit: railN)).prefix(railN))
 
         var more: [HubsMoreRail] = []
         let rest = ranked.filter {
@@ -1244,14 +1259,17 @@ struct YouTubeAppView: View {
         ]
         var offset = 0
         var row = 0
-        let moreFloor = hubsRailsDense ? railN : max(4, minRail)
+        let moreFloor = hubsRailsDense ? railN : max(6, minRail)
         while offset < rest.count, row < moreRows {
             let window = Array(rest[offset..<min(offset + railN * 2, rest.count)])
-            let slice = claim(window, limit: railN)
+            var slice = claim(window, limit: railN)
+            if slice.count < railN, slice.count >= moreFloor {
+                slice = padToRailN(slice)
+            }
             offset += railN
             guard slice.count >= moreFloor else { break }
             let title = fillerTitles[min(row, fillerTitles.count - 1)]
-            more.append(HubsMoreRail(id: "more-\(row)", title: title, posts: slice))
+            more.append(HubsMoreRail(id: "more-\(row)", title: title, posts: Array(slice.prefix(railN))))
             row += 1
         }
         cachedMoreWatchRails = more
