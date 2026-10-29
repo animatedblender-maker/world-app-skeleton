@@ -38,7 +38,7 @@ Temp frame files are deleted in `finally`. Feed already serves only `state = 'ac
 | `MODERATION_ANON_ENABLED` | `true` | Kill switch for Masquerade auto-mod |
 | `MODERATION_VIDEO_ENABLED` | `true` | Kill switch for frame NSFW path |
 | `MODERATION_VIDEO_NSFW_THRESHOLD` | `0.85` | Max frame NSFW score to treat as hit |
-| `MODERATION_VIDEO_MODEL` | `Falconsai/nsfw_image_detection` | Transformers.js image-classification model |
+| `MODERATION_VIDEO_MODEL` | `AdamCodd/vit-base-nsfw-detector` | Transformers.js image-classification model (ONNX) |
 | `MODERATION_ANON_SCHEDULE_TIMEOUT_MS` | `90000` | Cap for background job |
 | `HF_ACCESS_TOKEN` / `HUGGINGFACE_TOKEN` | — | Optional; helps model download rate limits |
 

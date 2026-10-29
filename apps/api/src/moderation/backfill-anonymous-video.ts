@@ -35,6 +35,7 @@ function argValue(name: string): string | null {
 }
 
 async function alreadyScanned(postId: string): Promise<boolean> {
+  // Failures are retryable — only successful scans / holds skip.
   const { rows } = await pool.query<{ n: string }>(
     `
     select count(*)::text as n
@@ -44,7 +45,6 @@ async function alreadyScanned(postId: string): Promise<boolean> {
       and action in (
         'auto_scan_video_ok',
         'auto_flag_nsfw_video',
-        'auto_scan_video_failed',
         'auto_hold'
       )
     `,

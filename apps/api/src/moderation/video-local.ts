@@ -45,7 +45,8 @@ export function videoNsfwThreshold(): number {
   return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0.85;
 }
 
-const DEFAULT_MODEL = 'Falconsai/nsfw_image_detection';
+/** AdamCodd ships ONNX for transformers.js; Falconsai does not. */
+const DEFAULT_MODEL = 'AdamCodd/vit-base-nsfw-detector';
 
 function modelId(): string {
   return (process.env.MODERATION_VIDEO_MODEL || DEFAULT_MODEL).trim() || DEFAULT_MODEL;
@@ -56,9 +57,12 @@ type Classifier = (imagePath: string) => Promise<Array<{ label: string; score: n
 
 let classifier: Classifier | null = null;
 let classifierInit: Promise<Classifier | null> | null = null;
+let classifierInitFailed = false;
 
 async function getClassifier(): Promise<Classifier | null> {
   if (classifier) return classifier;
+  // Allow one retry path after a failed init (e.g. wrong model id then fixed).
+  if (classifierInitFailed && !classifierInit) return null;
   if (!classifierInit) {
     classifierInit = (async () => {
       try {
@@ -71,15 +75,20 @@ async function getClassifier(): Promise<Classifier | null> {
         if (!process.env.TRANSFORMERS_CACHE && !process.env.HF_HOME) {
           (env as any).cacheDir = join(tmpdir(), 'matterya-transformers-cache');
         }
-        const pipe = await pipeline('image-classification', modelId());
+        const id = modelId();
+        console.log(`[moderation/video] loading classifier ${id}`);
+        const pipe = await pipeline('image-classification', id);
         const wrapped: Classifier = async (imagePath) => {
           const out = await pipe(imagePath);
           return Array.isArray(out) ? (out as Array<{ label: string; score: number }>) : [];
         };
         classifier = wrapped;
+        classifierInitFailed = false;
         return wrapped;
       } catch (err: any) {
         console.warn('[moderation/video] classifier init failed', err?.message ?? err);
+        classifierInitFailed = true;
+        classifierInit = null;
         return null;
       }
     })();
@@ -172,19 +181,22 @@ function nsfwScoreFromLabels(labels: Array<{ label: string; score: number }>): {
   for (const row of labels) {
     const lab = String(row.label || '').toLowerCase();
     const score = Number(row.score) || 0;
+    // AdamCodd: nsfw | sfw. Others: porn / hentai / sexy / nude / …
     const isNsfw =
       lab === 'nsfw' ||
       lab.includes('porn') ||
       lab.includes('hentai') ||
       lab.includes('sexy') ||
-      lab.includes('nude');
+      lab.includes('sensual') ||
+      lab.includes('nude') ||
+      lab.includes('enticing');
     if (isNsfw && score >= best.score) {
       best = { label: lab, score };
     }
   }
-  // If model only returned "normal", nsfw score is 1 - normal.
+  // If model only returned "sfw"/"normal", nsfw score is 1 - that.
   if (best.score === 0 && labels.length) {
-    const normal = labels.find((l) => /normal|sfw|safe/i.test(l.label));
+    const normal = labels.find((l) => /normal|sfw|safe|neutral/i.test(l.label));
     if (normal) {
       return { label: 'nsfw', score: Math.max(0, 1 - (Number(normal.score) || 0)) };
     }
