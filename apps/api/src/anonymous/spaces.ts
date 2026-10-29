@@ -441,18 +441,8 @@ export async function joinSpace(opts: {
       await client.query('rollback');
       return { ok: false, code: 'banned', reason: 'You are banned from this Space.', status: 403 };
     }
-    await client.query(
-      `
-      update anonymous.spaces
-      set member_count = (
-        select count(*)::int from anonymous.space_memberships
-        where space_id = $1::uuid and state = 'active'
-      ),
-      updated_at = now()
-      where id = $1::uuid
-      `,
-      [space.id]
-    );
+    // Role first, then commit — never hold the txn open on a full member_count recount
+    // (that locked joins for 45s+ while Masquerade seed hammered spaces/memberships).
     await client.query(
       `
       insert into anonymous.space_roles (membership_id, role)
@@ -464,6 +454,20 @@ export async function joinSpace(opts: {
       [space.id, opts.profile.id]
     );
     await client.query('commit');
+    // Cheap bump outside the txn — approximate until next recount; avoids Lock waits.
+    try {
+      await pool.query(
+        `
+        update anonymous.spaces
+        set member_count = greatest(coalesce(member_count, 0) + 1, 1),
+            updated_at = now()
+        where id = $1::uuid
+        `,
+        [space.id]
+      );
+    } catch {
+      /* non-fatal — membership already committed */
+    }
     return { ok: true, membership: { space_id: space.id, state: 'active' } };
   } catch (err) {
     try {
@@ -490,7 +494,7 @@ export async function leaveSpace(opts: {
   if (!space) {
     return { ok: false, code: 'not_found', reason: 'Space not found.', status: 404 };
   }
-  await pool.query(
+  const { rowCount } = await pool.query(
     `
     update anonymous.space_memberships
     set state = case when state = 'banned' then 'banned' else 'left' end,
@@ -499,17 +503,20 @@ export async function leaveSpace(opts: {
     `,
     [space.id, opts.profile.id]
   );
-  await pool.query(
-    `
-    update anonymous.spaces
-    set member_count = (
-      select count(*)::int from anonymous.space_memberships
-      where space_id = $1::uuid and state = 'active'
-    ),
-    updated_at = now()
-    where id = $1::uuid
-    `,
-    [space.id]
-  );
+  if ((rowCount ?? 0) > 0) {
+    try {
+      await pool.query(
+        `
+        update anonymous.spaces
+        set member_count = greatest(coalesce(member_count, 1) - 1, 0),
+            updated_at = now()
+        where id = $1::uuid
+        `,
+        [space.id]
+      );
+    } catch {
+      /* non-fatal */
+    }
+  }
   return { ok: true };
 }

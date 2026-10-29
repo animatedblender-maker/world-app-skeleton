@@ -657,19 +657,36 @@ final class AnonymousStore {
             lastError = AnonymousError.paidDisabled.errorDescription
             return false
         }
+        // Optimistic UI — never leave the Join button spinning on a slow /spaces refresh.
+        markJoinedLocally(spaceId: space.id, slug: space.slug)
+        if currentSpace?.id == space.id || currentSpace?.slug == space.slug {
+            currentSpace?.isJoined = true
+            currentSpace?.memberCount = (currentSpace?.memberCount ?? 0) + 1
+        }
         do {
             _ = try await AnonymousService.join(spaceId: space.id)
-            if currentSpace?.id == space.id {
-                currentSpace?.isJoined = true
-                currentSpace?.memberCount = (currentSpace?.memberCount ?? 0) + 1
-            }
-            markJoinedLocally(spaceId: space.id, slug: space.slug)
-            await loadSpaces(filter: .joined, force: true)
+            // Refresh joined list off the critical path (was awaiting and timing out).
+            Task { await loadSpaces(filter: .joined, force: true) }
             return true
         } catch let err as AnonymousError {
+            // Roll back optimistic join.
+            markLeftLocally(spaceId: space.id, slug: space.slug)
+            if currentSpace?.id == space.id || currentSpace?.slug == space.slug {
+                currentSpace?.isJoined = false
+                if let count = currentSpace?.memberCount {
+                    currentSpace?.memberCount = max(0, count - 1)
+                }
+            }
             lastError = err.errorDescription
             return false
         } catch {
+            markLeftLocally(spaceId: space.id, slug: space.slug)
+            if currentSpace?.id == space.id || currentSpace?.slug == space.slug {
+                currentSpace?.isJoined = false
+                if let count = currentSpace?.memberCount {
+                    currentSpace?.memberCount = max(0, count - 1)
+                }
+            }
             lastError = error.localizedDescription
             return false
         }
@@ -680,6 +697,22 @@ final class AnonymousStore {
             guard var list = spacesByFilter[key] else { continue }
             if let idx = list.firstIndex(where: { $0.id == spaceId || $0.slug == slug }) {
                 list[idx].isJoined = true
+                if let count = list[idx].memberCount {
+                    list[idx].memberCount = count + 1
+                }
+                spacesByFilter[key] = list
+            }
+        }
+    }
+
+    private func markLeftLocally(spaceId: String, slug: String) {
+        for key in spacesByFilter.keys {
+            guard var list = spacesByFilter[key] else { continue }
+            if let idx = list.firstIndex(where: { $0.id == spaceId || $0.slug == slug }) {
+                list[idx].isJoined = false
+                if let count = list[idx].memberCount {
+                    list[idx].memberCount = max(0, count - 1)
+                }
                 spacesByFilter[key] = list
             }
         }
@@ -687,16 +720,24 @@ final class AnonymousStore {
 
     func leaveCurrentSpace() async {
         guard let space = currentSpace else { return }
+        // Optimistic leave so the Join button returns immediately.
+        currentSpace?.isJoined = false
+        if let count = currentSpace?.memberCount {
+            currentSpace?.memberCount = max(0, count - 1)
+        }
+        markLeftLocally(spaceId: space.id, slug: space.slug)
         do {
             try await AnonymousService.leave(spaceId: space.id)
-            currentSpace?.isJoined = false
-            if let count = currentSpace?.memberCount {
-                currentSpace?.memberCount = max(0, count - 1)
-            }
-            await loadSpaces(filter: .joined, force: true)
+            Task { await loadSpaces(filter: .joined, force: true) }
         } catch let err as AnonymousError {
+            currentSpace?.isJoined = true
+            currentSpace?.memberCount = (currentSpace?.memberCount ?? 0) + 1
+            markJoinedLocally(spaceId: space.id, slug: space.slug)
             lastError = err.errorDescription
         } catch {
+            currentSpace?.isJoined = true
+            currentSpace?.memberCount = (currentSpace?.memberCount ?? 0) + 1
+            markJoinedLocally(spaceId: space.id, slug: space.slug)
             lastError = error.localizedDescription
         }
     }

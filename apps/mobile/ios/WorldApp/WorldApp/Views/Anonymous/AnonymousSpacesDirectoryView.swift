@@ -210,6 +210,7 @@ struct AnonymousSpaceCard: View {
                         joining = true
                         Task {
                             await onJoin()
+                            // Parent flips `space.isJoined`; always clear spinner even on timeout.
                             joining = false
                         }
                     } label: {
