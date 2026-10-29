@@ -392,7 +392,7 @@ struct AnonymousPostCard: View {
 
     private var myVote: Int { post.myVote ?? 0 }
 
-    /// 👍 score 👎 — Matterya vector thumb icons (like = upvote, dislike = downvote).
+    /// 👍 score 👎 — SF Symbol thumbs tinted with Theme (like = upvote, dislike = downvote).
     private var likeDislikeCluster: some View {
         let liked = myVote > 0
         let disliked = myVote < 0
@@ -404,7 +404,7 @@ struct AnonymousPostCard: View {
                     up: true,
                     filled: liked,
                     size: 18,
-                    color: liked ? Theme.accent : Theme.ink
+                    color: liked ? Theme.like : Theme.ink
                 )
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
@@ -416,7 +416,7 @@ struct AnonymousPostCard: View {
             Text("\((post.score ?? 0))")
                 .font(.subheadline.weight(.bold))
                 .monospacedDigit()
-                .foregroundStyle(liked ? Theme.accent : (disliked ? Theme.danger : Theme.ink))
+                .foregroundStyle(liked ? Theme.like : (disliked ? Theme.danger : Theme.ink))
                 .padding(.horizontal, 2)
                 .accessibilityLabel("Score \((post.score ?? 0))")
 

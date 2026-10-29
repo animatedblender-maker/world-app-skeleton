@@ -33,8 +33,8 @@ struct HandDrawnPlusIcon: View {
     }
 }
 
-/// Matterya like / dislike mark — clean vector thumbs-up (not SF Symbol, not sketch).
-/// Classic fist + upright thumb. `up: true` = like; `up: false` = dislike (flipped).
+/// Like / dislike mark — standard SF Symbol thumbs (no custom drawing).
+/// `up: true` = like; `up: false` = dislike.
 struct MatteryaThumbIcon: View {
     var up: Bool = true
     var filled: Bool = false
@@ -42,58 +42,12 @@ struct MatteryaThumbIcon: View {
     var color: Color = Theme.ink
 
     var body: some View {
-        Canvas { context, canvasSize in
-            let hand = Self.handPath(in: canvasSize)
-            let strokeW = max(1.45, size * 0.095)
-            let style = StrokeStyle(lineWidth: strokeW, lineCap: .round, lineJoin: .round)
-
-            if filled {
-                context.fill(hand, with: .color(color))
-            } else {
-                context.stroke(hand, with: .color(color), style: style)
-            }
-        }
-        .frame(width: size, height: size)
-        .rotationEffect(.degrees(up ? 0 : 180))
-        .accessibilityHidden(true)
-    }
-
-    /// Fist (wide rounded rect) ∪ upright thumb (taller rounded rect) — unmistakable at 18pt.
-    private static func handPath(in size: CGSize) -> Path {
-        let w = size.width
-        let h = size.height
-        let r = min(w, h)
-
-        // Wide fist in the lower-left.
-        let fistRect = CGRect(
-            x: w * 0.06,
-            y: h * 0.42,
-            width: w * 0.70,
-            height: h * 0.52
-        )
-        // Tall thumb sitting on the upper-right of the fist.
-        let thumbRect = CGRect(
-            x: w * 0.48,
-            y: h * 0.04,
-            width: w * 0.40,
-            height: h * 0.54
-        )
-        let fistCorner = r * 0.13
-        let thumbCorner = r * 0.18
-
-        let fist = CGPath(
-            roundedRect: fistRect,
-            cornerWidth: fistCorner,
-            cornerHeight: fistCorner,
-            transform: nil
-        )
-        let thumb = CGPath(
-            roundedRect: thumbRect,
-            cornerWidth: thumbCorner,
-            cornerHeight: thumbCorner,
-            transform: nil
-        )
-        return Path(fist.union(thumb))
+        Image(systemName: filled ? "hand.thumbsup.fill" : "hand.thumbsup")
+            .font(.system(size: size * 0.92, weight: .semibold))
+            .foregroundStyle(color)
+            .frame(width: size, height: size)
+            .rotationEffect(.degrees(up ? 0 : 180))
+            .accessibilityHidden(true)
     }
 }
 
