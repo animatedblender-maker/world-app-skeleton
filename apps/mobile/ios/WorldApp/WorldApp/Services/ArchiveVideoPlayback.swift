@@ -131,6 +131,14 @@ final class ArchivePlayerBridge: ObservableObject {
     @Published var durationSeconds: Double = 0
     @Published var isReady = false
     @Published var playbackRate: Float = 1.0
+    /// `nil` until probed; `false` = silent Motion-JPEG / GIF-mp4 (no soundtrack).
+    @Published var hasAudioTrack: Bool? = nil
+
+    func publishHasAudioTrack(_ hasAudio: Bool?) {
+        if hasAudioTrack != hasAudio {
+            hasAudioTrack = hasAudio
+        }
+    }
 
     /// Apply progress on the main actor — skip no-op publishes (0.25s ticks were rebuilding chrome).
     func applyProgress(current: Double, duration: Double, playing: Bool?) {
@@ -647,13 +655,24 @@ struct MatteryaHubPlayerView: View {
                 if allowsCaptions, TranscriptService.isTranscriptablePostID(postID) {
                     captionsToggleButton
                 }
-                chromeIconButton(
-                    systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
-                ) {
-                    isMuted.toggle()
-                    bridge.controller?.setMuted(isMuted)
-                    bridge.publishMuted(isMuted)
-                    scheduleChromeHide()
+                if bridge.hasAudioTrack == false {
+                    // Silent GIF→mp4 / Motion-JPEG — don't imply a mute toggle will help.
+                    Text("No audio")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(Color.black.opacity(0.55), in: Capsule())
+                        .accessibilityLabel("This clip has no soundtrack")
+                } else {
+                    chromeIconButton(
+                        systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
+                    ) {
+                        isMuted.toggle()
+                        bridge.controller?.setMuted(isMuted)
+                        bridge.publishMuted(isMuted)
+                        scheduleChromeHide()
+                    }
                 }
                 if allowsFullscreen {
                     chromeIconButton(
@@ -1277,17 +1296,27 @@ struct MatteryaLandscapeFullscreenPlayer: View {
                         .accessibilityLabel(captionsEnabled ? "Captions on" : "Captions off")
                     }
 
-                    Button {
-                        isMuted.toggle()
-                        scheduleChromeHide()
-                    } label: {
-                        Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                            .font(.system(size: 14, weight: .semibold))
+                    if bridge.hasAudioTrack == false {
+                        Text("No audio")
+                            .font(.caption2.weight(.bold))
                             .foregroundStyle(.white)
-                            .frame(width: 36, height: 36)
-                            .background(Theme.ink.opacity(0.5), in: Circle())
+                            .padding(.horizontal, 10)
+                            .frame(height: 36)
+                            .background(Theme.ink.opacity(0.5), in: Capsule())
+                            .accessibilityLabel("This clip has no soundtrack")
+                    } else {
+                        Button {
+                            isMuted.toggle()
+                            scheduleChromeHide()
+                        } label: {
+                            Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 36, height: 36)
+                                .background(Theme.ink.opacity(0.5), in: Circle())
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 28)
                 .safeAreaPadding(.top, 16)
@@ -1576,8 +1605,12 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         vc.onPlayingChanged = { [weak bridge] playing in
             bridge?.publishPlaying(playing)
         }
+        vc.onHasAudioTrack = { [weak bridge] hasAudio in
+            bridge?.publishHasAudioTrack(hasAudio)
+        }
         bridge?.controller = vc
         bridge?.publishMuted(muted)
+        bridge?.publishHasAudioTrack(nil)
         context.coordinator.lastURL = url
         context.coordinator.lastActive = isActive
         context.coordinator.lastMuted = muted
@@ -1617,6 +1650,9 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         vc.view.isMultipleTouchEnabled = false
         vc.onPlayingChanged = { [weak bridge] playing in
             bridge?.publishPlaying(playing)
+        }
+        vc.onHasAudioTrack = { [weak bridge] hasAudio in
+            bridge?.publishHasAudioTrack(hasAudio)
         }
         bridge?.controller = vc
 
@@ -1738,6 +1774,8 @@ final class ArchiveVideoPlayerController: UIViewController {
     var onFailed: ((String) -> Void)?
     var onProgress: ((Double, Double) -> Void)?
     var onPlayingChanged: ((Bool) -> Void)?
+    /// `nil` until probed; `false` = no soundtrack (GIF→mp4 / Motion-JPEG).
+    var onHasAudioTrack: ((Bool?) -> Void)?
     var onVideoSize: ((CGSize) -> Void)?
     /// Sparks loop by default so clips don't freeze on the last frame.
     var loops = true
@@ -1907,6 +1945,7 @@ final class ArchiveVideoPlayerController: UIViewController {
         didKickPlayback = false
         resolvedPlayURL = nil
         errorLabel.isHidden = true
+        onHasAudioTrack?(nil)
         loadPoster(posterURL)
         setMuted(muted)
         if active {
@@ -2200,6 +2239,21 @@ final class ArchiveVideoPlayerController: UIViewController {
 
     var currentPlaybackRate: Float { preferredRate }
 
+    /// Probe whether the item has an audio soundtrack (GIF→mp4 / Motion-JPEG often don't).
+    /// Publishes via `onHasAudioTrack` so chrome can show a "No audio" badge.
+    private func probeHasAudioTrack(for item: AVPlayerItem) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let tracks = try await item.asset.loadTracks(withMediaType: .audio)
+                guard self.player?.currentItem === item else { return }
+                self.onHasAudioTrack?(!tracks.isEmpty)
+            } catch {
+                // Leave unknown — keep the mute toggle available.
+            }
+        }
+    }
+
     /// Restore mute/volume from the user's mute chrome (not the inactive force-silence).
     private func applyUserAudioOutput(on player: AVPlayer) {
         // Only claim solo when this surface still wants playback — otherwise a
@@ -2421,8 +2475,13 @@ final class ArchiveVideoPlayerController: UIViewController {
 
         // Instagram-speed: claim a pre-buffered player before any CDN resolve.
         // Install + play synchronously so the first painted frame is video, not black/poster.
-        let claimed = postID.flatMap { SparkWarmPool.shared.claim(postID: $0) }
-            ?? SparkWarmPool.shared.claimFirstContinuing()
+        // Masquerade watches pass postID=nil — never steal a Sparks/Hubs continuing
+        // handoff (those park muted and left Masquerade as picture-with-no-sound).
+        let claimed: AVPlayer? = {
+            guard let postID, !postID.isEmpty else { return nil }
+            return SparkWarmPool.shared.claim(postID: postID)
+                ?? SparkWarmPool.shared.claimFirstContinuing()
+        }()
         if let claimed {
             installClaimedPlayerSync(claimed, original: url, muted: muted, startTime: startTime, autoplay: autoplay)
             return
@@ -2653,6 +2712,7 @@ final class ArchiveVideoPlayerController: UIViewController {
                     case .readyToPlay:
                         // Stay on poster until rate > 0 (ready ≠ painted).
                         self.posterView.isHidden = false
+                        self.probeHasAudioTrack(for: item)
                         if !self.didKickPlayback, self.userWantsPlayback {
                             self.didKickPlayback = true
                             let resume = self.pendingResumeSeconds
@@ -2668,12 +2728,10 @@ final class ArchiveVideoPlayerController: UIViewController {
                                 }
                                 self.lastKnownSeconds = resume
                             }
-                            _ = MediaPlaybackCoordinator.shared.soloSparkAudio(
-                                keeping: claimed,
-                                pageEpoch: self.activePageEpoch
-                            )
-                            claimed.isMuted = self.mutedFlag
-                            claimed.volume = self.mutedFlag ? 0 : 1
+                            // Prefer applyUserAudioOutput so Masquerade foreground-watch
+                            // protection re-claims solo and actually unmutes (raw mute assign
+                            // after a failed pageEpoch solo left picture-with-no-sound).
+                            self.applyUserAudioOutput(on: claimed)
                             claimed.safePlayImmediately(atRate: self.preferredRate)
                             self.onPlayingChanged?(true)
                             self.onReady?()
@@ -2827,6 +2885,7 @@ final class ArchiveVideoPlayerController: UIViewController {
                     guard let self else { return }
                     switch item.status {
                     case .readyToPlay:
+                        self.probeHasAudioTrack(for: item)
                         if !self.didKickPlayback {
                             self.didKickPlayback = true
                             if self.restartsFromBeginningOnFocus {
@@ -3010,6 +3069,7 @@ final class ArchiveVideoPlayerController: UIViewController {
                     // Keep poster until rate > 0 — readyToPlay still paints black.
                     self.posterView.isHidden = false
                     self.errorLabel.isHidden = true
+                    self.probeHasAudioTrack(for: item)
                     // Kick playback only once per item — double play() caused visible restarts.
                     if !self.didKickPlayback {
                         self.didKickPlayback = true

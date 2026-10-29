@@ -764,6 +764,13 @@ struct AnonymousPostCard: View {
                 .onAppear {
                     videoMuted = false
                     MediaPlaybackCoordinator.shared.ensurePlaybackAudioSession()
+                    // Re-assert unmute after the player mounts — silence storms / warm-pool
+                    // handoffs can leave AVPlayer muted while the chrome still shows speaker.
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 180_000_000)
+                        videoMuted = false
+                        MediaPlaybackCoordinator.shared.ensurePlaybackAudioSession()
+                    }
                 }
                 .onDisappear {
                     MediaPlaybackCoordinator.shared.clearForegroundWatchProtection()
@@ -859,6 +866,11 @@ private struct MasqueradeVideoPlayerCover: View {
                 // User tapped play — always start with sound (never inherit a stale mute).
                 muted = false
                 MediaPlaybackCoordinator.shared.ensurePlaybackAudioSession()
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 180_000_000)
+                    muted = false
+                    MediaPlaybackCoordinator.shared.ensurePlaybackAudioSession()
+                }
             }
 
             Button {
