@@ -447,6 +447,12 @@ struct AnonymousPost: Identifiable, Codable, Hashable, Sendable {
     var mediaType: String?
     var mediaURL: String?
     var thumbURL: String?
+    /// Platform moderation flag — post stays visible with a Flagged badge.
+    var flagged: Bool?
+    var flaggedAt: String?
+    var flagReason: String?
+
+    var isFlagged: Bool { flagged == true || !(flaggedAt?.isEmpty ?? true) }
 
     /// UI title — `subreddit`/`reddit` already remapped to space/Masquerade.
     var displayTitle: String? {
@@ -491,6 +497,9 @@ struct AnonymousPost: Identifiable, Codable, Hashable, Sendable {
         // mediaUrl/thumbUrl: convertFromSnakeCase maps media_url → mediaUrl (not mediaURL).
         case mediaURL, media_url, mediaUrl
         case thumbURL, thumb_url, thumbUrl
+        case flagged
+        case flaggedAt, flagged_at
+        case flagReason, flag_reason
     }
 
     private struct AuthorBlob: Codable {
@@ -540,6 +549,14 @@ struct AnonymousPost: Identifiable, Codable, Hashable, Sendable {
         thumbURL = try c.decodeIfPresent(String.self, forKey: .thumbURL)
             ?? c.decodeIfPresent(String.self, forKey: .thumb_url)
             ?? c.decodeIfPresent(String.self, forKey: .thumbUrl)
+        flagged = try c.decodeIfPresent(Bool.self, forKey: .flagged)
+        flaggedAt = try c.decodeIfPresent(String.self, forKey: .flaggedAt)
+            ?? c.decodeIfPresent(String.self, forKey: .flagged_at)
+        flagReason = try c.decodeIfPresent(String.self, forKey: .flagReason)
+            ?? c.decodeIfPresent(String.self, forKey: .flag_reason)
+        if flagged == nil, let flaggedAt, !flaggedAt.isEmpty {
+            flagged = true
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -562,6 +579,9 @@ struct AnonymousPost: Identifiable, Codable, Hashable, Sendable {
         try c.encodeIfPresent(mediaType, forKey: .mediaType)
         try c.encodeIfPresent(mediaURL, forKey: .mediaURL)
         try c.encodeIfPresent(thumbURL, forKey: .thumbURL)
+        try c.encodeIfPresent(flagged, forKey: .flagged)
+        try c.encodeIfPresent(flaggedAt, forKey: .flaggedAt)
+        try c.encodeIfPresent(flagReason, forKey: .flagReason)
     }
 }
 

@@ -12,24 +12,32 @@ OpenAI’s free Moderation endpoint documents no training on inputs and (for `/v
 ```
 create anonymous post (video)
   → scheduleAnonymousModeration (fire-and-forget)
-      → local spam rules + adult keyword flag (text)
-      → download media (R2 / signed URL) to temp dir
-      → ffmpeg: frames at ~0% / 35% / 70%
-      → Falconsai/nsfw_image_detection (local)
-      → record anonymous.moderation_actions
-      → maybe set posts.state = 'held'
+      → local spam rules + adult keyword / NSFW frames
+      → FLAG on platform (posts.flagged_at) — stays visible + Flagged badge
+      → open anonymous.reports (reason auto:…) for human review
+      → human at /reports/masquerade → Remove / Flag / Skip
 ```
 
-Temp frame files are deleted in `finally`. Feed already serves only `state = 'active'`, so held posts drop out until a human restores them.
+Temp frame files are deleted in `finally`. Spam/scam still sets `state = held` (hidden). NSFW does **not** auto-hide.
+
+## Human review
+
+`https://api.matterya.com/reports/masquerade` (same password as `/reports`)
+
+| Action | Effect |
+|--------|--------|
+| **Remove** | `posts.state = removed`, report resolved |
+| **Flag** | keep `flagged_at`, report resolved |
+| **Skip** | clear flag (policy OK / false positive), report dismissed |
 
 ## Policy (Masquerade is 18+)
 
-| Signal | Adult space (`secrets` / `confessions` / category `confessions`) | Other spaces |
-|--------|------------------------------------------------------------------|--------------|
-| Spam / scam local rules | `held` | `held` |
-| Adult keywords in text | flag only | `held` |
-| NSFW video ≥ threshold | flag only | `held` |
-| Classifier / ffmpeg failure | flag `auto_scan_video_failed` | same (no mass-hold) |
+| Signal | Effect |
+|--------|--------|
+| Spam / scam local rules | `held` (hidden) |
+| Adult keywords in text | platform **Flagged** + open report |
+| NSFW video ≥ threshold | platform **Flagged** + open report (all spaces) |
+| Classifier / ffmpeg failure | `auto_scan_video_failed` action only (no mass-flag) |
 
 ## Env
 

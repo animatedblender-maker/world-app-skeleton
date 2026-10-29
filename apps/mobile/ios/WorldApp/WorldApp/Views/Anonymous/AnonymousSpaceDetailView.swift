@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct AnonymousSpaceDetailView: View {
     let slug: String
@@ -511,6 +512,20 @@ struct AnonymousPostCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
+                if post.isFlagged {
+                    HStack(spacing: 6) {
+                        Image(systemName: "flag.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("Flagged")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Theme.accent.opacity(0.12), in: Capsule())
+                    .accessibilityLabel("Flagged for review")
+                }
+
                 if !bodyText.isEmpty {
                     MatteryaRichText(
                         text: bodyText,
@@ -736,23 +751,29 @@ struct AnonymousPostCard: View {
                 // Real AVPlayer — do NOT pass anonymous post id (Hubs R2PlaybackResolver
                 // only understands CountryPost ids and would break signed Masquerade URLs).
                 // Tall unclipped stage + chrome reserves so mute/speed/timeline stay visible.
-                MatteryaHubPlayerView(
-                    url: url,
-                    posterURL: post.thumbURLValue,
-                    isActive: true,
-                    postID: nil,
-                    showsControls: true,
-                    loops: false,
-                    fillsFrame: false,
-                    topChromeReserve: 8,
-                    bottomChromeReserve: 14,
-                    isMuted: $videoMuted,
-                    allowsFullscreen: true
-                )
+                FeedPinchZoomContainer(
+                    onZoomingChanged: { zooming in
+                        isPhotoPinching = zooming
+                    }
+                ) {
+                    MatteryaHubPlayerView(
+                        url: url,
+                        posterURL: post.thumbURLValue,
+                        isActive: true,
+                        postID: nil,
+                        showsControls: true,
+                        loops: true,
+                        fillsFrame: false,
+                        topChromeReserve: 8,
+                        bottomChromeReserve: 14,
+                        isMuted: $videoMuted,
+                        allowsFullscreen: true
+                    )
+                }
                 .frame(maxWidth: .infinity)
                 .frame(height: 380)
                 .background(Color.black)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: isPhotoPinching ? 0 : 10, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(Theme.border.opacity(0.7), lineWidth: 0.5)
@@ -772,39 +793,16 @@ struct AnonymousPostCard: View {
                     MediaPlaybackCoordinator.shared.clearForegroundWatchProtection()
                 }
             } else {
-                let poster = post.thumbURLValue
-                let videoPoster = ZStack {
-                    if let poster {
-                        CachedAsyncImage(
-                            url: poster,
-                            maxPixelSize: 540,
-                            contentMode: .fill,
-                            placeholder: AnyView(Color.black),
-                            urgent: true
-                        )
-                        .frame(maxWidth: .infinity)
-                        .frame(height: posterH)
-                        .clipped()
-                    } else {
-                        Color.black.frame(height: posterH)
-                    }
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 52, weight: .light))
-                        .foregroundStyle(.white.opacity(0.92))
-                        .shadow(color: .black.opacity(0.35), radius: 8, y: 2)
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: posterH)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Theme.border.opacity(0.7), lineWidth: 0.5)
-                )
-
+                // Outside card: client-extracted first frame (Masquerade-only).
                 Button {
                     showFeedVideoPlayer = true
                 } label: {
-                    videoPoster
+                    MasqueradeVideoPoster(
+                        postID: post.id,
+                        videoURL: url,
+                        remotePosterURL: post.thumbURLValue,
+                        height: posterH
+                    )
                 }
                 .buttonStyle(.plain)
                 .fullScreenCover(isPresented: $showFeedVideoPlayer) {
@@ -831,6 +829,72 @@ struct AnonymousPostCard: View {
 
 }
 
+/// Feed / list poster for Masquerade videos — paints the literal first frame.
+/// Uses a remote thumb only as a fast placeholder while AV extracts frame 0.
+private struct MasqueradeVideoPoster: View {
+    let postID: String
+    let videoURL: URL
+    var remotePosterURL: URL? = nil
+    var height: CGFloat = 240
+
+    @State private var firstFrame: UIImage?
+    @State private var remoteFailed = false
+
+    var body: some View {
+        ZStack {
+            Color.black
+
+            if let firstFrame {
+                Image(uiImage: firstFrame)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: height)
+                    .clipped()
+            } else if let remote = remotePosterURL, !remoteFailed {
+                CachedAsyncImage(
+                    url: remote,
+                    maxPixelSize: 540,
+                    contentMode: .fill,
+                    placeholder: AnyView(Color.black),
+                    urgent: true,
+                    onLoadFailed: { _ in remoteFailed = true }
+                )
+                .frame(maxWidth: .infinity)
+                .frame(height: height)
+                .clipped()
+            }
+
+            Image(systemName: "play.circle.fill")
+                .font(.system(size: 52, weight: .light))
+                .foregroundStyle(.white.opacity(0.92))
+                .shadow(color: .black.opacity(0.35), radius: 8, y: 2)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Theme.border.opacity(0.7), lineWidth: 0.5)
+        )
+        .task(id: "\(postID)|\(videoURL.absoluteString)") {
+            // Wait out fling so space scroll does not fight AV decode.
+            for _ in 0..<8 {
+                if !ScrollBudget.isFlinging { break }
+                try? await Task.sleep(nanoseconds: 120_000_000)
+            }
+            guard !Task.isCancelled else { return }
+            if let image = await VideoFrameCache.shared.image(
+                for: postID,
+                videoURL: videoURL,
+                atFirstFrame: true
+            ) {
+                firstFrame = image
+            }
+        }
+    }
+}
+
 /// Full-screen Masquerade video — same archive player chrome as Hubs, signed R2 MP4.
 private struct MasqueradeVideoPlayerCover: View {
     let url: URL
@@ -843,19 +907,21 @@ private struct MasqueradeVideoPlayerCover: View {
             Color.black.ignoresSafeArea()
             // Keep player inside the safe area so top chrome + timeline are not
             // cropped by the notch / home indicator (ignoresSafeArea was clipping both).
-            MatteryaHubPlayerView(
-                url: url,
-                posterURL: posterURL,
-                isActive: true,
-                postID: nil,
-                showsControls: true,
-                loops: false,
-                fillsFrame: false,
-                topChromeReserve: 8,
-                bottomChromeReserve: 12,
-                isMuted: $muted,
-                allowsFullscreen: true
-            )
+            FeedPinchZoomContainer {
+                MatteryaHubPlayerView(
+                    url: url,
+                    posterURL: posterURL,
+                    isActive: true,
+                    postID: nil,
+                    showsControls: true,
+                    loops: true,
+                    fillsFrame: false,
+                    topChromeReserve: 8,
+                    bottomChromeReserve: 12,
+                    isMuted: $muted,
+                    allowsFullscreen: true
+                )
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.top, 4)
             .padding(.bottom, 4)

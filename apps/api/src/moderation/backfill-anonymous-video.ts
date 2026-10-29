@@ -120,11 +120,11 @@ async function main(): Promise<number> {
       });
       scanned += 1;
       if (result?.held) held += 1;
-      if (result?.video?.ok && (result.video.maxNsfw || 0) >= 0.85) flagged += 1;
+      if (result?.flagged) flagged += 1;
       if (result?.video && !result.video.ok) failed += 1;
       const ms = Date.now() - started;
       console.log(
-        `[ok] ${row.id.slice(0, 8)} @${row.space_slug} held=${!!result?.held} ` +
+        `[ok] ${row.id.slice(0, 8)} @${row.space_slug} flagged=${!!result?.flagged} held=${!!result?.held} ` +
           `nsfw=${result?.video?.ok ? result.video.maxNsfw.toFixed(3) : result?.video?.error || 'n/a'} ${ms}ms`
       );
     } catch (err: any) {

@@ -1,16 +1,11 @@
 /**
  * Masquerade auto-moderation (local only).
  *
- * Text: local spam rules + adult keyword flag.
- * Video: ffmpeg frame sample + on-box NSFW classifier (see video-local.ts).
- * Frames / bytes never leave Matterya.
- *
- * Policy (Masquerade is already 18+):
- * - Spam / scam rules → state = held
- * - High NSFW video outside adult spaces (category confessions / secrets|confessions slugs)
- *   → state = held for human review
- * - High NSFW inside adult spaces → record only (expected)
- * - Classifier failure → record review note; do not mass-hold
+ * Flow:
+ * 1) Score text + video frames on-box (nothing leaves Matterya).
+ * 2) On hit → FLAG on the platform (post stays visible) + open a report
+ *    for /reports/masquerade (Remove / Flag / Skip).
+ * 3) Spam / scam text still goes to held (not shown) — separate from NSFW flag.
  */
 import { pool } from '../db.js';
 import { runLocalSpamRules } from './local-rules.js';
@@ -23,9 +18,6 @@ import {
 } from './video-local.js';
 import { resolveAnonymousMediaUrl } from '../anonymous/media.js';
 
-const ADULT_SPACE_SLUGS = new Set(['secrets', 'confessions']);
-const ADULT_SPACE_CATEGORIES = new Set(['confessions']);
-
 function envBool(key: string, fallback: boolean): boolean {
   const v = process.env[key];
   if (v == null || v === '') return fallback;
@@ -34,6 +26,27 @@ function envBool(key: string, fallback: boolean): boolean {
 
 export function isAnonymousAutoModEnabled(): boolean {
   return envBool('MODERATION_ANON_ENABLED', true);
+}
+
+let flagSchemaEnsured = false;
+
+/** Best-effort ensure flagged_at / nullable reporter exist (seed locks may delay). */
+async function ensureFlagSchema(): Promise<void> {
+  if (flagSchemaEnsured) return;
+  try {
+    await pool.query(`
+      alter table anonymous.posts
+        add column if not exists flagged_at timestamptz,
+        add column if not exists flag_reason text
+    `);
+    await pool.query(`
+      alter table anonymous.reports
+        alter column reporter_profile_id drop not null
+    `);
+    flagSchemaEnsured = true;
+  } catch (err: any) {
+    console.warn('[moderation/anon] ensureFlagSchema', err?.message ?? err);
+  }
 }
 
 async function recordSystemAction(
@@ -51,6 +64,58 @@ async function recordSystemAction(
   );
 }
 
+/** Mark post flagged on-platform (still active / visible) + open review report. */
+export async function flagPostForReview(opts: {
+  postId: string;
+  reason: string;
+  detail?: string;
+}): Promise<{ reportId: string | null }> {
+  await ensureFlagSchema();
+  const reason = opts.reason.slice(0, 500);
+  const detail = (opts.detail || reason).slice(0, 2000);
+
+  await pool.query(
+    `
+    update anonymous.posts
+    set flagged_at = coalesce(flagged_at, now()),
+        flag_reason = coalesce(flag_reason, $2),
+        updated_at = now()
+    where id = $1::uuid
+      and state = 'active'
+    `,
+    [opts.postId, reason]
+  );
+
+  // One open auto-report per post — avoid queue spam on re-scan.
+  const existing = await pool.query<{ id: string }>(
+    `
+    select id from anonymous.reports
+    where target_type = 'post'
+      and target_id = $1::uuid
+      and state = 'open'
+      and reason like 'auto:%'
+    order by created_at desc
+    limit 1
+    `,
+    [opts.postId]
+  );
+  if (existing.rows[0]?.id) {
+    await recordSystemAction('post', opts.postId, 'auto_flag', detail);
+    return { reportId: existing.rows[0].id };
+  }
+
+  const { rows } = await pool.query<{ id: string }>(
+    `
+    insert into anonymous.reports (reporter_profile_id, target_type, target_id, reason, state)
+    values (null, 'post', $1::uuid, $2, 'open')
+    returning id
+    `,
+    [opts.postId, `auto:${detail}`.slice(0, 1000)]
+  );
+  await recordSystemAction('post', opts.postId, 'auto_flag', detail);
+  return { reportId: rows[0]?.id ?? null };
+}
+
 async function holdPost(postId: string, reason: string): Promise<void> {
   await pool.query(
     `
@@ -62,12 +127,6 @@ async function holdPost(postId: string, reason: string): Promise<void> {
     [postId]
   );
   await recordSystemAction('post', postId, 'auto_hold', reason);
-}
-
-function spaceIsAdult(slug: string | null | undefined, category: string | null | undefined): boolean {
-  const s = String(slug || '').toLowerCase();
-  const c = String(category || '').toLowerCase();
-  return ADULT_SPACE_SLUGS.has(s) || ADULT_SPACE_CATEGORIES.has(c);
 }
 
 export type AnonymousModInput = {
@@ -85,12 +144,14 @@ export type AnonymousModResult = {
   textDecision: 'safe' | 'held' | 'flagged';
   video?: VideoNsfwResult;
   held: boolean;
+  flagged: boolean;
+  reportId?: string | null;
   reasons: string[];
 };
 
 /**
  * Run text + optional video auto-mod for one Masquerade post.
- * Safe to await or fire-and-forget after create.
+ * NSFW → platform flag + open report (visible with badge). Spam → held.
  */
 export async function moderateAnonymousPost(
   input: AnonymousModInput
@@ -102,6 +163,8 @@ export async function moderateAnonymousPost(
 
   const reasons: string[] = [];
   let held = false;
+  let flagged = false;
+  let reportId: string | null = null;
   let textDecision: AnonymousModResult['textDecision'] = 'safe';
 
   const text = [input.title, input.body].filter(Boolean).join('\n');
@@ -114,13 +177,13 @@ export async function moderateAnonymousPost(
   } else if (textLooksNsfw(input.title, input.body)) {
     textDecision = 'flagged';
     reasons.push('text:adult_keywords');
-    await recordSystemAction('post', postId, 'auto_flag', 'text:adult_keywords');
-    // Adult keywords alone do not hold inside adult spaces.
-    if (!spaceIsAdult(input.spaceSlug, input.spaceCategory)) {
-      await holdPost(postId, 'text:adult_keywords_outside_adult_space');
-      held = true;
-      reasons.push('held:adult_keywords_outside_adult_space');
-    }
+    const r = await flagPostForReview({
+      postId,
+      reason: 'text:adult_keywords',
+      detail: 'text:adult_keywords',
+    });
+    flagged = true;
+    reportId = r.reportId;
   }
 
   let video: VideoNsfwResult | undefined;
@@ -142,15 +205,18 @@ export async function moderateAnonymousPost(
           provider: video.provider,
           model: video.modelVersion,
           frames: video.frames,
+          space: input.spaceSlug ?? null,
         })
       );
-      if (video.maxNsfw >= thr && !spaceIsAdult(input.spaceSlug, input.spaceCategory) && !held) {
-        await holdPost(
+      if (video.maxNsfw >= thr) {
+        const r = await flagPostForReview({
           postId,
-          `video:nsfw_outside_adult_space score=${video.maxNsfw.toFixed(3)}`
-        );
-        held = true;
-        reasons.push('held:nsfw_video_outside_adult_space');
+          reason: 'video:nsfw',
+          detail: summary,
+        });
+        flagged = true;
+        reportId = r.reportId ?? reportId;
+        reasons.push('flagged:nsfw_video');
       }
     } else {
       reasons.push(`video:scan_failed:${video.error || 'unknown'}`);
@@ -163,7 +229,7 @@ export async function moderateAnonymousPost(
     }
   }
 
-  return { textDecision, video, held, reasons };
+  return { textDecision, video, held, flagged, reportId, reasons };
 }
 
 /** Fire-and-forget — create path must not hang on model download / ffmpeg. */

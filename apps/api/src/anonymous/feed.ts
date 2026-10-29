@@ -52,6 +52,7 @@ function forYouJitter(seed: string, id: string): number {
 const FEED_SELECT = `
     select p.id, p.space_id, p.title, p.body, p.state, p.score, p.comment_count,
            p.created_at, p.edited_at, p.media_type, p.media_url, p.thumb_url,
+           p.flagged_at, p.flag_reason,
            s.slug as space_slug, s.title as space_title,
            a.id as author_id, a.username as author_username, a.avatar_seed as author_avatar_seed,
            coalesce(v.value, 0) as my_vote,
@@ -355,6 +356,9 @@ export async function getFeed(opts: {
       media_type: r.media_type ?? null,
       media_url: r.media_url ?? null,
       thumb_url: r.thumb_url ?? null,
+      flagged: !!r.flagged_at,
+      flagged_at: iso(r.flagged_at),
+      flag_reason: r.flag_reason ?? null,
     }))
   );
 

@@ -80,6 +80,10 @@ import {
   hasReportsAccess,
 } from './reports/reports-page.js';
 import {
+  handleMasqueradeModAction,
+  handleMasqueradeModGet,
+} from './reports/masquerade-mod-page.js';
+import {
   authMailStatus,
   confirmEmailWithToken,
   resendConfirmation,
@@ -272,6 +276,16 @@ app.get('/reports/data', (req, res) => {
 });
 app.post('/reports/login', handleReportsLogin);
 app.get('/reports/logout', handleReportsLogout);
+/** Masquerade review queue — Remove / Flag / Skip */
+app.get('/reports/masquerade', (req, res) => {
+  void handleMasqueradeModGet(req, res);
+});
+app.post('/reports/masquerade/action', (req, res) => {
+  void handleMasqueradeModAction(req, res).catch((err) => {
+    console.error('[reports/masquerade/action]', err?.message ?? err);
+    res.status(500).send('action failed');
+  });
+});
 // Friendly alias
 app.get('/report', (_req, res) => res.redirect(302, '/reports'));
 

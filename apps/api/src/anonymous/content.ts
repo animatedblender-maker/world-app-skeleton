@@ -23,6 +23,10 @@ export type PostPublic = {
   media_type?: string | null;
   media_url?: string | null;
   thumb_url?: string | null;
+  /** Platform auto/human flag — post stays visible with a Flagged badge. */
+  flagged?: boolean;
+  flagged_at?: string | null;
+  flag_reason?: string | null;
 };
 
 export type CommentPublic = {
@@ -103,6 +107,7 @@ export async function listSpacePosts(opts: {
     `
     select p.id, p.space_id, p.title, p.body, p.state, p.score, p.comment_count,
            p.created_at, p.edited_at, p.media_type, p.media_url, p.thumb_url,
+           p.flagged_at, p.flag_reason,
            a.id as author_id, a.username as author_username, a.avatar_seed as author_avatar_seed,
            coalesce(v.value, 0) as my_vote
     from anonymous.posts p
@@ -129,6 +134,8 @@ export async function listSpacePosts(opts: {
       `
       select p.id, p.space_id, p.title, p.body, p.state, p.score, p.comment_count,
              p.created_at, p.edited_at, p.media_type, p.media_url, p.thumb_url,
+             p.flagged_at, p.flag_reason,
+           p.flagged_at, p.flag_reason,
              a.id as author_id, a.username as author_username, a.avatar_seed as author_avatar_seed,
              coalesce(v.value, 0) as my_vote
       from anonymous.posts p
@@ -170,6 +177,9 @@ export async function listSpacePosts(opts: {
       media_type: r.media_type ?? null,
       media_url: r.media_url ?? null,
       thumb_url: r.thumb_url ?? null,
+      flagged: !!r.flagged_at,
+      flagged_at: iso(r.flagged_at),
+      flag_reason: r.flag_reason ?? null,
     }))
   );
 
@@ -210,6 +220,7 @@ export async function listAuthorPosts(opts: {
     `
     select p.id, p.space_id, p.title, p.body, p.state, p.score, p.comment_count,
            p.created_at, p.edited_at, p.media_type, p.media_url, p.thumb_url,
+           p.flagged_at, p.flag_reason,
            a.id as author_id, a.username as author_username, a.avatar_seed as author_avatar_seed,
            s.slug as space_slug, s.title as space_title,
            coalesce(v.value, 0) as my_vote
@@ -252,6 +263,9 @@ export async function listAuthorPosts(opts: {
       media_type: r.media_type ?? null,
       media_url: r.media_url ?? null,
       thumb_url: r.thumb_url ?? null,
+      flagged: !!r.flagged_at,
+      flagged_at: iso(r.flagged_at),
+      flag_reason: r.flag_reason ?? null,
     }))
   );
   let next_cursor: string | null = null;
@@ -402,6 +416,9 @@ export async function createPost(opts: {
       media_type: r.media_type ?? null,
       media_url: r.media_url ?? null,
       thumb_url: r.thumb_url ?? null,
+      flagged: !!r.flagged_at,
+      flagged_at: iso(r.flagged_at),
+      flag_reason: r.flag_reason ?? null,
     });
     return { ok: true, post };
   } catch (err) {
@@ -429,6 +446,7 @@ export async function getPost(opts: {
     `
     select p.id, p.space_id, p.title, p.body, p.state, p.score, p.comment_count,
            p.created_at, p.edited_at, p.media_type, p.media_url, p.thumb_url,
+           p.flagged_at, p.flag_reason,
            s.slug as space_slug, s.title as space_title,
            a.id as author_id, a.username as author_username, a.avatar_seed as author_avatar_seed,
            coalesce(v.value, 0) as my_vote
@@ -486,6 +504,9 @@ export async function getPost(opts: {
     media_type: r.media_type ?? null,
     media_url: r.media_url ?? null,
     thumb_url: r.thumb_url ?? null,
+    flagged: !!r.flagged_at,
+    flagged_at: iso(r.flagged_at),
+    flag_reason: r.flag_reason ?? null,
   });
 
   return {
