@@ -1,6 +1,7 @@
 /**
  * Masquerade search — Spaces, posts, and anonymous usernames.
- * Tuned for speed: prefix-first matching, no R2 media re-sign on the list.
+ * Prefix-first matching; post hits include signed media so result cards show
+ * images/videos the same way the feed does (not only after opening the post).
  * Never returns Matterya account ids / ordinary profiles.
  */
 import { pool } from '../db.js';
@@ -8,6 +9,7 @@ import type { AnonymousProfilePublic } from './identity.js';
 import type { PostPublic } from './content.js';
 import type { SpacePublic } from './spaces.js';
 import { mapSpace } from './spaces.js';
+import { withResolvedMediaMany } from './media.js';
 
 function iso(v: Date | string | null | undefined): string | null {
   if (v == null) return null;
@@ -157,30 +159,31 @@ export async function searchMasquerade(opts: {
     mapSpace(row, !!row.is_joined || !!row.joined)
   );
 
-  // Text-first search: skip R2 re-sign. Opening a post still resolves media.
-  const posts: PostPublic[] = postsRes.rows.map((r) => ({
-    id: r.id,
-    space_id: r.space_id,
-    space_slug: r.space_slug,
-    space_title: r.space_title,
-    author: {
-      id: r.author_id,
-      username: r.author_username,
-      avatar_seed: r.author_avatar_seed,
-    },
-    title: r.title,
-    body: r.body,
-    state: r.state,
-    score: Number(r.score) || 0,
-    comment_count: Number(r.comment_count) || 0,
-    created_at: iso(r.created_at)!,
-    edited_at: iso(r.edited_at),
-    my_vote: 0,
-    media_type: r.media_type ?? null,
-    // Leave durable refs unsigned — list cards stay fast; detail re-signs.
-    media_url: null,
-    thumb_url: null,
-  }));
+  // Sign media for result cards — same shape as feed / space lists (≤24 rows).
+  const posts: PostPublic[] = await withResolvedMediaMany(
+    postsRes.rows.map((r) => ({
+      id: r.id,
+      space_id: r.space_id,
+      space_slug: r.space_slug,
+      space_title: r.space_title,
+      author: {
+        id: r.author_id,
+        username: r.author_username,
+        avatar_seed: r.author_avatar_seed,
+      },
+      title: r.title,
+      body: r.body,
+      state: r.state,
+      score: Number(r.score) || 0,
+      comment_count: Number(r.comment_count) || 0,
+      created_at: iso(r.created_at)!,
+      edited_at: iso(r.edited_at),
+      my_vote: 0,
+      media_type: r.media_type ?? null,
+      media_url: r.media_url ?? null,
+      thumb_url: r.thumb_url ?? null,
+    }))
+  );
 
   return { people, spaces, posts };
 }
