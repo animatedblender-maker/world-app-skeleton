@@ -76,12 +76,13 @@ struct AnonymousSpacesDirectoryView: View {
             ScrollView {
                 LazyVStack(spacing: 12) {
                     ForEach(spaces) { space in
-                        Button {
-                            store.pushSpace(slug: space.slug)
-                        } label: {
-                            AnonymousSpaceCard(space: space)
-                        }
-                        .buttonStyle(.plain)
+                        AnonymousSpaceCard(
+                            space: space,
+                            onOpen: { store.pushSpace(slug: space.slug) },
+                            onJoin: space.isJoined == true || space.isPaid
+                                ? nil
+                                : { _ = await store.joinSpace(space) }
+                        )
                     }
                 }
                 .padding(Theme.pagePadding)
@@ -109,69 +110,119 @@ struct AnonymousSpacesDirectoryView: View {
 
 struct AnonymousSpaceCard: View {
     let space: AnonymousSpace
+    /// Opens the space (title / body tap). Nil = non-interactive card chrome only.
+    var onOpen: (() -> Void)? = nil
+    /// Join when the viewer is not a member. Nil hides the control (already joined / paid / onboarding owns the CTA).
+    var onJoin: (() async -> Void)? = nil
+    @State private var joining = false
+
+    private var isJoined: Bool { space.isJoined == true }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Theme.matteDeep)
-                        .frame(width: 44, height: 44)
-                    Text(String(space.title.prefix(1)).uppercased())
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(Theme.ink)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
-                        Text(space.title)
-                            .font(.headline)
-                            .foregroundStyle(Theme.ink)
-                            .lineLimit(1)
-                        if space.isPaid {
-                            Text("Paid")
-                                .font(.caption2.weight(.bold))
+            Button {
+                onOpen?()
+            } label: {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .top, spacing: 10) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Theme.matteDeep)
+                                .frame(width: 44, height: 44)
+                            Text(String(space.title.prefix(1)).uppercased())
+                                .font(.headline.weight(.semibold))
                                 .foregroundStyle(Theme.ink)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(Theme.matte, in: Capsule())
-                                .overlay(Capsule().stroke(Theme.border, lineWidth: 0.5))
                         }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                Text(space.title)
+                                    .font(.headline)
+                                    .foregroundStyle(Theme.ink)
+                                    .lineLimit(1)
+                                if space.isPaid {
+                                    Text("Paid")
+                                        .font(.caption2.weight(.bold))
+                                        .foregroundStyle(Theme.ink)
+                                        .padding(.horizontal, 7)
+                                        .padding(.vertical, 3)
+                                        .background(Theme.matte, in: Capsule())
+                                        .overlay(Capsule().stroke(Theme.border, lineWidth: 0.5))
+                                }
+                            }
+                            if let category = space.category, !category.isEmpty {
+                                Text(category)
+                                    .font(.caption)
+                                    .foregroundStyle(Theme.inkMuted)
+                            }
+                        }
+                        Spacer(minLength: 0)
                     }
-                    if let category = space.category, !category.isEmpty {
-                        Text(category)
-                            .font(.caption)
-                            .foregroundStyle(Theme.inkMuted)
+
+                    if let description = space.description, !description.isEmpty {
+                        Text(description)
+                            .font(.subheadline)
+                            .foregroundStyle(Theme.inkSecondary)
+                            .lineLimit(3)
+                            .multilineTextAlignment(.leading)
+                    }
+
+                    HStack(spacing: 12) {
+                        if let count = space.memberCount {
+                            Text("\(count.formatted()) members")
+                                .font(.caption)
+                                .foregroundStyle(Theme.inkMuted)
+                        }
+                        if let posts = space.postCount {
+                            Text("\(posts.formatted()) posts")
+                                .font(.caption)
+                                .foregroundStyle(Theme.inkMuted)
+                        }
+                        if let owner = space.ownerUsername {
+                            Text("·")
+                                .foregroundStyle(Theme.inkMuted)
+                            Text("@\(owner)")
+                                .font(.caption)
+                                .foregroundStyle(Theme.inkMuted)
+                        }
+                        Spacer(minLength: 0)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(onOpen == nil)
+
+            HStack {
                 Spacer(minLength: 0)
-            }
-
-            if let description = space.description, !description.isEmpty {
-                Text(description)
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.inkSecondary)
-                    .lineLimit(3)
-            }
-
-            HStack(spacing: 12) {
-                if let count = space.memberCount {
-                    Text("\(count.formatted()) members")
-                        .font(.caption)
-                        .foregroundStyle(Theme.inkMuted)
-                }
-                if let owner = space.ownerUsername {
-                    Text("·")
-                        .foregroundStyle(Theme.inkMuted)
-                    Text("@\(owner)")
-                        .font(.caption)
-                        .foregroundStyle(Theme.inkMuted)
-                }
-                Spacer()
-                if space.isJoined == true {
+                if isJoined {
                     Text("Joined")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.ink)
+                        .foregroundStyle(Theme.inkMuted)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(Theme.matteDeep, in: Capsule())
+                        .overlay(Capsule().stroke(Theme.border, lineWidth: 0.5))
+                } else if let onJoin, !space.isPaid {
+                    Button {
+                        guard !joining else { return }
+                        joining = true
+                        Task {
+                            await onJoin()
+                            joining = false
+                        }
+                    } label: {
+                        Text(joining ? "Joining…" : "Join")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(Theme.surface)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(Theme.ink, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(joining)
+                    .accessibilityLabel("Join \(space.title)")
                 }
             }
         }

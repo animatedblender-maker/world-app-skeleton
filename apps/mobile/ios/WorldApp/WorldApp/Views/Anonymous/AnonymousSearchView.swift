@@ -349,13 +349,16 @@ struct AnonymousSearchView: View {
     }
 
     private func spaceButton(_ space: AnonymousSpace) -> some View {
-        Button {
-            commitHistory()
-            store.pushSpace(slug: space.slug)
-        } label: {
-            AnonymousSpaceCard(space: space)
-        }
-        .buttonStyle(.plain)
+        AnonymousSpaceCard(
+            space: space,
+            onOpen: {
+                commitHistory()
+                store.pushSpace(slug: space.slug)
+            },
+            onJoin: space.isJoined == true || space.isPaid
+                ? nil
+                : { _ = await store.joinSpace(space) }
+        )
         .padding(.horizontal, Theme.pagePadding)
         .padding(.bottom, 10)
     }

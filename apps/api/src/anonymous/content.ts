@@ -882,7 +882,11 @@ export async function castVote(opts: {
       );
     }
 
-    const delta = value - oldVal;
+    // One tap → at most ±1 on the score. Switching like(+1)→dislike(-1) used to
+    // apply delta -2 (remove up + add down); treat a flip as a single step.
+    let delta = value - oldVal;
+    if (delta > 1) delta = 1;
+    if (delta < -1) delta = -1;
     let score = 0;
     if (targetType === 'post') {
       const { rows } = await client.query<{ score: number }>(

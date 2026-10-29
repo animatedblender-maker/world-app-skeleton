@@ -406,7 +406,7 @@ private struct AnonymousCommentRowView: View {
                     up: true,
                     filled: liked,
                     size: 13,
-                    color: liked ? Theme.like : Theme.inkMuted
+                    color: liked ? Theme.ink : Theme.inkMuted
                 )
                 .padding(.horizontal, 7)
                 .padding(.vertical, 5)
@@ -418,7 +418,7 @@ private struct AnonymousCommentRowView: View {
             Text("\((comment.score ?? 0))")
                 .font(.caption.weight(.bold))
                 .monospacedDigit()
-                .foregroundStyle(liked ? Theme.like : (disliked ? Theme.danger : Theme.inkMuted))
+                .foregroundStyle((liked || disliked) ? Theme.ink : Theme.inkMuted)
                 .padding(.horizontal, 1)
 
             Button {
@@ -428,7 +428,7 @@ private struct AnonymousCommentRowView: View {
                     up: false,
                     filled: disliked,
                     size: 13,
-                    color: disliked ? Theme.danger : Theme.inkMuted
+                    color: disliked ? Theme.ink : Theme.inkMuted
                 )
                 .padding(.horizontal, 7)
                 .padding(.vertical, 5)

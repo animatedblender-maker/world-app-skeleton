@@ -1239,11 +1239,19 @@ final class AnonymousStore {
     @discardableResult
     func vote(post: AnonymousPost, value: Int) async -> AnonymousPost? {
         do {
-            try await AnonymousService.vote(targetType: "post", targetId: post.id, value: value)
+            let result = try await AnonymousService.vote(targetType: "post", targetId: post.id, value: value)
             var updated = post
             let prev = post.myVote ?? 0
-            updated.myVote = value
-            updated.score = (post.score ?? 0) + value - prev
+            updated.myVote = result.value ?? value
+            // Prefer server score. Fallback clamps a like↔dislike flip to ±1 (not ±2).
+            if let serverScore = result.score {
+                updated.score = serverScore
+            } else {
+                var delta = value - prev
+                if delta > 1 { delta = 1 }
+                if delta < -1 { delta = -1 }
+                updated.score = (post.score ?? 0) + delta
+            }
             rememberPost(updated)
             return updated
         } catch let err as AnonymousError {
@@ -1258,11 +1266,18 @@ final class AnonymousStore {
     @discardableResult
     func voteComment(_ comment: AnonymousComment, value: Int) async -> AnonymousComment? {
         do {
-            try await AnonymousService.vote(targetType: "comment", targetId: comment.id, value: value)
+            let result = try await AnonymousService.vote(targetType: "comment", targetId: comment.id, value: value)
             var updated = comment
             let prev = comment.myVote ?? 0
-            updated.myVote = value
-            updated.score = (comment.score ?? 0) + value - prev
+            updated.myVote = result.value ?? value
+            if let serverScore = result.score {
+                updated.score = serverScore
+            } else {
+                var delta = value - prev
+                if delta > 1 { delta = 1 }
+                if delta < -1 { delta = -1 }
+                updated.score = (comment.score ?? 0) + delta
+            }
             return updated
         } catch let err as AnonymousError {
             lastError = err.errorDescription

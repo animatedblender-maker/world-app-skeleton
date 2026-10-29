@@ -212,10 +212,15 @@ enum AnonymousService {
         return try await post("/v1/anonymous/posts/\(postId)/comments", body: body, as: AnonymousComment.self)
     }
 
-    static func vote(targetType: String, targetId: String, value: Int) async throws {
-        struct Empty: Decodable {}
+    struct VoteResult: Decodable {
+        let value: Int?
+        let score: Int?
+    }
+
+    @discardableResult
+    static func vote(targetType: String, targetId: String, value: Int) async throws -> VoteResult {
         // API route is `/votes` and reads snake_case (`target_type` / `target_id`).
-        let _: Empty = try await post(
+        try await post(
             "/v1/anonymous/votes",
             body: [
                 "target_type": targetType,
@@ -224,7 +229,7 @@ enum AnonymousService {
                 "targetType": targetType,
                 "targetId": targetId,
             ],
-            as: Empty.self,
+            as: VoteResult.self,
             allowEmpty: true
         )
     }
