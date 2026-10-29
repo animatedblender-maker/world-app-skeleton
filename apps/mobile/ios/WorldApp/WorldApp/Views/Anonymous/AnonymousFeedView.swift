@@ -65,10 +65,9 @@ struct AnonymousFeedView: View {
                                 if index < 6 || index >= store.feed.count - 3 {
                                     AnonymousCommentsWarmCache.shared.warm(post.id)
                                 }
-                                // Rare silent append — only at the very end (first page is fat).
-                                if store.feedHasMore,
-                                   store.feed.count < AnonymousService.feedSoftCap,
-                                   index >= store.feed.count - 2 {
+                                // Light-speed endless — top up well before the last card.
+                                let remaining = store.feed.count - index
+                                if remaining <= AnonymousService.feedPrefetchRemaining {
                                     Task { await store.loadMoreFeed() }
                                 }
                             }

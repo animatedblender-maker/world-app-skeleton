@@ -5,11 +5,13 @@ import Foundation
 enum AnonymousService {
     /// First paint stays under a soft budget; one retry covers cold wakes.
     private static let timeout: TimeInterval = 45
-    /// Fat first page — one fetch should cover a long scroll (almost never load-more).
-    private static let feedFirstLimit = 40
-    static let feedPageLimit = 40
-    /// Soft cap for endless scroll — after this, wait for pull-to-refresh.
-    static let feedSoftCap = 80
+    /// Fat first page — one fetch covers a long first paint; load-more keeps it endless.
+    private static let feedFirstLimit = 48
+    static let feedPageLimit = 48
+    /// No hard stop — Masquerade For you stays endless (soft-recycle when ledger/cursor thin).
+    static let feedSoftCap = 10_000
+    /// Prefetch when this many cards remain (light-speed append).
+    static let feedPrefetchRemaining = 10
     static let spacePostsPageLimit = 40
 
     // MARK: - Session / identity

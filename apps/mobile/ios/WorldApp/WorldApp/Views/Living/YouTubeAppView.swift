@@ -1394,7 +1394,7 @@ struct YouTubeAppView: View {
         cardWidth: CGFloat,
         onNearEnd: (() -> Void)? = nil
     ) -> some View {
-        // Algorithm target: ~15 ranked long-form cards (one light LazyHStack — no double-copy).
+        // Algorithm target: ~15 ranked long-form cards; rail loops endlessly sideways.
         let railPosts = Array(posts.prefix(Self.hubsRailCardCount))
         return VStack(alignment: .leading, spacing: 10) {
             if !title.isEmpty {

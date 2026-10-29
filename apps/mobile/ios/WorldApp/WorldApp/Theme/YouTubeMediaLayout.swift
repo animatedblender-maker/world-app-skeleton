@@ -726,37 +726,87 @@ struct YouTubeWatchPlayer<Content: View>: View {
     }
 }
 
-/// Light Netflix horizontal rail — one LazyHStack, no copy/scrollTo (those made Hubs heavy).
-/// First card sits fully in-frame via leading padding. `onNearEnd` densifies inventory;
-/// endless visual wrap stays deferred until a UIKit-light path exists.
+/// Netflix-style endless horizontal rail — two LazyHStack cycles; wrap jumps back
+/// one set with animations disabled so sideways swipe never hits a hard end.
+/// First card starts fully in-frame (no middle landing). `onNearEnd` densifies.
 struct HubsLoopingHorizontalRail<Content: View>: View {
     let posts: [CountryPost]
     var spacing: CGFloat = 14
     var horizontalPadding: CGFloat = Theme.pagePadding
-    /// Fired once when the user nears the end of this rail (debounced).
+    /// Fired when the logical (mod N) index nears the end of the ranked set.
     var onNearEnd: (() -> Void)? = nil
     @ViewBuilder var content: (_ post: CountryPost, _ logicalIndex: Int) -> Content
 
+    /// Need a few cards before looping is meaningful; short rails stay finite.
+    private var shouldLoop: Bool { posts.count >= 3 }
+    private let copies = 2
+    @State private var wrapArmed = false
+    @State private var isJumping = false
     @State private var nearEndArmed = true
+
+    private var postsSignature: String {
+        posts.map(\.id).joined(separator: ",")
+    }
 
     var body: some View {
         let n = posts.count
-        ScrollView(.horizontal, showsIndicators: false) {
-            LazyHStack(alignment: .top, spacing: spacing) {
-                ForEach(Array(posts.enumerated()), id: \.offset) { index, post in
-                    content(post, index)
-                        .onAppear {
-                            guard n > 0, nearEndArmed, index >= max(0, n - 2) else { return }
-                            nearEndArmed = false
-                            onNearEnd?()
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                                nearEndArmed = true
+        let total = n > 0 ? (shouldLoop ? n * copies : n) : 0
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: spacing) {
+                    ForEach(0..<total, id: \.self) { index in
+                        let logical = n > 0 ? index % n : 0
+                        let post = posts[logical]
+                        content(post, logical)
+                            .id(index)
+                            .onAppear {
+                                guard n > 0, !isJumping else { return }
+                                if nearEndArmed, logical >= max(0, n - 3) {
+                                    nearEndArmed = false
+                                    onNearEnd?()
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                                        nearEndArmed = true
+                                    }
+                                }
+                                guard shouldLoop, wrapArmed else { return }
+                                // Far end of second copy → jump back one set (seamless loop).
+                                if index >= n + (n - 2) {
+                                    isJumping = true
+                                    let target = index - n
+                                    var t = Transaction()
+                                    t.disablesAnimations = true
+                                    withTransaction(t) {
+                                        proxy.scrollTo(target, anchor: .leading)
+                                    }
+                                    DispatchQueue.main.async {
+                                        isJumping = false
+                                    }
+                                }
                             }
-                        }
+                    }
+                }
+                .padding(.leading, horizontalPadding)
+                .padding(.trailing, horizontalPadding)
+            }
+            .onAppear {
+                wrapArmed = false
+                isJumping = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+                    wrapArmed = shouldLoop
                 }
             }
-            .padding(.leading, horizontalPadding)
-            .padding(.trailing, horizontalPadding)
+            .onChange(of: postsSignature) { _, _ in
+                wrapArmed = false
+                isJumping = false
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) {
+                    proxy.scrollTo(0, anchor: .leading)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+                    wrapArmed = shouldLoop
+                }
+            }
         }
     }
 }

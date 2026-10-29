@@ -102,7 +102,7 @@ final class AnonymousStore {
     /// Last time For you was replaced with a newly ranked first page.
     private var lastFeedReplaceAt: Date = .distantPast
     /// Minimum gap between automatic open-reshuffles (pull-to-refresh always reshuffles).
-    private let feedReshuffleInterval: TimeInterval = 25
+    private let feedReshuffleInterval: TimeInterval = 12
 
     /// Stable Masquerade handle for Me — never swap for a regenerated suggestion.
     var displayUsername: String {
@@ -776,15 +776,12 @@ final class AnonymousStore {
                     feed.append(contentsOf: extras.prefix(24))
                 }
                 feedCursor = page.nextCursor
-                feedHasMore =
-                    page.nextCursor != nil
-                    && feed.count < AnonymousService.feedSoftCap
+                feedHasMore = true
             } else {
-                withAnimation(MatteryaMotion.insert) {
+                withAnimation(MatteryaMotion.snappy) {
                     feed = merged
                     feedCursor = page.nextCursor
-                    feedHasMore = page.nextCursor != nil
-                        && merged.count < AnonymousService.feedSoftCap
+                    feedHasMore = true
                 }
                 lastFeedReplaceAt = Date()
             }
@@ -805,58 +802,60 @@ final class AnonymousStore {
         }
     }
 
-    /// Rare append near the absolute end — first page is fat; soft-cap stops churn.
+    /// Endless append — prefetch ahead of the tail; soft-recycle when cursor/ledger thin.
     func loadMoreFeed() async {
         guard !feedLoading, !feedLoadingMore else { return }
-        guard feedHasMore, feedCursor?.isEmpty == false else { return }
         if feed.count >= AnonymousService.feedSoftCap {
-            feedHasMore = false
-            return
+            feedHasMore = true
+            // Trim oldest painted cards so RAM stays light while scroll stays endless.
+            let keep = Array(feed.suffix(600))
+            feed = keep
         }
         feedLoadingMore = true
         defer { feedLoadingMore = false }
         var hops = 0
-        while hops < 2 {
+        while hops < 4 {
             hops += 1
-            guard let cursor = feedCursor, !cursor.isEmpty else {
-                feedHasMore = false
-                return
-            }
+            let cursor = feedCursor
             do {
                 let page = try await AnonymousService.feed(
                     sort: feedSort,
-                    cursor: cursor,
+                    cursor: (cursor?.isEmpty == false) ? cursor : nil,
                     limit: AnonymousService.feedPageLimit
                 )
-                var seen = Set(feed.map(\.id)).union(sessionSeenFeedIds)
+                var seen = Set(feed.map(\.id))
+                // Soft recycle may re-serve session-seen — still skip what's on screen now.
                 var appended: [AnonymousPost] = []
                 for item in page.items where seen.insert(item.id).inserted {
                     postById[item.id] = item
                     sessionSeenFeedIds.insert(item.id)
                     appended.append(item)
-                    if feed.count + appended.count >= AnonymousService.feedSoftCap { break }
                 }
                 feedCursor = page.nextCursor
                 if !appended.isEmpty {
                     feed.append(contentsOf: appended)
-                    feedHasMore =
-                        page.nextCursor != nil
-                        && feed.count < AnonymousService.feedSoftCap
+                    feedHasMore = true
                     cacheFeed(feed, cursor: feedCursor)
                     return
                 }
-                // All duplicates — advance cursor once more (bounded).
-                guard let next = page.nextCursor, next != cursor else {
-                    feedHasMore = false
-                    cacheFeed(feed, cursor: feedCursor)
-                    return
+                // All duplicates — advance cursor, or restart from a fresh ranked page.
+                if let next = page.nextCursor, next != cursor {
+                    feedCursor = next
+                    feedHasMore = true
+                    continue
+                }
+                // Cursor exhausted — clear suppress so soft-recycle can refill endlessly.
+                if hops >= 2 {
+                    sessionSeenFeedIds = Set(feed.suffix(24).map(\.id))
+                    feedCursor = nil
                 }
                 feedHasMore = true
             } catch {
-                feedHasMore = feedCursor != nil
+                feedHasMore = true
                 return
             }
         }
+        feedHasMore = true
         cacheFeed(feed, cursor: feedCursor)
     }
 
