@@ -518,10 +518,14 @@ final class AnonymousStore {
         // Paint chrome immediately from any cached directory hit — don't wait on /space.
         let alreadyOpen = currentSpace?.slug == trimmed || currentSpace?.normalizedSlug == needle
         if !alreadyOpen {
+            func matches(_ space: AnonymousSpace) -> Bool {
+                space.slug == trimmed || space.normalizedSlug == needle
+            }
             let known =
-                spacesForYou.first(where: { $0.slug == trimmed || $0.normalizedSlug == needle })
-                ?? spacesPopular.first(where: { $0.slug == trimmed || $0.normalizedSlug == needle })
-                ?? spacesJoined.first(where: { $0.slug == trimmed || $0.normalizedSlug == needle })
+                (spacesByFilter[.forYou] ?? []).first(where: matches)
+                ?? (spacesByFilter[.popular] ?? []).first(where: matches)
+                ?? (spacesByFilter[.joined] ?? []).first(where: matches)
+                ?? spacesByFilter.values.flatMap { $0 }.first(where: matches)
             if let known {
                 withAnimation(MatteryaMotion.snappy) { currentSpace = known }
             }
