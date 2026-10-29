@@ -109,8 +109,8 @@ export async function withResolvedMediaMany<T extends {
   thumb_url?: string | null;
 }>(posts: T[]): Promise<T[]> {
   if (!posts.length) return posts;
-  // Bounded concurrency — unbounded Promise.all over a feed page can stall cold R2.
-  const concurrency = 6;
+  // Bounded concurrency — space opens felt glacial at 6; 24 matches first-page size (local presign + cache).
+  const concurrency = 24;
   const out: T[] = new Array(posts.length);
   let idx = 0;
   async function worker() {

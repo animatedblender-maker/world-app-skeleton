@@ -364,25 +364,34 @@ def iter_media_candidates(
         title = body = ""
         created = None
         score = 0
+        # Upload log usually has the real Reddit title — prefer it over missing post.json.
+        title = strip_confess_number_tags(str(row.get("title") or row.get("post_title") or "").strip())
+        body = strip_confess_number_tags(
+            str(row.get("body") or row.get("text") or row.get("selftext") or "").strip()
+        )
         post_path = pack / "post.json"
         if post_path.is_file():
             try:
                 post = json.loads(post_path.read_text(encoding="utf-8"))
-                title = strip_confess_number_tags(str(post.get("title") or "").strip())
-                body = strip_confess_number_tags(
+                pt = strip_confess_number_tags(str(post.get("title") or "").strip())
+                pb = strip_confess_number_tags(
                     str(post.get("body") or post.get("text") or "").strip()
                 )
-                if body and title and body == title:
-                    pass
-                elif not body and title:
-                    body = title
+                if pt:
+                    title = pt
+                if pb:
+                    body = pb
                 created = parse_ts(post.get("timestamp") or post.get("scraped_at"))
                 score = int(post.get("score") or post.get("like_count") or 0)
             except Exception:
                 pass
+        if body and title and body == title:
+            pass
+        elif not body and title:
+            body = title
+        # Never seed the lifeless "Shared anonymously." placeholder — skip caption-less media.
         if not title and not body:
-            title = None
-            body = "Shared anonymously."
+            continue
         out.append(
             {
                 "pack_id": pack_id,
@@ -391,7 +400,7 @@ def iter_media_candidates(
                 "media_url": media_url,
                 "thumb_url": thumb_url,
                 "title": title[:200] if title else None,
-                "body": (body or "Shared anonymously.")[:10000],
+                "body": (body or title)[:10000],
                 "created": created or datetime.now(timezone.utc),
                 "score": max(0, score),
             }

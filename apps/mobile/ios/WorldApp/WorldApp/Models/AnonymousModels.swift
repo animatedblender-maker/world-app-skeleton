@@ -221,6 +221,11 @@ struct AnonymousSpace: Identifiable, Codable, Hashable, Sendable {
 
     var isPaid: Bool { admission?.isPaid == true }
 
+    /// Lowercased slug for tolerant directory / openSpace matching.
+    var normalizedSlug: String {
+        slug.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
     var priceLabel: String? {
         guard isPaid, let minor = priceAmountMinor, let currency = priceCurrency else { return nil }
         let amount = Double(minor) / 100.0

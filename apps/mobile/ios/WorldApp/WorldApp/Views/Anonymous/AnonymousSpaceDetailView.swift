@@ -11,7 +11,7 @@ struct AnonymousSpaceDetailView: View {
 
     var body: some View {
         Group {
-            if let space = store.currentSpace, space.slug == slug {
+            if let space = store.currentSpace, spaceMatches(space) {
                 spaceBody(space)
             } else if store.spacePostsLoading {
                 ProgressView()
@@ -240,9 +240,18 @@ struct AnonymousSpaceDetailView: View {
             }
     }
 
-    @ViewBuilder
+    private func spaceMatches(_ space: AnonymousSpace) -> Bool {
+        let needle = slug.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return space.slug == slug || space.normalizedSlug == needle
+    }
+
     private var postsSection: some View {
-        if store.spacePosts.isEmpty {
+        if store.spacePostsLoading && store.spacePosts.isEmpty {
+            ProgressView()
+                .tint(Theme.inkMuted)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 28)
+        } else if store.spacePosts.isEmpty {
             Text(MatteryaCopy.anonymousSpaceEmptyPosts)
                 .font(.subheadline)
                 .foregroundStyle(Theme.inkMuted)

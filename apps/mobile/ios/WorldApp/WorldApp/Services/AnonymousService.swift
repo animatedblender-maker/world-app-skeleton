@@ -12,7 +12,8 @@ enum AnonymousService {
     static let feedSoftCap = 10_000
     /// Prefetch when this many cards remain (light-speed append).
     static let feedPrefetchRemaining = 10
-    static let spacePostsPageLimit = 40
+    /// First paint stays lean — endless load-more fills the rest.
+    static let spacePostsPageLimit = 16
 
     // MARK: - Session / identity
 

@@ -511,13 +511,56 @@ final class AnonymousStore {
     }
 
     func openSpace(slug: String) async {
+        let trimmed = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let needle = trimmed.lowercased()
+
+        // Paint chrome immediately from any cached directory hit — don't wait on /space.
+        let alreadyOpen = currentSpace?.slug == trimmed || currentSpace?.normalizedSlug == needle
+        if !alreadyOpen {
+            let known =
+                spacesForYou.first(where: { $0.slug == trimmed || $0.normalizedSlug == needle })
+                ?? spacesPopular.first(where: { $0.slug == trimmed || $0.normalizedSlug == needle })
+                ?? spacesJoined.first(where: { $0.slug == trimmed || $0.normalizedSlug == needle })
+            if let known {
+                withAnimation(MatteryaMotion.snappy) { currentSpace = known }
+            }
+            // Clear previous space's posts so we don't flash the wrong room.
+            spacePosts = []
+            spacePostsCursor = nil
+            spacePostsHasMore = true
+        }
+
         spacePostsLoading = true
         defer { spacePostsLoading = false }
         do {
-            let space = try await AnonymousService.space(slug: slug)
-            withAnimation(MatteryaMotion.snappy) {
-                currentSpace = space
+            // If we already have the space id, fetch posts in parallel with a soft meta refresh.
+            if let cached = currentSpace, cached.slug == trimmed || cached.normalizedSlug == needle,
+               !cached.id.isEmpty {
+                async let metaTask: AnonymousSpace? = {
+                    try? await AnonymousService.space(slug: trimmed)
+                }()
+                async let pageTask = AnonymousService.listPosts(
+                    spaceId: cached.id,
+                    sort: .new,
+                    limit: AnonymousService.spacePostsPageLimit
+                )
+                let page = try await pageTask
+                if let fresh = await metaTask {
+                    withAnimation(MatteryaMotion.snappy) { currentSpace = fresh }
+                }
+                for item in page.items { postById[item.id] = item }
+                let spaceOwn = mergeOwnRecentPosts(into: page.items).filter {
+                    $0.spaceId == (currentSpace?.id ?? cached.id)
+                }
+                spacePosts = spaceOwn
+                spacePostsCursor = page.nextCursor
+                spacePostsHasMore = page.nextCursor != nil
+                return
             }
+
+            let space = try await AnonymousService.space(slug: trimmed)
+            withAnimation(MatteryaMotion.snappy) { currentSpace = space }
             // Chronological + cursor — Hot/score order breaks keyset pagination.
             let page = try await AnonymousService.listPosts(
                 spaceId: space.id,
@@ -527,18 +570,16 @@ final class AnonymousStore {
             for item in page.items {
                 postById[item.id] = item
             }
-            // Keep own freshly published posts pinned at top of this Space too.
             let spaceOwn = mergeOwnRecentPosts(into: page.items).filter { $0.spaceId == space.id }
             spacePosts = spaceOwn
             spacePostsCursor = page.nextCursor
             spacePostsHasMore = page.nextCursor != nil
         } catch let err as AnonymousError {
             lastError = err.errorDescription
-            // Toast only when we have nothing to show for this slug.
-            shouldToastLastError = currentSpace?.slug != slug
+            shouldToastLastError = currentSpace?.slug != trimmed
         } catch {
             lastError = error.localizedDescription
-            shouldToastLastError = currentSpace?.slug != slug
+            shouldToastLastError = currentSpace?.slug != trimmed
         }
     }
 
