@@ -726,9 +726,9 @@ struct YouTubeWatchPlayer<Content: View>: View {
     }
 }
 
-/// Netflix-style endless horizontal rail — **HStack** (not Lazy) so all ~15×2
-/// cells exist and silent `scrollTo` wrap actually works. Swipe past the last
-/// card → first, second, … forever. First card starts fully in-frame.
+/// Netflix-style endless horizontal rail — UIKit `contentOffset` wrap on **both**
+/// edges (SwiftUI `scrollTo` still hit hard stops left/right). Three cycles of
+/// the ranked set; start in the middle; jump ±cycleWidth with no animation.
 struct HubsLoopingHorizontalRail<Content: View>: View {
     let posts: [CountryPost]
     var spacing: CGFloat = 14
@@ -737,80 +737,204 @@ struct HubsLoopingHorizontalRail<Content: View>: View {
     var onNearEnd: (() -> Void)? = nil
     @ViewBuilder var content: (_ post: CountryPost, _ logicalIndex: Int) -> Content
 
-    /// Need a few cards before looping is meaningful; short rails stay finite.
     private var shouldLoop: Bool { posts.count >= 3 }
-    /// Two full cycles — light for a 15-card rail (30 cells).
-    private let copies = 2
-    @State private var wrapArmed = false
-    @State private var isJumping = false
-    @State private var nearEndArmed = true
-
-    private var postsSignature: String {
-        posts.map(\.id).joined(separator: ",")
-    }
 
     var body: some View {
-        let n = posts.count
-        let total = n > 0 ? (shouldLoop ? n * copies : n) : 0
-        ScrollViewReader { proxy in
+        if shouldLoop {
+            HubsInfiniteHScrollRail(
+                posts: posts,
+                spacing: spacing,
+                horizontalPadding: horizontalPadding,
+                onNearEnd: onNearEnd,
+                content: content
+            )
+        } else {
             ScrollView(.horizontal, showsIndicators: false) {
-                // Eager HStack: LazyHStack + scrollTo failed because off-screen
-                // ids were never laid out, so the loop hit a hard end.
                 HStack(alignment: .top, spacing: spacing) {
-                    ForEach(0..<total, id: \.self) { index in
-                        let logical = n > 0 ? index % n : 0
-                        let post = posts[logical]
-                        content(post, logical)
-                            .id(index)
-                            .onAppear {
-                                guard n > 0, !isJumping else { return }
-                                if nearEndArmed, logical >= max(0, n - 3) {
-                                    nearEndArmed = false
-                                    onNearEnd?()
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                                        nearEndArmed = true
-                                    }
-                                }
-                                guard shouldLoop, wrapArmed else { return }
-                                // Near end of second cycle → jump back one set (seamless).
-                                if index >= n + max(1, n - 3) {
-                                    isJumping = true
-                                    let target = index - n
-                                    var t = Transaction()
-                                    t.disablesAnimations = true
-                                    withTransaction(t) {
-                                        proxy.scrollTo(target, anchor: .leading)
-                                    }
-                                    DispatchQueue.main.async {
-                                        isJumping = false
-                                    }
-                                }
-                            }
+                    ForEach(Array(posts.enumerated()), id: \.offset) { index, post in
+                        content(post, index)
                     }
                 }
-                .padding(.leading, horizontalPadding)
-                .padding(.trailing, horizontalPadding)
+                .padding(.horizontal, horizontalPadding)
             }
-            .onAppear {
-                wrapArmed = false
-                isJumping = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    wrapArmed = shouldLoop
+        }
+    }
+}
+
+/// UIScrollView bridge — only reliable way to loop both directions without bounce stops.
+private struct HubsInfiniteHScrollRail<ItemContent: View>: UIViewRepresentable {
+    let posts: [CountryPost]
+    var spacing: CGFloat
+    var horizontalPadding: CGFloat
+    var onNearEnd: (() -> Void)?
+    @ViewBuilder var content: (_ post: CountryPost, _ logicalIndex: Int) -> ItemContent
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onNearEnd: onNearEnd)
+    }
+
+    func makeUIView(context: Context) -> UIScrollView {
+        let scroll = UIScrollView()
+        scroll.showsHorizontalScrollIndicator = false
+        scroll.showsVerticalScrollIndicator = false
+        scroll.alwaysBounceHorizontal = true
+        scroll.alwaysBounceVertical = false
+        scroll.bounces = true
+        scroll.decelerationRate = .fast
+        scroll.delegate = context.coordinator
+        scroll.clipsToBounds = false
+        context.coordinator.scrollView = scroll
+        context.coordinator.rebuild(
+            posts: posts,
+            spacing: spacing,
+            horizontalPadding: horizontalPadding,
+            content: content
+        )
+        return scroll
+    }
+
+    func updateUIView(_ uiView: UIScrollView, context: Context) {
+        context.coordinator.onNearEnd = onNearEnd
+        context.coordinator.rebuild(
+            posts: posts,
+            spacing: spacing,
+            horizontalPadding: horizontalPadding,
+            content: content
+        )
+    }
+
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        var onNearEnd: (() -> Void)?
+        weak var scrollView: UIScrollView?
+        private var host: UIHostingController<AnyView>?
+        private var signature = ""
+        private var cycleWidth: CGFloat = 0
+        private var isJumping = false
+        private var nearEndArmed = true
+        private var didInitialCenter = false
+        private var postCount = 0
+
+        init(onNearEnd: (() -> Void)?) {
+            self.onNearEnd = onNearEnd
+        }
+
+        func rebuild<ItemContent: View>(
+            posts: [CountryPost],
+            spacing: CGFloat,
+            horizontalPadding: CGFloat,
+            content: @escaping (_ post: CountryPost, _ logicalIndex: Int) -> ItemContent
+        ) {
+            guard let scroll = scrollView else { return }
+            let sig = posts.map(\.id).joined(separator: ",")
+            let n = posts.count
+            postCount = n
+            guard n > 0 else { return }
+
+            // Same inventory — keep offset; only rebuild when the rail set changes.
+            if sig == signature, host != nil { return }
+            signature = sig
+            didInitialCenter = false
+            nearEndArmed = true
+
+            // Three identical cycles: [A][A][A] — start on middle A.
+            // Leading pad only on the first cycle so the first card is in-frame;
+            // cycleWidth is measured from a bare cycle (no pad) so wrap math stays exact.
+            let copies = 3
+            let root = AnyView(
+                HStack(alignment: .top, spacing: 0) {
+                    ForEach(0..<copies, id: \.self) { copy in
+                        HStack(alignment: .top, spacing: spacing) {
+                            ForEach(0..<n, id: \.self) { logical in
+                                content(posts[logical], logical)
+                            }
+                        }
+                        .padding(.leading, copy == 0 ? horizontalPadding : 0)
+                        .padding(.trailing, copy == copies - 1 ? horizontalPadding : 0)
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: HubsRailContentWidthKey.self,
+                                    // Prefer an unpadded middle cycle for wrap width.
+                                    value: copy == 1 ? geo.size.width : 0
+                                )
+                            }
+                        )
+                    }
                 }
+                .onPreferenceChange(HubsRailContentWidthKey.self) { width in
+                    guard width > 1 else { return }
+                    if abs(width - self.cycleWidth) > 0.5 {
+                        self.cycleWidth = width
+                        self.centerIfNeeded(force: !self.didInitialCenter)
+                    }
+                }
+            )
+
+            if let host {
+                host.rootView = root
+            } else {
+                let created = UIHostingController(rootView: root)
+                created.view.backgroundColor = .clear
+                created.view.translatesAutoresizingMaskIntoConstraints = false
+                scroll.addSubview(created.view)
+                NSLayoutConstraint.activate([
+                    created.view.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
+                    created.view.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
+                    created.view.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+                    created.view.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+                    created.view.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
+                ])
+                host = created
             }
-            .onChange(of: postsSignature) { _, _ in
-                wrapArmed = false
+
+            DispatchQueue.main.async {
+                self.centerIfNeeded(force: true)
+            }
+        }
+
+        private func centerIfNeeded(force: Bool) {
+            guard let scroll = scrollView, cycleWidth > 1 else { return }
+            if didInitialCenter, !force { return }
+            isJumping = true
+            scroll.setContentOffset(CGPoint(x: cycleWidth, y: 0), animated: false)
+            didInitialCenter = true
+            DispatchQueue.main.async { self.isJumping = false }
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            guard !isJumping, cycleWidth > 1 else { return }
+            let x = scrollView.contentOffset.x
+            // Wrap both edges so left and right never hard-stop.
+            if x < cycleWidth * 0.5 {
+                isJumping = true
+                scrollView.contentOffset.x = x + cycleWidth
                 isJumping = false
-                var t = Transaction()
-                t.disablesAnimations = true
-                withTransaction(t) {
-                    proxy.scrollTo(0, anchor: .leading)
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    wrapArmed = shouldLoop
+            } else if x >= cycleWidth * 1.5 {
+                isJumping = true
+                scrollView.contentOffset.x = x - cycleWidth
+                isJumping = false
+            }
+
+            // Densify when browsing near the logical end of a cycle.
+            if nearEndArmed, postCount > 0 {
+                let posInCycle = x.truncatingRemainder(dividingBy: cycleWidth)
+                let nearEnd = posInCycle > cycleWidth * 0.72
+                if nearEnd {
+                    nearEndArmed = false
+                    onNearEnd?()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                        self.nearEndArmed = true
+                    }
                 }
             }
         }
+    }
+}
+
+private enum HubsRailContentWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
