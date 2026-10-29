@@ -245,6 +245,7 @@ struct AnonymousSpaceDetailView: View {
         return space.slug == slug || space.normalizedSlug == needle
     }
 
+    @ViewBuilder
     private var postsSection: some View {
         if store.spacePostsLoading && store.spacePosts.isEmpty {
             ProgressView()
