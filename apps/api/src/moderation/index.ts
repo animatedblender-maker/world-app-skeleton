@@ -29,6 +29,7 @@ export {
   openTicketCount,
   hydrateTicketDisplay,
   backfillAutoTicketsFromFlaggedPosts,
+  backfillUserReportTickets,
   ensureAutoTicketsFromFlaggedPosts,
 } from './tickets.js';
 export type {

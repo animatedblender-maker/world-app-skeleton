@@ -27,7 +27,52 @@ export async function createReport(opts: {
     `,
     [opts.profile.id, targetType, opts.targetId, reason]
   );
-  return { ok: true, report_id: rows[0]!.id };
+  const reportId = rows[0]!.id;
+
+  // Same Claim-next queue as auto-detected — mix for now; priority later.
+  try {
+    const { upsertTicketFromReport } = await import('../moderation/tickets.js');
+    const { normalizeCategory } = await import('../moderation/categories.js');
+    let previewTitle: string | null = null;
+    let previewBody: string | null = null;
+    let previewMediaUrl: string | null = null;
+    if (targetType === 'post') {
+      const { rows: posts } = await pool.query<{
+        title: string | null;
+        body: string | null;
+        media_url: string | null;
+        thumb_url: string | null;
+      }>(
+        `select title, body, media_url, thumb_url from anonymous.posts where id = $1::uuid limit 1`,
+        [opts.targetId]
+      );
+      previewTitle = posts[0]?.title ?? null;
+      previewBody = posts[0]?.body ?? null;
+      previewMediaUrl = posts[0]?.thumb_url || posts[0]?.media_url || null;
+    } else if (targetType === 'comment') {
+      const { rows: comments } = await pool.query<{ body: string | null }>(
+        `select body from anonymous.comments where id = $1::uuid limit 1`,
+        [opts.targetId]
+      );
+      previewBody = comments[0]?.body ?? null;
+    }
+    await upsertTicketFromReport({
+      platform: 'masquerade',
+      targetKind: targetType as 'post' | 'comment' | 'space' | 'profile',
+      targetId: opts.targetId,
+      category: normalizeCategory(reason),
+      source: 'user',
+      reporterProfileId: opts.profile.id,
+      previewTitle,
+      previewBody,
+      previewMediaUrl,
+      actor: opts.profile.id,
+    });
+  } catch (err: any) {
+    console.warn('[anonymous/createReport] ticket upsert failed', err?.message ?? err);
+  }
+
+  return { ok: true, report_id: reportId };
 }
 
 export async function blockProfile(opts: {

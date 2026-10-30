@@ -454,7 +454,9 @@ function renderTicketCard(ticket: TicketDisplay): string {
   const sourcePill =
     ticket.source === 'auto'
       ? `<span class="pill auto">auto-detected</span>`
-      : `<span class="pill">${escapeHtml(ticket.source)}</span>`;
+      : ticket.source === 'user'
+        ? `<span class="pill">user report</span>`
+        : `<span class="pill">${escapeHtml(ticket.source)}</span>`;
   const media = renderMedia(ticket);
   const queueAbs = `https://api.matterya.com/reports?ticket=${encodeURIComponent(ticket.id)}`;
 

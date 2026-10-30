@@ -168,9 +168,8 @@ export async function claimNextTicket(
         where status = 'open'
           and assigned_to is null
           and ($2::uuid is null or id <> $2::uuid)
-        order by
-          case when source = 'auto' then 0 else 1 end,
-          last_report_at asc
+        -- Mix auto + user reports for now; priority ordering comes later.
+        order by last_report_at asc
         for update skip locked
         limit 1
       )
@@ -955,21 +954,149 @@ export async function backfillAutoTicketsFromFlaggedPosts(
   return { created, scanned: rows.length };
 }
 
+/**
+ * Open Claim-next tickets for open user reports that never got one
+ * (Masquerade anonymous.reports + public post_reports).
+ */
+export async function backfillUserReportTickets(
+  limit = 300
+): Promise<{ created: number; scanned: number }> {
+  let created = 0;
+  let scanned = 0;
+
+  const { rows: anon } = await pool.query<{
+    target_type: string;
+    target_id: string;
+    reason: string;
+    reporter_profile_id: string | null;
+    title: string | null;
+    body: string | null;
+    media_url: string | null;
+    thumb_url: string | null;
+  }>(
+    `
+    select r.target_type, r.target_id::text, r.reason,
+           r.reporter_profile_id::text as reporter_profile_id,
+           p.title, p.body, p.media_url, p.thumb_url
+    from anonymous.reports r
+    left join anonymous.posts p
+      on r.target_type = 'post' and p.id = r.target_id
+    where coalesce(r.state, 'open') in ('open', 'pending')
+      and r.reason not like 'auto:%'
+      and r.target_type in ('post', 'comment', 'profile', 'space')
+      and not exists (
+        select 1 from public.moderation_tickets t
+        where t.target_id = r.target_id
+          and t.target_kind = r.target_type
+          and t.status in ('open', 'claimed')
+      )
+    order by r.created_at asc
+    limit $1
+    `,
+    [limit]
+  );
+  scanned += anon.length;
+  for (const r of anon) {
+    try {
+      await upsertTicketFromReport({
+        platform: 'masquerade',
+        targetKind: r.target_type as 'post' | 'comment' | 'profile' | 'space',
+        targetId: r.target_id,
+        category: normalizeCategory(r.reason),
+        source: 'user',
+        reporterProfileId: r.reporter_profile_id,
+        previewTitle: r.title,
+        previewBody: r.body || r.reason,
+        previewMediaUrl: r.thumb_url || r.media_url,
+        actor: 'user-report-backfill',
+      });
+      created += 1;
+    } catch (err: any) {
+      console.warn(
+        '[moderation/tickets] user anon backfill failed',
+        r.target_id,
+        err?.message ?? err
+      );
+    }
+  }
+
+  const { rows: feed } = await pool.query<{
+    post_id: string;
+    reason: string;
+    reporter_id: string | null;
+    title: string | null;
+    body: string | null;
+    media_url: string | null;
+    thumb_url: string | null;
+    media_type: string | null;
+  }>(
+    `
+    select pr.post_id::text, pr.reason, pr.reporter_id::text as reporter_id,
+           p.title, p.body, p.media_url, p.thumb_url, p.media_type
+    from public.post_reports pr
+    left join public.posts p on p.id = pr.post_id
+    where coalesce(pr.status, 'open') in ('open', 'pending')
+      and not exists (
+        select 1 from public.moderation_tickets t
+        where t.target_kind = 'post'
+          and t.target_id = pr.post_id
+          and t.status in ('open', 'claimed')
+      )
+    order by pr.created_at asc
+    limit $1
+    `,
+    [limit]
+  );
+  scanned += feed.length;
+  for (const r of feed) {
+    const body = String(r.body || '');
+    const platform = /__spark__|__spark_share__|__reel__/i.test(body)
+      ? 'sparks'
+      : String(r.media_type || '').toLowerCase() === 'video'
+        ? 'hubs'
+        : 'feed';
+    try {
+      await upsertTicketFromReport({
+        platform,
+        targetKind: 'post',
+        targetId: r.post_id,
+        category: normalizeCategory(r.reason),
+        source: 'user',
+        reporterUserId: r.reporter_id,
+        previewTitle: r.title,
+        previewBody: r.body,
+        previewMediaUrl: r.thumb_url || r.media_url,
+        actor: 'user-report-backfill',
+      });
+      created += 1;
+    } catch (err: any) {
+      console.warn(
+        '[moderation/tickets] user feed backfill failed',
+        r.post_id,
+        err?.message ?? err
+      );
+    }
+  }
+
+  return { created, scanned };
+}
+
 let lastEnsureAt = 0;
 
-/** Cheap heal: backfill missing auto tickets at most once per 60s per process. */
+/** Cheap heal: backfill missing auto + user tickets at most once per 60s per process. */
 export async function ensureAutoTicketsFromFlaggedPosts(): Promise<void> {
   const now = Date.now();
   if (now - lastEnsureAt < 60_000) return;
   lastEnsureAt = now;
   try {
-    const r = await backfillAutoTicketsFromFlaggedPosts(200);
-    if (r.created > 0) {
+    const auto = await backfillAutoTicketsFromFlaggedPosts(200);
+    const user = await backfillUserReportTickets(200);
+    if (auto.created > 0 || user.created > 0) {
       console.log(
-        `[moderation/tickets] ensured ${r.created}/${r.scanned} auto tickets from flagged posts`
+        `[moderation/tickets] ensured auto=${auto.created}/${auto.scanned} user=${user.created}/${user.scanned}`
       );
     }
   } catch (err: any) {
-    console.warn('[moderation/tickets] ensure auto tickets', err?.message ?? err);
+    console.warn('[moderation/tickets] ensure tickets', err?.message ?? err);
   }
 }
