@@ -153,7 +153,10 @@ function renderShell(opts: {
     padding: 18px; display: grid; gap: 14px;
     box-shadow: 0 10px 28px rgba(44,40,37,.06);
   }
-  .author { display: flex; align-items: center; gap: 12px; }
+  .card-top {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  }
+  .author { display: flex; align-items: center; gap: 12px; min-width: 0; }
   .author img {
     width: 44px; height: 44px; border-radius: 50%;
     background: #efe8dc; border: 1px solid var(--border); object-fit: cover;
@@ -164,6 +167,13 @@ function renderShell(opts: {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .author .sub { color: var(--muted); font-size: .78rem; }
+  .copy-link {
+    flex: 0 0 auto; cursor: pointer; font: inherit; font-size: .78rem; font-weight: 650;
+    border-radius: 999px; border: 1px solid var(--border); background: var(--key);
+    color: var(--accent); padding: .4rem .75rem; white-space: nowrap;
+  }
+  .copy-link:hover { border-color: var(--accent); }
+  .copy-link.copied { background: #dcfce7; border-color: #bbf7d0; color: var(--ok); }
   .meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   h2 { margin: 0; font-size: 1.15rem; line-height: 1.35; font-weight: 600; }
   .body { margin: 0; color: var(--muted); white-space: pre-wrap; line-height: 1.45; }
@@ -176,18 +186,6 @@ function renderShell(opts: {
     height: 120px; display: grid; place-items: center; color: var(--muted);
     background: var(--wash);
   }
-  .ids {
-    display: grid; gap: 6px; padding: 10px 12px; border-radius: 10px;
-    background: var(--wash); border: 1px solid var(--border); font-size: .78rem;
-  }
-  .ids .row-id {
-    display: grid; grid-template-columns: 88px 1fr; gap: 8px; align-items: start;
-  }
-  .ids .lbl { color: var(--muted); }
-  .ids code, .ids a {
-    color: var(--accent); word-break: break-all; font-size: .76rem;
-  }
-  .ids a { text-decoration: none; }
   .decision {
     position: sticky; top: 78px;
     background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
@@ -234,7 +232,6 @@ function renderShell(opts: {
     background: var(--key); border: 1px solid #e8dcc8; font-size: .72rem;
   }
   .empty { text-align: center; padding: 48px 16px; }
-  .foot { grid-column: 1 / -1; color: var(--muted); font-size: .85rem; }
 </style>
 </head>
 <body>
@@ -253,7 +250,6 @@ function renderShell(opts: {
 <main class="layout">
   ${flash}
   ${opts.body}
-  <p class="foot">Signed in as <code>${escapeHtml(opts.actor)}</code> · <kbd>Backspace</kbd> go back · <kbd>P</kbd> pass ticket</p>
 </main>
 ${treeScript}
 <script>
@@ -398,6 +394,28 @@ ${treeScript}
     }
   });
 
+  var copyBtn = document.getElementById('copy-ticket-link');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', function () {
+      var link = copyBtn.getAttribute('data-link') || '';
+      function done() {
+        copyBtn.textContent = 'Copied';
+        copyBtn.classList.add('copied');
+        setTimeout(function () {
+          copyBtn.textContent = 'Copy link';
+          copyBtn.classList.remove('copied');
+        }, 1400);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(link).then(done).catch(function () {
+          window.prompt('Copy ticket link', link);
+        });
+      } else {
+        window.prompt('Copy ticket link', link);
+      }
+    });
+  }
+
   render();
 })();
 </script>
@@ -438,29 +456,19 @@ function renderTicketCard(ticket: TicketDisplay): string {
       ? `<span class="pill auto">auto-detected</span>`
       : `<span class="pill">${escapeHtml(ticket.source)}</span>`;
   const media = renderMedia(ticket);
-  const queuePath = `/reports?ticket=${encodeURIComponent(ticket.id)}`;
-  const queueAbs = `https://api.matterya.com${queuePath}`;
-  const spaceLine =
-    ticket.space_slug || ticket.space_title
-      ? `<div class="row-id"><span class="lbl">Space</span><code>${escapeHtml(
-          ticket.space_title || ticket.space_slug || ''
-        )}${ticket.space_slug ? ` (${escapeHtml(ticket.space_slug)})` : ''}</code></div>`
-      : '';
-  const authorIdLine = ticket.author_profile_id
-    ? `<div class="row-id"><span class="lbl">Author id</span><code>${escapeHtml(ticket.author_profile_id)}</code></div>`
-    : '';
-  const flagLine = ticket.flag_reason
-    ? `<div class="row-id"><span class="lbl">Flag</span><code>${escapeHtml(ticket.flag_reason)}</code></div>`
-    : '';
+  const queueAbs = `https://api.matterya.com/reports?ticket=${encodeURIComponent(ticket.id)}`;
 
   return `
   <article class="card">
-    <div class="author">
-      <img src="${escapeHtml(avatar)}" alt="" width="44" height="44"/>
-      <div class="who">
-        <div class="name">@${escapeHtml(username)}</div>
-        <div class="sub">${escapeHtml(ticket.platform)} · ${escapeHtml(ticket.target_kind)}</div>
+    <div class="card-top">
+      <div class="author">
+        <img src="${escapeHtml(avatar)}" alt="" width="44" height="44"/>
+        <div class="who">
+          <div class="name">@${escapeHtml(username)}</div>
+          <div class="sub">${escapeHtml(ticket.platform)} · ${escapeHtml(ticket.target_kind)}</div>
+        </div>
       </div>
+      <button type="button" class="copy-link" id="copy-ticket-link" data-link="${escapeHtml(queueAbs)}" title="Copy ticket link">Copy link</button>
     </div>
     <div class="meta">
       <span class="pill">${escapeHtml(cat)}</span>
@@ -470,14 +478,6 @@ function renderTicketCard(ticket: TicketDisplay): string {
     <h2>${title}</h2>
     <p class="body">${body || '<span class="muted">No body</span>'}</p>
     ${media}
-    <div class="ids">
-      <div class="row-id"><span class="lbl">Queue link</span><a href="${escapeHtml(queuePath)}">${escapeHtml(queueAbs)}</a></div>
-      <div class="row-id"><span class="lbl">Ticket id</span><code>${escapeHtml(ticket.id)}</code></div>
-      <div class="row-id"><span class="lbl">Post id</span><code>${escapeHtml(ticket.target_id)}</code></div>
-      ${authorIdLine}
-      ${spaceLine}
-      ${flagLine}
-    </div>
   </article>
 
   <aside class="decision" id="decision-panel" data-ticket-id="${escapeHtml(ticket.id)}">
@@ -519,6 +519,8 @@ export async function handleModerationQueueGet(req: Request, res: Response): Pro
   const actor = actorFromReq(req);
   const ticketParam = String(req.query.ticket || '').trim();
   let flash = String(req.query.flash || '') || null;
+  // Never show pass banners.
+  if (flash && /^passed\b/i.test(flash)) flash = null;
 
   const claimed = await ensureClaimedTicket(actor, {
     preferTicketId: ticketParam || null,
@@ -570,13 +572,10 @@ export async function handleModerationTicketAction(req: Request, res: Response):
     await releaseTicket(ticketId, actor);
     const next = await claimNextTicket(actor, { excludeTicketId: ticketId });
     if (next) {
-      res.redirect(
-        303,
-        `/reports?ticket=${encodeURIComponent(next.id)}&flash=${encodeURIComponent('Passed · next ticket')}`
-      );
+      res.redirect(303, `/reports?ticket=${encodeURIComponent(next.id)}`);
       return;
     }
-    res.redirect(303, '/reports?flash=Passed');
+    res.redirect(303, '/reports');
     return;
   }
 
