@@ -164,15 +164,17 @@ function renderShell(opts: {
 function renderMedia(ticket: TicketDisplay): string {
   const mediaType = String(ticket.media_type || '').toLowerCase();
   const videoUrl = ticket.media_url;
-  const thumb = ticket.thumb_url || ticket.preview_media_url || '';
+  // Poster must be an image — never reuse the video URL.
+  const thumb = ticket.thumb_url || '';
 
   if (mediaType === 'video' && videoUrl) {
-    return `<video class="media" src="${escapeHtml(videoUrl)}" poster="${escapeHtml(thumb)}" controls playsinline preload="metadata"></video>`;
+    const poster = thumb ? ` poster="${escapeHtml(thumb)}"` : '';
+    return `<video class="media" src="${escapeHtml(videoUrl)}"${poster} controls playsinline preload="metadata"></video>`;
   }
   if (mediaType === 'video' && thumb) {
     return `<img class="media" src="${escapeHtml(thumb)}" alt="Video poster"/>`;
   }
-  const img = ticket.thumb_url || ticket.media_url || ticket.preview_media_url;
+  const img = ticket.thumb_url || (mediaType === 'video' ? null : ticket.media_url) || ticket.preview_media_url;
   if (img) {
     return `<img class="media" src="${escapeHtml(img)}" alt=""/>`;
   }
