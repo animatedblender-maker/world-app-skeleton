@@ -30,6 +30,8 @@ export type TicketRow = {
   mod_action: string | null;
   mod_category: string | null;
   created_at: string;
+  reporter_user_id: string | null;
+  reporter_profile_id: string | null;
 };
 
 export type UpsertTicketInput = {
@@ -689,7 +691,8 @@ const TICKET_SELECT = `
   id, platform, target_kind, target_id, category, status, source,
   report_count, last_report_at::text, preview_title, preview_body,
   preview_media_url, assigned_to, claimed_at::text, mod_action, mod_category,
-  created_at::text
+  created_at::text,
+  reporter_user_id::text, reporter_profile_id::text
 `;
 
 export async function getClaimedTicketForActor(actor: string): Promise<TicketRow | null> {
@@ -818,42 +821,204 @@ export async function openTicketCount(): Promise<number> {
   return Number(rows[0]?.n || 0);
 }
 
-/** Display fields hydrated for the Claim-next UI (author + signed media). */
+/** Display fields hydrated for the Claim-next UI (author + reporter + signed media). */
 export type TicketDisplay = TicketRow & {
   author_username: string | null;
   author_avatar_seed: string | null;
   /** Direct avatar image URL when available (Sparks profiles). */
   author_avatar_url: string | null;
   author_profile_id: string | null;
+  author_display_name: string | null;
   space_slug: string | null;
   space_title: string | null;
   flag_reason: string | null;
   media_type: string | null;
-  /** Signed playable media URL (video or image). */
+  /** Plain signed playable media URL (video or image) — never JSON pack. */
   media_url: string | null;
   /** Signed poster / image preview. */
   thumb_url: string | null;
+  reporter_username: string | null;
+  reporter_display_name: string | null;
+  reporter_avatar_url: string | null;
+  reporter_avatar_seed: string | null;
+  /** Name tokens that appear in both reporter identity and post text. */
+  name_matches: string[];
+  is_text_post: boolean;
 };
 
+/** Tokens from a reporter name that are worth matching in post text. */
+export function nameMatchCandidates(
+  username: string | null | undefined,
+  displayName: string | null | undefined
+): string[] {
+  const out: string[] = [];
+  const push = (raw: string) => {
+    const t = raw.trim();
+    if (t.length < 3) return;
+    if (!out.some((x) => x.toLowerCase() === t.toLowerCase())) out.push(t);
+  };
+  if (displayName) {
+    push(displayName);
+    for (const part of displayName.split(/[\s,._\-@]+/)) {
+      if (part.length >= 3 && !/^\d+$/.test(part)) push(part);
+    }
+  }
+  if (username) {
+    push(username);
+    for (const part of username.split(/[\s,._\-@]+/)) {
+      if (part.length >= 3 && !/^\d+$/.test(part)) push(part);
+    }
+  }
+  return out;
+}
+
+/** Which reporter-name tokens appear in the post title/body. */
+export function findNameMatchesInText(
+  text: string,
+  candidates: string[]
+): string[] {
+  const hay = String(text || '');
+  if (!hay.trim() || !candidates.length) return [];
+  const hits: string[] = [];
+  for (const c of candidates) {
+    const escaped = c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}([^\\p{L}\\p{N}]|$)`, 'iu');
+    if (re.test(hay) || hay.toLowerCase().includes(c.toLowerCase())) {
+      if (!hits.some((h) => h.toLowerCase() === c.toLowerCase())) hits.push(c);
+    }
+  }
+  // Prefer longer matches first for highlighting.
+  return hits.sort((a, b) => b.length - a.length);
+}
+
+function cleanPostBody(body: string | null | undefined): string {
+  return String(body || '')
+    // spark_share embeds meta on first line; caption follows.
+    .replace(/^__spark_share__\|[^\n]*\n?/i, '')
+    .replace(/^__spark__\|/i, '')
+    .replace(/^__reel__\|/i, '')
+    .trim();
+}
+
+async function hydrateReporter(
+  ticket: TicketRow
+): Promise<{
+  reporter_username: string | null;
+  reporter_display_name: string | null;
+  reporter_avatar_url: string | null;
+  reporter_avatar_seed: string | null;
+}> {
+  const empty = {
+    reporter_username: null as string | null,
+    reporter_display_name: null as string | null,
+    reporter_avatar_url: null as string | null,
+    reporter_avatar_seed: null as string | null,
+  };
+  try {
+    if (ticket.reporter_user_id) {
+      const { rows } = await pool.query<{
+        username: string | null;
+        display_name: string | null;
+        avatar_url: string | null;
+      }>(
+        `
+        select username, display_name, avatar_url
+        from public.profiles
+        where user_id = $1::uuid
+        limit 1
+        `,
+        [ticket.reporter_user_id]
+      );
+      const r = rows[0];
+      if (r) {
+        return {
+          reporter_username: r.username,
+          reporter_display_name: r.display_name,
+          reporter_avatar_url: r.avatar_url,
+          reporter_avatar_seed: r.username || r.display_name,
+        };
+      }
+    }
+    if (ticket.reporter_profile_id) {
+      const { rows } = await pool.query<{
+        username: string | null;
+        avatar_seed: string | null;
+      }>(
+        `
+        select username, avatar_seed
+        from anonymous.profiles
+        where id = $1::uuid
+        limit 1
+        `,
+        [ticket.reporter_profile_id]
+      );
+      const r = rows[0];
+      if (r) {
+        return {
+          reporter_username: r.username,
+          reporter_display_name: r.username,
+          reporter_avatar_url: null,
+          reporter_avatar_seed: r.avatar_seed || r.username,
+        };
+      }
+    }
+  } catch (err: any) {
+    console.warn('[moderation/tickets] reporter hydrate failed', err?.message ?? err);
+  }
+  return empty;
+}
+
 /**
- * Load author chrome + signed media for a claimed ticket.
+ * Load author chrome + reporter + signed media for a claimed ticket.
  * Masquerade posts use anonymous.profiles (username + avatar_seed).
  */
 export async function hydrateTicketDisplay(
   ticket: TicketRow
 ): Promise<TicketDisplay> {
+  const reporter = await hydrateReporter(ticket);
   const base: TicketDisplay = {
     ...ticket,
     author_username: null,
     author_avatar_seed: null,
     author_avatar_url: null,
     author_profile_id: null,
+    author_display_name: null,
     space_slug: null,
     space_title: null,
     flag_reason: null,
     media_type: null,
     media_url: null,
     thumb_url: null,
+    ...reporter,
+    name_matches: [],
+    is_text_post: false,
+  };
+
+  const withMatches = (
+    display: TicketDisplay,
+    title: string | null,
+    body: string | null
+  ): TicketDisplay => {
+    const cleaned = cleanPostBody(body);
+    const candidates = nameMatchCandidates(
+      display.reporter_username,
+      display.reporter_display_name
+    );
+    const name_matches = findNameMatchesInText(
+      `${title || ''}\n${cleaned}`,
+      candidates
+    );
+    const mediaType = String(display.media_type || '').toLowerCase();
+    const hasMedia = !!(display.media_url || display.thumb_url);
+    const is_text_post =
+      !hasMedia || mediaType === 'none' || mediaType === 'text' || mediaType === '';
+    return {
+      ...display,
+      preview_title: display.preview_title || title,
+      preview_body: cleaned || display.preview_body,
+      name_matches,
+      is_text_post,
+    };
   };
 
   try {
@@ -885,7 +1050,7 @@ export async function hydrateTicketDisplay(
         [ticket.target_id]
       );
       const row = rows[0];
-      if (!row) return base;
+      if (!row) return withMatches(base, ticket.preview_title, ticket.preview_body);
 
       const { resolveAnonymousMediaUrl } = await import('../anonymous/media.js');
       const [media_url, thumb_url] = await Promise.all([
@@ -893,22 +1058,27 @@ export async function hydrateTicketDisplay(
         resolveAnonymousMediaUrl(row.thumb_url),
       ]);
 
-      return {
-        ...base,
-        preview_title: ticket.preview_title || row.title,
-        preview_body: ticket.preview_body || row.body,
-        preview_media_url: thumb_url || media_url || ticket.preview_media_url,
-        author_username: row.username,
-        author_avatar_seed: row.avatar_seed,
-        author_avatar_url: null,
-        author_profile_id: row.author_profile_id,
-        space_slug: row.space_slug,
-        space_title: row.space_title,
-        flag_reason: row.flag_reason,
-        media_type: row.media_type,
-        media_url,
-        thumb_url,
-      };
+      return withMatches(
+        {
+          ...base,
+          preview_title: ticket.preview_title || row.title,
+          preview_body: ticket.preview_body || row.body,
+          preview_media_url: thumb_url || media_url || ticket.preview_media_url,
+          author_username: row.username,
+          author_avatar_seed: row.avatar_seed,
+          author_avatar_url: null,
+          author_profile_id: row.author_profile_id,
+          author_display_name: row.username,
+          space_slug: row.space_slug,
+          space_title: row.space_title,
+          flag_reason: row.flag_reason,
+          media_type: row.media_type,
+          media_url,
+          thumb_url,
+        },
+        row.title,
+        row.body
+      );
     }
 
     if (ticket.target_kind === 'post') {
@@ -918,6 +1088,7 @@ export async function hydrateTicketDisplay(
         media_type: string | null;
         media_url: string | null;
         thumb_url: string | null;
+        media_path: string | null;
         author_id: string | null;
         username: string | null;
         display_name: string | null;
@@ -925,7 +1096,7 @@ export async function hydrateTicketDisplay(
       }>(
         `
         select p.title, p.body, p.media_type, p.media_url, p.thumb_url,
-               p.author_id::text as author_id,
+               p.media_path, p.author_id::text as author_id,
                pr.username, pr.display_name, pr.avatar_url
         from public.posts p
         left join public.profiles pr on pr.user_id = p.author_id
@@ -935,38 +1106,55 @@ export async function hydrateTicketDisplay(
         [ticket.target_id]
       );
       const row = rows[0];
-      if (!row) return base;
+      if (!row) return withMatches(base, ticket.preview_title, ticket.preview_body);
 
-      const { freshenMediaUrlString, freshenThumbUrlString } = await import(
+      const { resolvePlaybackForPostRow, freshenThumbUrlString } = await import(
         '../media/r2-playback.js'
       );
-      const [media_url, thumb_url] = await Promise.all([
-        freshenMediaUrlString(row.media_url),
-        freshenThumbUrlString(row.thumb_url),
+      const [playback, thumb_url] = await Promise.all([
+        resolvePlaybackForPostRow({
+          media_url: row.media_url,
+          media_path: row.media_path,
+        }),
+        freshenThumbUrlString(row.thumb_url, null, row.media_path),
       ]);
+      // Prefer plain playable URL (video tag cannot use JSON media packs).
+      let media_url = playback?.url || null;
+      if (!media_url && row.media_url && String(row.media_url).startsWith('http')) {
+        media_url = row.media_url;
+      }
+      // Image posts: freshen may leave JSON — prefer plain http thumb/media.
+      if (!media_url && String(row.media_type || '').toLowerCase() === 'image') {
+        media_url = thumb_url || (String(row.media_url || '').startsWith('http') ? row.media_url : null);
+      }
 
-      return {
-        ...base,
-        preview_title: ticket.preview_title || row.title,
-        preview_body: ticket.preview_body || row.body,
-        preview_media_url: thumb_url || media_url || ticket.preview_media_url,
-        author_username: row.username || row.display_name,
-        author_avatar_seed: row.username || row.display_name,
-        author_avatar_url: row.avatar_url,
-        author_profile_id: row.author_id,
-        space_slug: null,
-        space_title: null,
-        flag_reason: null,
-        media_type: row.media_type,
-        media_url,
-        thumb_url,
-      };
+      return withMatches(
+        {
+          ...base,
+          preview_title: ticket.preview_title || row.title,
+          preview_body: ticket.preview_body || row.body,
+          preview_media_url: thumb_url || media_url || ticket.preview_media_url,
+          author_username: row.username || row.display_name,
+          author_avatar_seed: row.username || row.display_name,
+          author_avatar_url: row.avatar_url,
+          author_profile_id: row.author_id,
+          author_display_name: row.display_name || row.username,
+          space_slug: null,
+          space_title: null,
+          flag_reason: null,
+          media_type: row.media_type,
+          media_url,
+          thumb_url,
+        },
+        row.title,
+        row.body
+      );
     }
   } catch (err: any) {
     console.warn('[moderation/tickets] hydrate failed', err?.message ?? err);
   }
 
-  return base;
+  return withMatches(base, ticket.preview_title, ticket.preview_body);
 }
 
 /**
