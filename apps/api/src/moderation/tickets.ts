@@ -154,9 +154,14 @@ export async function upsertTicketFromReport(input: UpsertTicketInput): Promise<
 /** Claim the next open unassigned ticket (one-at-a-time). */
 export async function claimNextTicket(
   actor: string,
-  opts?: { excludeTicketId?: string | null }
+  opts?: { excludeTicketId?: string | null; excludeTicketIds?: string[] | null }
 ): Promise<TicketRow | null> {
-  const excludeId = opts?.excludeTicketId?.trim() || null;
+  const excludeIds = [
+    ...(opts?.excludeTicketIds ?? []),
+    opts?.excludeTicketId ?? null,
+  ]
+    .map((id) => String(id || '').trim())
+    .filter((id) => /^[0-9a-f-]{36}$/i.test(id));
   const client = await pool.connect();
   try {
     await client.query('begin');
@@ -167,9 +172,9 @@ export async function claimNextTicket(
         from public.moderation_tickets
         where status = 'open'
           and assigned_to is null
-          and ($2::uuid is null or id <> $2::uuid)
+          and not (id = any($2::uuid[]))
         -- Mix auto + user reports for now; priority ordering comes later.
-        order by last_report_at asc
+        order by last_report_at asc nulls last, created_at asc
         for update skip locked
         limit 1
       )
@@ -186,7 +191,7 @@ export async function claimNextTicket(
         t.preview_media_url, t.assigned_to, t.claimed_at::text, t.mod_action, t.mod_category,
         t.created_at::text
       `,
-      [actor, excludeId]
+      [actor, excludeIds]
     );
     const ticket = rows[0] ?? null;
     if (ticket) {
@@ -210,28 +215,57 @@ export async function claimNextTicket(
   }
 }
 
-export async function releaseTicket(ticketId: string, actor: string): Promise<boolean> {
+export async function releaseTicket(
+  ticketId: string,
+  actor: string,
+  opts?: { force?: boolean }
+): Promise<boolean> {
   const client = await pool.connect();
   try {
     await client.query('begin');
-    const { rows } = await client.query<{ id: string; target_kind: string; target_id: string; platform: string; category: string }>(
+    // Push to the back of the FIFO so Pass does not immediately reclaim the same ticket.
+    const { rows } = await client.query<{
+      id: string;
+      target_kind: string;
+      target_id: string;
+      platform: string;
+      category: string;
+    }>(
       `
       update public.moderation_tickets
       set status = 'open',
           assigned_to = null,
           claimed_at = null,
+          last_report_at = greatest(now(), coalesce(last_report_at, now())) + interval '1 second',
           updated_at = now()
       where id = $1::uuid
         and status = 'claimed'
-        and assigned_to = $2
+        and ($3::boolean or assigned_to = $2)
       returning id, target_kind, target_id, platform, category
       `,
-      [ticketId, actor]
+      [ticketId, actor, !!opts?.force]
     );
     if (!rows[0]) {
       await client.query('rollback');
       return false;
     }
+
+    // Drop any other claims this actor still holds so Pass is one-at-a-time.
+    await client.query(
+      `
+      update public.moderation_tickets
+      set status = 'open',
+          assigned_to = null,
+          claimed_at = null,
+          last_report_at = greatest(now(), coalesce(last_report_at, now())) + interval '1 second',
+          updated_at = now()
+      where status = 'claimed'
+        and assigned_to = $1
+        and id <> $2::uuid
+      `,
+      [actor, ticketId]
+    );
+
     await logAction(client, {
       ticketId,
       actor,
@@ -240,6 +274,7 @@ export async function releaseTicket(ticketId: string, actor: string): Promise<bo
       targetKind: rows[0].target_kind,
       targetId: rows[0].target_id,
       platform: rows[0].platform,
+      detail: { force: !!opts?.force, via: 'pass' },
     });
     await client.query('commit');
     return true;

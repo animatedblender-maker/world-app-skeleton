@@ -520,18 +520,27 @@ export async function handleModerationQueueGet(req: Request, res: Response): Pro
 
   const actor = actorFromReq(req);
   const ticketParam = String(req.query.ticket || '').trim();
+  const excludeParam = String(req.query.exclude || '').trim();
   let flash = String(req.query.flash || '') || null;
   // Never show pass banners.
   if (flash && /^passed\b/i.test(flash)) flash = null;
 
+  // Prefer deep-link only when it is not the ticket we just passed.
+  const prefer =
+    ticketParam &&
+    /^[0-9a-f-]{36}$/i.test(ticketParam) &&
+    ticketParam !== excludeParam
+      ? ticketParam
+      : null;
+
   const claimed = await ensureClaimedTicket(actor, {
-    preferTicketId: ticketParam || null,
+    preferTicketId: prefer,
+    excludeTicketId: excludeParam || null,
   });
 
   if (
-    ticketParam &&
-    /^[0-9a-f-]{36}$/i.test(ticketParam) &&
-    (!claimed || claimed.id !== ticketParam)
+    prefer &&
+    (!claimed || claimed.id !== prefer)
   ) {
     flash = flash || 'Could not open that ticket (claimed, resolved, or missing)';
   }
@@ -571,13 +580,23 @@ export async function handleModerationTicketAction(req: Request, res: Response):
   }
 
   if (action === 'release') {
-    await releaseTicket(ticketId, actor);
+    const released = await releaseTicket(ticketId, actor, { force: true });
+    // Always exclude the passed ticket; release also bumps it to the back of FIFO.
     const next = await claimNextTicket(actor, { excludeTicketId: ticketId });
-    if (next) {
-      res.redirect(303, `/reports?ticket=${encodeURIComponent(next.id)}`);
+    if (next && next.id !== ticketId) {
+      res.redirect(
+        303,
+        `/reports?ticket=${encodeURIComponent(next.id)}&exclude=${encodeURIComponent(ticketId)}`
+      );
       return;
     }
-    res.redirect(303, '/reports');
+    // No other ticket available — stay off the passed one.
+    res.redirect(
+      303,
+      released
+        ? `/reports?exclude=${encodeURIComponent(ticketId)}`
+        : '/reports'
+    );
     return;
   }
 
