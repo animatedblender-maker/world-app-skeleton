@@ -1,10 +1,10 @@
 /**
- * Unified Matterya moderation queue — one ticket at a time (auto-claim).
+ * Unified Matterya moderation queue — auto-claim + policy decision tree.
  * https://api.matterya.com/reports
  *
- * Remove as <category> → archive + delete live
- * Mark as <category>   → stay live + tagged
- * Ignore               → dismiss (false positive)
+ * Moderators answer questions with keyboard shortcuts.
+ * Remove / Mark / Dismiss is applied by policy from the chosen leaf —
+ * mods are not shown that outcome.
  */
 import type { Request, Response } from 'express';
 import {
@@ -12,7 +12,7 @@ import {
   renderReportsLoginHtml,
   REPORTS_PAGE_PASSWORD,
 } from './reports-page.js';
-import { MODERATION_CATEGORIES, labelForCategory } from '../moderation/categories.js';
+import { labelForCategory } from '../moderation/categories.js';
 import {
   claimNextTicket,
   claimTicketById,
@@ -25,6 +25,11 @@ import {
   type TicketDisplay,
   type TicketRow,
 } from '../moderation/tickets.js';
+import {
+  getPolicyLeaf,
+  outcomeToResolveAction,
+  policyTreeForClient,
+} from '../moderation/policy-tree.js';
 import { handleReportsGet } from './reports-page.js';
 
 function escapeHtml(s: string): string {
@@ -38,18 +43,10 @@ function escapeHtml(s: string): string {
 function actorFromReq(req: Request): string {
   const q = String(req.query.actor ?? req.body?.actor ?? '').trim();
   if (q) return q.slice(0, 80);
-  // Cookie session is shared; use a stable device hint until named mod accounts.
   const ua = String(req.headers['user-agent'] ?? 'mod').slice(0, 40);
   return `mod:${Buffer.from(ua).toString('base64url').slice(0, 24)}`;
 }
 
-function categoryOptionsHtml(): string {
-  return MODERATION_CATEGORIES.map(
-    (c) => `<option value="${escapeHtml(c.slug)}">${escapeHtml(c.label)}</option>`
-  ).join('\n');
-}
-
-/** Prefer stored avatar URL; otherwise Dicebear from seed / username. */
 function avatarUrlFor(ticket: TicketDisplay): string {
   const direct = String(ticket.author_avatar_url || '').trim();
   if (direct.startsWith('http')) return direct;
@@ -72,7 +69,7 @@ async function ensureClaimedTicket(
   const existing = await getClaimedTicketForActor(actor);
   if (existing) {
     if (opts?.excludeTicketId && existing.id === opts.excludeTicketId) {
-      // fall through to claim another
+      // fall through
     } else {
       return existing;
     }
@@ -85,9 +82,13 @@ function renderShell(opts: {
   openCount: number;
   body: string;
   flash?: string | null;
+  treeJson?: string;
 }): string {
   const flash = opts.flash
     ? `<p class="flash">${escapeHtml(opts.flash)}</p>`
+    : '';
+  const treeScript = opts.treeJson
+    ? `<script type="application/json" id="policy-tree-data">${opts.treeJson}</script>`
     : '';
   return `<!doctype html>
 <html lang="en">
@@ -99,6 +100,7 @@ function renderShell(opts: {
   :root {
     --paper: #f8f6f2; --ink: #2c2825; --muted: #7a736c; --accent: #7b6347;
     --border: #ddd6cc; --surface: #fffcf8; --danger: #b91c1c; --ok: #166534;
+    --wash: #f3efe8; --key: #efe8dc;
   }
   * { box-sizing: border-box; }
   body {
@@ -111,14 +113,14 @@ function renderShell(opts: {
     position: sticky; top: 0; z-index: 5;
     background: rgba(255,252,248,.92); backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--border);
-    padding: 16px 20px; display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: center;
+    padding: 14px 20px; display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: center;
   }
   .mark {
     font-size: 11px; font-weight: 700; letter-spacing: .2em;
     text-transform: uppercase; color: var(--accent);
   }
   h1 {
-    margin: 0; font-size: 1.35rem; font-weight: 500;
+    margin: 0; font-size: 1.3rem; font-weight: 500;
     font-family: ui-serif, Georgia, serif;
   }
   .header-copy { display: grid; gap: 2px; }
@@ -132,7 +134,20 @@ function renderShell(opts: {
   .pill.auto { color: #92400e; border-color: #fde68a; background: #fff7ed; }
   a.nav { color: var(--accent); text-decoration: none; font-size: .85rem; margin-left: 10px; }
   a.nav:hover { text-decoration: underline; }
-  main { max-width: 720px; margin: 0 auto; padding: 24px 16px 64px; }
+  main.layout {
+    max-width: 1180px; margin: 0 auto; padding: 20px 16px 64px;
+    display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
+    gap: 18px; align-items: start;
+  }
+  @media (max-width: 900px) {
+    main.layout { grid-template-columns: 1fr; }
+    .decision { position: static !important; }
+  }
+  .flash {
+    grid-column: 1 / -1;
+    background: #dcfce7; border: 1px solid #bbf7d0; color: var(--ok);
+    padding: 10px 12px; border-radius: 10px;
+  }
   .card {
     background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
     padding: 18px; display: grid; gap: 14px;
@@ -159,26 +174,11 @@ function renderShell(opts: {
   video.media { max-height: 520px; }
   .media.empty {
     height: 120px; display: grid; place-items: center; color: var(--muted);
-    background: #f3efe8;
+    background: var(--wash);
   }
-  .actions { display: grid; gap: 10px; margin-top: 4px; }
-  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  select, button {
-    font: inherit; border-radius: 999px; border: 1px solid var(--border);
-    padding: .55rem .95rem; background: #fff; color: var(--ink);
-  }
-  button { cursor: pointer; font-weight: 650; }
-  button.primary { background: var(--accent); color: #fff; border-color: transparent; }
-  button.danger { background: var(--danger); color: #fff; border-color: transparent; }
-  button.ghost { background: #efe8dc; color: var(--ink); }
-  .flash {
-    background: #dcfce7; border: 1px solid #bbf7d0; color: var(--ok);
-    padding: 10px 12px; border-radius: 10px;
-  }
-  .empty { text-align: center; padding: 48px 16px; }
   .ids {
     display: grid; gap: 6px; padding: 10px 12px; border-radius: 10px;
-    background: #f3efe8; border: 1px solid var(--border); font-size: .78rem;
+    background: var(--wash); border: 1px solid var(--border); font-size: .78rem;
   }
   .ids .row-id {
     display: grid; grid-template-columns: 88px 1fr; gap: 8px; align-items: start;
@@ -188,7 +188,53 @@ function renderShell(opts: {
     color: var(--accent); word-break: break-all; font-size: .76rem;
   }
   .ids a { text-decoration: none; }
-  .ids a:hover { text-decoration: underline; }
+  .decision {
+    position: sticky; top: 78px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    padding: 16px; box-shadow: 0 10px 28px rgba(44,40,37,.06);
+    display: grid; gap: 12px;
+  }
+  .decision .step {
+    font-size: 11px; font-weight: 700; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--accent);
+  }
+  .decision h2 {
+    font-family: ui-serif, Georgia, serif; font-weight: 500; font-size: 1.2rem;
+  }
+  .crumb {
+    display: flex; flex-wrap: wrap; gap: 6px; font-size: .78rem; color: var(--muted);
+  }
+  .crumb span {
+    background: var(--wash); border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 8px;
+  }
+  .options { display: grid; gap: 8px; }
+  .opt {
+    display: flex; gap: 10px; align-items: flex-start; width: 100%;
+    text-align: left; cursor: pointer; border: 1px solid var(--border);
+    background: #fff; border-radius: 12px; padding: 10px 12px;
+    font: inherit; color: var(--ink);
+  }
+  .opt:hover, .opt:focus {
+    border-color: var(--accent); outline: none;
+    box-shadow: 0 0 0 3px rgba(123,99,71,.15);
+  }
+  .opt .k {
+    flex: 0 0 auto; min-width: 28px; height: 28px; border-radius: 8px;
+    display: grid; place-items: center; font-weight: 800; font-size: .85rem;
+    background: var(--key); color: var(--accent); border: 1px solid #e8dcc8;
+  }
+  .opt .lbl { flex: 1; padding-top: 3px; line-height: 1.35; }
+  .hint {
+    font-size: .78rem; color: var(--muted); line-height: 1.4;
+    border-top: 1px solid var(--border); padding-top: 10px;
+  }
+  .hint kbd {
+    display: inline-block; padding: 1px 6px; border-radius: 6px;
+    background: var(--key); border: 1px solid #e8dcc8; font-size: .72rem;
+  }
+  .empty { text-align: center; padding: 48px 16px; }
+  .foot { grid-column: 1 / -1; color: var(--muted); font-size: .85rem; }
 </style>
 </head>
 <body>
@@ -198,17 +244,163 @@ function renderShell(opts: {
     <h1>Moderation</h1>
   </div>
   <span class="pill ok">${opts.openCount} open</span>
-  <span class="muted">Auto queue · one ticket at a time</span>
+  <span class="muted">Answer the questions · policy applies the rest</span>
   <span style="flex:1"></span>
   <a class="nav" href="/reports/analytics">Insights</a>
   <a class="nav" href="/reports/masquerade">Masquerade (legacy)</a>
   <a class="nav" href="/reports/logout">Log out</a>
 </header>
-<main>
+<main class="layout">
   ${flash}
   ${opts.body}
-  <p class="muted" style="margin-top:24px">Signed in as <code>${escapeHtml(opts.actor)}</code></p>
+  <p class="foot">Signed in as <code>${escapeHtml(opts.actor)}</code> · <kbd>Backspace</kbd> go back · <kbd>P</kbd> pass ticket</p>
 </main>
+${treeScript}
+<script>
+(function () {
+  var dataEl = document.getElementById('policy-tree-data');
+  var panel = document.getElementById('decision-panel');
+  if (!dataEl || !panel) return;
+  var tree = JSON.parse(dataEl.textContent || '{}');
+  var ticketId = panel.getAttribute('data-ticket-id') || '';
+  var stack = [tree];
+  var crumbs = [];
+
+  function render() {
+    var node = stack[stack.length - 1];
+    var step = document.getElementById('decision-step');
+    var q = document.getElementById('decision-question');
+    var crumbEl = document.getElementById('decision-crumbs');
+    var optsEl = document.getElementById('decision-options');
+    if (!node || !optsEl) return;
+
+    if (node.kind === 'leaf') {
+      step.textContent = 'Confirm';
+      q.textContent = 'Record this decision?';
+      crumbEl.innerHTML = crumbs.concat(node.label).map(function (c) {
+        return '<span>' + escapeHtml(c) + '</span>';
+      }).join('');
+      optsEl.innerHTML =
+        '<button type="button" class="opt" data-confirm="1"><span class="k">Enter</span><span class="lbl">Yes — record &amp; continue</span></button>' +
+        '<button type="button" class="opt" data-back="1"><span class="k">⌫</span><span class="lbl">No — go back</span></button>';
+      return;
+    }
+
+    step.textContent = 'Step ' + stack.length;
+    q.textContent = node.question || 'Choose an option';
+    crumbEl.innerHTML = crumbs.map(function (c) {
+      return '<span>' + escapeHtml(c) + '</span>';
+    }).join('') || '<span class="muted">Start</span>';
+    optsEl.innerHTML = (node.options || []).map(function (o) {
+      return (
+        '<button type="button" class="opt" data-key="' + escapeAttr(o.key) + '">' +
+          '<span class="k">' + escapeHtml(String(o.key).toUpperCase()) + '</span>' +
+          '<span class="lbl">' + escapeHtml(o.label) + '</span>' +
+        '</button>'
+      );
+    }).join('');
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+  function escapeAttr(s) { return escapeHtml(s); }
+
+  function chooseKey(key) {
+    var node = stack[stack.length - 1];
+    if (!node || node.kind === 'leaf') return;
+    var hit = (node.options || []).find(function (o) {
+      return String(o.key).toLowerCase() === String(key).toLowerCase();
+    });
+    if (!hit) return;
+    crumbs.push(hit.label);
+    stack.push(hit.node);
+    render();
+  }
+
+  function goBack() {
+    if (stack.length <= 1) return;
+    stack.pop();
+    crumbs.pop();
+    render();
+  }
+
+  function submitLeaf(leafId) {
+    var form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/reports/ticket/action';
+    function add(name, value) {
+      var i = document.createElement('input');
+      i.type = 'hidden'; i.name = name; i.value = value;
+      form.appendChild(i);
+    }
+    add('ticket_id', ticketId);
+    add('action', 'decide');
+    add('leaf_id', leafId);
+    document.body.appendChild(form);
+    form.submit();
+  }
+
+  function passTicket() {
+    var form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/reports/ticket/action';
+    function add(name, value) {
+      var i = document.createElement('input');
+      i.type = 'hidden'; i.name = name; i.value = value;
+      form.appendChild(i);
+    }
+    add('ticket_id', ticketId);
+    add('action', 'release');
+    document.body.appendChild(form);
+    form.submit();
+  }
+
+  panel.addEventListener('click', function (e) {
+    var btn = e.target.closest('.opt');
+    if (!btn) return;
+    if (btn.getAttribute('data-back')) { goBack(); return; }
+    if (btn.getAttribute('data-confirm')) {
+      var leaf = stack[stack.length - 1];
+      if (leaf && leaf.kind === 'leaf') submitLeaf(leaf.id);
+      return;
+    }
+    var key = btn.getAttribute('data-key');
+    if (key) chooseKey(key);
+  });
+
+  window.addEventListener('keydown', function (e) {
+    if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+    if (e.key === 'Backspace' || e.key === 'Escape') {
+      e.preventDefault();
+      goBack();
+      return;
+    }
+    if (e.key === 'Enter') {
+      var node = stack[stack.length - 1];
+      if (node && node.kind === 'leaf') {
+        e.preventDefault();
+        submitLeaf(node.id);
+      }
+      return;
+    }
+    if (e.key === 'p' || e.key === 'P') {
+      e.preventDefault();
+      passTicket();
+      return;
+    }
+    if (e.key && e.key.length === 1) {
+      chooseKey(e.key);
+    }
+  });
+
+  render();
+})();
+</script>
 </body>
 </html>`;
 }
@@ -245,7 +437,6 @@ function renderTicketCard(ticket: TicketDisplay): string {
     ticket.source === 'auto'
       ? `<span class="pill auto">auto-detected</span>`
       : `<span class="pill">${escapeHtml(ticket.source)}</span>`;
-  const opts = categoryOptionsHtml();
   const media = renderMedia(ticket);
   const queuePath = `/reports?ticket=${encodeURIComponent(ticket.id)}`;
   const queueAbs = `https://api.matterya.com${queuePath}`;
@@ -287,26 +478,24 @@ function renderTicketCard(ticket: TicketDisplay): string {
       ${spaceLine}
       ${flagLine}
     </div>
+  </article>
 
-    <form class="actions" method="post" action="/reports/ticket/action">
-      <input type="hidden" name="ticket_id" value="${escapeHtml(ticket.id)}"/>
-      <div class="row">
-        <label class="muted">Category</label>
-        <select name="category" required>${opts}</select>
-      </div>
-      <div class="row">
-        <button class="danger" name="action" value="remove" type="submit">Remove as…</button>
-        <button class="primary" name="action" value="mark" type="submit">Mark as…</button>
-        <button class="ghost" name="action" value="ignore" type="submit">Ignore</button>
-        <button class="ghost" name="action" value="release" type="submit">Release</button>
-      </div>
-    </form>
-  </article>`;
+  <aside class="decision" id="decision-panel" data-ticket-id="${escapeHtml(ticket.id)}">
+    <div class="step" id="decision-step">Step 1</div>
+    <h2 id="decision-question">Loading…</h2>
+    <div class="crumb" id="decision-crumbs"></div>
+    <div class="options" id="decision-options"></div>
+    <p class="hint">
+      Use number / letter keys to choose. <kbd>Backspace</kbd> goes back.
+      <kbd>Enter</kbd> confirms the final answer. <kbd>P</kbd> passes this ticket.
+      You only answer the questions — Matterya policy decides the enforcement.
+    </p>
+  </aside>`;
 }
 
 function renderEmpty(openCount: number): string {
   return `
-  <div class="card empty">
+  <div class="card empty" style="grid-column:1/-1">
     <h2>Queue clear</h2>
     <p class="muted">${
       openCount > 0
@@ -335,19 +524,25 @@ export async function handleModerationQueueGet(req: Request, res: Response): Pro
     preferTicketId: ticketParam || null,
   });
 
-  if (ticketParam && /^[0-9a-f-]{36}$/i.test(ticketParam) && (!claimed || claimed.id !== ticketParam)) {
+  if (
+    ticketParam &&
+    /^[0-9a-f-]{36}$/i.test(ticketParam) &&
+    (!claimed || claimed.id !== ticketParam)
+  ) {
     flash = flash || 'Could not open that ticket (claimed, resolved, or missing)';
   }
 
   const openCount = await openTicketCount();
   let body: string;
+  let treeJson: string | undefined;
   if (claimed) {
     const display = await hydrateTicketDisplay(claimed);
     body = renderTicketCard(display);
+    treeJson = JSON.stringify(policyTreeForClient()).replace(/</g, '\\u003c');
   } else {
     body = renderEmpty(openCount);
   }
-  res.type('html').send(renderShell({ actor, openCount, body, flash }));
+  res.type('html').send(renderShell({ actor, openCount, body, flash, treeJson }));
 }
 
 export async function handleModerationClaim(req: Request, res: Response): Promise<void> {
@@ -355,7 +550,6 @@ export async function handleModerationClaim(req: Request, res: Response): Promis
     res.status(401).send(renderReportsLoginHtml({ next: '/reports' }));
     return;
   }
-  // Claim-next is automatic on GET /reports — keep POST as a redirect for old forms.
   res.redirect(303, '/reports');
 }
 
@@ -366,56 +560,62 @@ export async function handleModerationTicketAction(req: Request, res: Response):
   }
   const actor = actorFromReq(req);
   const ticketId = String(req.body?.ticket_id || '').trim();
-  let action = String(req.body?.action || '').trim();
-  const category = String(req.body?.category || '').trim();
-  if (action === 'ignore') action = 'skip';
+  const action = String(req.body?.action || '').trim();
   if (!ticketId) {
     res.redirect(303, '/reports?flash=Missing+ticket');
     return;
   }
+
   if (action === 'release') {
     await releaseTicket(ticketId, actor);
     const next = await claimNextTicket(actor, { excludeTicketId: ticketId });
     if (next) {
       res.redirect(
         303,
-        `/reports?ticket=${encodeURIComponent(next.id)}&flash=${encodeURIComponent('Released · next ticket loaded')}`
+        `/reports?ticket=${encodeURIComponent(next.id)}&flash=${encodeURIComponent('Passed · next ticket')}`
       );
       return;
     }
-    res.redirect(303, '/reports?flash=Released');
+    res.redirect(303, '/reports?flash=Passed');
     return;
   }
-  if (action !== 'remove' && action !== 'mark' && action !== 'skip') {
-    res.redirect(303, '/reports?flash=Unknown+action');
+
+  // Policy decision: leaf id → automatic remove/mark/dismiss (hidden from mod).
+  if (action === 'decide') {
+    const leafId = String(req.body?.leaf_id || '').trim();
+    const leaf = getPolicyLeaf(leafId);
+    if (!leaf) {
+      res.redirect(303, '/reports?flash=Unknown+decision');
+      return;
+    }
+    const resolveAction = outcomeToResolveAction(leaf.outcome);
+    const result = await resolveTicket({
+      ticketId,
+      actor,
+      action: resolveAction,
+      category: resolveAction === 'skip' ? null : leaf.root,
+      // Leaf path for audit; outcome is applied by policy (not shown in UI flash).
+      note: `policy:${leaf.id}|outcome:${leaf.outcome}|${leaf.label}`,
+    });
+    if (!result.ok) {
+      res.redirect(303, `/reports?flash=${encodeURIComponent(result.error || 'failed')}`);
+      return;
+    }
+    // Never tell the moderator whether content was removed or marked.
+    const next = await claimNextTicket(actor);
+    const flash = 'Decision recorded';
+    if (next) {
+      res.redirect(
+        303,
+        `/reports?ticket=${encodeURIComponent(next.id)}&flash=${encodeURIComponent(flash)}`
+      );
+      return;
+    }
+    res.redirect(303, `/reports?flash=${encodeURIComponent(flash)}`);
     return;
   }
-  const result = await resolveTicket({
-    ticketId,
-    actor,
-    action,
-    category: action === 'skip' ? null : category,
-  });
-  if (!result.ok) {
-    res.redirect(303, `/reports?flash=${encodeURIComponent(result.error || 'failed')}`);
-    return;
-  }
-  const label =
-    action === 'skip'
-      ? 'Ignored'
-      : action === 'remove'
-        ? `Removed as ${labelForCategory(category)}`
-        : `Marked as ${labelForCategory(category)}`;
-  // Auto-load the next ticket.
-  const next = await claimNextTicket(actor);
-  if (next) {
-    res.redirect(
-      303,
-      `/reports?ticket=${encodeURIComponent(next.id)}&flash=${encodeURIComponent(label)}`
-    );
-    return;
-  }
-  res.redirect(303, `/reports?flash=${encodeURIComponent(label)}`);
+
+  res.redirect(303, '/reports?flash=Unknown+action');
 }
 
 export { REPORTS_PAGE_PASSWORD };

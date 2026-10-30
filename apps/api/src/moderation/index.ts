@@ -42,3 +42,17 @@ export type { AnonymousModInput, AnonymousModResult } from './anonymous-auto.js'
 export type { VideoNsfwResult } from './video-local.js';
 export type { ModerationCategorySlug, ModerationPlatform, ModerationTargetKind } from './categories.js';
 export type { TicketRow, TicketDisplay, UpsertTicketInput, ResolveAction } from './tickets.js';
+export {
+  POLICY_TREE,
+  getPolicyLeaf,
+  listPolicyLeaves,
+  policyTreeForClient,
+  outcomeToResolveAction,
+} from './policy-tree.js';
+export type {
+  PolicyLeaf,
+  PolicyBranch,
+  PolicyNode,
+  PolicyOption,
+  PolicyOutcome,
+} from './policy-tree.js';
