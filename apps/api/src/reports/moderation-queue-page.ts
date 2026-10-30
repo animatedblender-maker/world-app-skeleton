@@ -475,14 +475,12 @@ function highlightNames(text: string, matches: string[]): string {
 }
 
 function reporterAvatarUrl(ticket: TicketDisplay): string {
-  const direct = String(ticket.reporter_avatar_url || '').trim();
-  if (direct.startsWith('http')) return direct;
   const s =
     (ticket.reporter_avatar_seed ||
       ticket.reporter_username ||
       ticket.reporter_display_name ||
       'reporter').trim() || 'reporter';
-  return `https://api.dicebear.com/7.x/shapes/svg?seed=${encodeURIComponent(s)}`;
+  return durableAvatarUrl(ticket.reporter_avatar_url, s);
 }
 
 function renderReporter(ticket: TicketDisplay): string {
@@ -516,7 +514,9 @@ function renderReporter(ticket: TicketDisplay): string {
   <div class="reporter${hit ? ' hit' : ''}">
     <div class="label">Reported by</div>
     <div class="row">
-      <img src="${escapeHtml(reporterAvatarUrl(ticket))}" alt="" width="36" height="36"/>
+      <img src="${escapeHtml(reporterAvatarUrl(ticket))}" alt="" width="36" height="36" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='${escapeHtml(
+        dicebearAvatar(ticket.reporter_username || display)
+      )}'"/>
       <div>
         <div class="name">${escapeHtml(display)}</div>
         <div class="sub">${escapeHtml(handle)}${
@@ -614,7 +614,9 @@ function renderTicketCard(ticket: TicketDisplay): string {
   <article class="card">
     <div class="card-top">
       <div class="author">
-        <img src="${escapeHtml(avatar)}" alt="" width="44" height="44"/>
+        <img src="${escapeHtml(avatar)}" alt="" width="44" height="44" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='${escapeHtml(
+          dicebearAvatar(username)
+        )}'"/>
         <div class="who">
           <div class="name">@${escapeHtml(username)}${
             displayName && displayName !== username
