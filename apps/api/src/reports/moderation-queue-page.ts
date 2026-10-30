@@ -15,6 +15,7 @@ import {
 import { MODERATION_CATEGORIES, labelForCategory } from '../moderation/categories.js';
 import {
   claimNextTicket,
+  claimTicketById,
   ensureAutoTicketsFromFlaggedPosts,
   getClaimedTicketForActor,
   hydrateTicketDisplay,
@@ -140,6 +141,19 @@ function renderShell(opts: {
     padding: 10px 12px; border-radius: 10px; }
   .empty { text-align: center; padding: 48px 16px; }
   .empty button { margin-top: 16px; }
+  .ids {
+    display: grid; gap: 6px; padding: 10px 12px; border-radius: 10px;
+    background: #0a1018; border: 1px solid var(--line); font-size: .78rem;
+  }
+  .ids .row-id {
+    display: grid; grid-template-columns: 88px 1fr; gap: 8px; align-items: start;
+  }
+  .ids .lbl { color: var(--muted); }
+  .ids code, .ids a {
+    color: var(--accent); word-break: break-all; font-size: .76rem;
+  }
+  .ids a { text-decoration: none; }
+  .ids a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -193,6 +207,20 @@ function renderTicketCard(ticket: TicketDisplay): string {
       : `<span class="pill">${escapeHtml(ticket.source)}</span>`;
   const opts = categoryOptionsHtml('category');
   const media = renderMedia(ticket);
+  const queuePath = `/reports?ticket=${encodeURIComponent(ticket.id)}`;
+  const queueAbs = `https://api.matterya.com${queuePath}`;
+  const spaceLine =
+    ticket.space_slug || ticket.space_title
+      ? `<div class="row-id"><span class="lbl">Space</span><code>${escapeHtml(
+          ticket.space_title || ticket.space_slug || ''
+        )}${ticket.space_slug ? ` (${escapeHtml(ticket.space_slug)})` : ''}</code></div>`
+      : '';
+  const authorIdLine = ticket.author_profile_id
+    ? `<div class="row-id"><span class="lbl">Author id</span><code>${escapeHtml(ticket.author_profile_id)}</code></div>`
+    : '';
+  const flagLine = ticket.flag_reason
+    ? `<div class="row-id"><span class="lbl">Flag</span><code>${escapeHtml(ticket.flag_reason)}</code></div>`
+    : '';
 
   return `
   <article class="card">
@@ -211,7 +239,14 @@ function renderTicketCard(ticket: TicketDisplay): string {
     <h2>${title}</h2>
     <p class="body">${body || '<span class="muted">No body</span>'}</p>
     ${media}
-    <p class="muted">Ticket <code>${escapeHtml(ticket.id.slice(0, 8))}</code> · target <code>${escapeHtml(ticket.target_id.slice(0, 8))}</code></p>
+    <div class="ids">
+      <div class="row-id"><span class="lbl">Queue link</span><a href="${escapeHtml(queuePath)}">${escapeHtml(queueAbs)}</a></div>
+      <div class="row-id"><span class="lbl">Ticket id</span><code>${escapeHtml(ticket.id)}</code></div>
+      <div class="row-id"><span class="lbl">Post id</span><code>${escapeHtml(ticket.target_id)}</code></div>
+      ${authorIdLine}
+      ${spaceLine}
+      ${flagLine}
+    </div>
 
     <form class="actions" method="post" action="/reports/ticket/action">
       <input type="hidden" name="ticket_id" value="${escapeHtml(ticket.id)}"/>
@@ -253,11 +288,29 @@ export async function handleModerationQueueGet(req: Request, res: Response): Pro
   await ensureAutoTicketsFromFlaggedPosts();
 
   const actor = actorFromReq(req);
+  const ticketParam = String(req.query.ticket || '').trim();
+  let flash = String(req.query.flash || '') || null;
+
+  // Deep-link: /reports?ticket=<uuid> claims that ticket into this session.
+  if (ticketParam && /^[0-9a-f-]{36}$/i.test(ticketParam)) {
+    const result = await claimTicketById(ticketParam, actor);
+    if (!result.ok) {
+      const msg =
+        result.error === 'claimed_by_other'
+          ? 'Ticket already claimed by someone else'
+          : result.error === 'already_resolved'
+            ? 'Ticket already resolved'
+            : result.error === 'not_found'
+              ? 'Ticket not found'
+              : 'Could not open ticket';
+      flash = flash || msg;
+    }
+  }
+
   const [claimed, openCount] = await Promise.all([
     getClaimedTicketForActor(actor),
     openTicketCount(),
   ]);
-  const flash = String(req.query.flash || '') || null;
   let body: string;
   if (claimed) {
     const display = await hydrateTicketDisplay(claimed);
@@ -275,9 +328,13 @@ export async function handleModerationClaim(req: Request, res: Response): Promis
   }
   await ensureAutoTicketsFromFlaggedPosts();
   const actor = actorFromReq(req);
-  const existing = await getClaimedTicketForActor(actor);
-  if (!existing) {
-    await claimNextTicket(actor);
+  let ticket = await getClaimedTicketForActor(actor);
+  if (!ticket) {
+    ticket = await claimNextTicket(actor);
+  }
+  if (ticket) {
+    res.redirect(303, `/reports?ticket=${encodeURIComponent(ticket.id)}`);
+    return;
   }
   res.redirect(303, '/reports');
 }

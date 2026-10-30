@@ -612,14 +612,17 @@ export async function resolveTicket(opts: {
   }
 }
 
+const TICKET_SELECT = `
+  id, platform, target_kind, target_id, category, status, source,
+  report_count, last_report_at::text, preview_title, preview_body,
+  preview_media_url, assigned_to, claimed_at::text, mod_action, mod_category,
+  created_at::text
+`;
+
 export async function getClaimedTicketForActor(actor: string): Promise<TicketRow | null> {
   const { rows } = await pool.query<TicketRow>(
     `
-    select
-      id, platform, target_kind, target_id, category, status, source,
-      report_count, last_report_at::text, preview_title, preview_body,
-      preview_media_url, assigned_to, claimed_at::text, mod_action, mod_category,
-      created_at::text
+    select ${TICKET_SELECT}
     from public.moderation_tickets
     where status = 'claimed'
       and assigned_to = $1
@@ -629,6 +632,102 @@ export async function getClaimedTicketForActor(actor: string): Promise<TicketRow
     [actor]
   );
   return rows[0] ?? null;
+}
+
+export async function getTicketById(ticketId: string): Promise<TicketRow | null> {
+  const { rows } = await pool.query<TicketRow>(
+    `
+    select ${TICKET_SELECT}
+    from public.moderation_tickets
+    where id = $1::uuid
+    limit 1
+    `,
+    [ticketId]
+  );
+  return rows[0] ?? null;
+}
+
+/** Claim a specific open ticket (queue deep-link). */
+export async function claimTicketById(
+  ticketId: string,
+  actor: string
+): Promise<{ ok: boolean; ticket?: TicketRow; error?: string }> {
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    const { rows: existing } = await client.query<TicketRow>(
+      `
+      select ${TICKET_SELECT}
+      from public.moderation_tickets
+      where id = $1::uuid
+      for update
+      `,
+      [ticketId]
+    );
+    const row = existing[0];
+    if (!row) {
+      await client.query('rollback');
+      return { ok: false, error: 'not_found' };
+    }
+    if (row.status === 'claimed' && row.assigned_to === actor) {
+      await client.query('commit');
+      return { ok: true, ticket: row };
+    }
+    if (row.status === 'claimed') {
+      await client.query('rollback');
+      return { ok: false, error: 'claimed_by_other' };
+    }
+    if (row.status !== 'open') {
+      await client.query('rollback');
+      return { ok: false, error: 'already_resolved' };
+    }
+
+    // Drop any other claim this actor holds so one-at-a-time stays true.
+    await client.query(
+      `
+      update public.moderation_tickets
+      set status = 'open', assigned_to = null, claimed_at = null, updated_at = now()
+      where status = 'claimed' and assigned_to = $1 and id <> $2::uuid
+      `,
+      [actor, ticketId]
+    );
+
+    const { rows } = await client.query<TicketRow>(
+      `
+      update public.moderation_tickets
+      set status = 'claimed',
+          assigned_to = $2,
+          claimed_at = now(),
+          updated_at = now()
+      where id = $1::uuid
+        and status = 'open'
+      returning ${TICKET_SELECT}
+      `,
+      [ticketId, actor]
+    );
+    const ticket = rows[0];
+    if (!ticket) {
+      await client.query('rollback');
+      return { ok: false, error: 'claim_failed' };
+    }
+    await logAction(client, {
+      ticketId: ticket.id,
+      actor,
+      action: 'claim',
+      category: ticket.category,
+      targetKind: ticket.target_kind,
+      targetId: ticket.target_id,
+      platform: ticket.platform,
+      detail: { via: 'queue_link' },
+    });
+    await client.query('commit');
+    return { ok: true, ticket };
+  } catch (err) {
+    await client.query('rollback');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function openTicketCount(): Promise<number> {
@@ -644,6 +743,10 @@ export type TicketDisplay = TicketRow & {
   author_avatar_seed: string | null;
   /** Direct avatar image URL when available (Sparks profiles). */
   author_avatar_url: string | null;
+  author_profile_id: string | null;
+  space_slug: string | null;
+  space_title: string | null;
+  flag_reason: string | null;
   media_type: string | null;
   /** Signed playable media URL (video or image). */
   media_url: string | null;
@@ -663,6 +766,10 @@ export async function hydrateTicketDisplay(
     author_username: null,
     author_avatar_seed: null,
     author_avatar_url: null,
+    author_profile_id: null,
+    space_slug: null,
+    space_title: null,
+    flag_reason: null,
     media_type: null,
     media_url: null,
     thumb_url: null,
@@ -676,14 +783,21 @@ export async function hydrateTicketDisplay(
         media_type: string | null;
         media_url: string | null;
         thumb_url: string | null;
+        flag_reason: string | null;
+        author_profile_id: string | null;
         username: string | null;
         avatar_seed: string | null;
+        space_slug: string | null;
+        space_title: string | null;
       }>(
         `
         select p.title, p.body, p.media_type, p.media_url, p.thumb_url,
-               a.username, a.avatar_seed
+               p.flag_reason, p.author_profile_id::text as author_profile_id,
+               a.username, a.avatar_seed,
+               s.slug as space_slug, s.title as space_title
         from anonymous.posts p
         left join anonymous.profiles a on a.id = p.author_profile_id
+        left join anonymous.spaces s on s.id = p.space_id
         where p.id = $1::uuid
         limit 1
         `,
@@ -706,6 +820,10 @@ export async function hydrateTicketDisplay(
         author_username: row.username,
         author_avatar_seed: row.avatar_seed,
         author_avatar_url: null,
+        author_profile_id: row.author_profile_id,
+        space_slug: row.space_slug,
+        space_title: row.space_title,
+        flag_reason: row.flag_reason,
         media_type: row.media_type,
         media_url,
         thumb_url,
@@ -719,12 +837,14 @@ export async function hydrateTicketDisplay(
         media_type: string | null;
         media_url: string | null;
         thumb_url: string | null;
+        author_id: string | null;
         username: string | null;
         display_name: string | null;
         avatar_url: string | null;
       }>(
         `
         select p.title, p.body, p.media_type, p.media_url, p.thumb_url,
+               p.author_id::text as author_id,
                pr.username, pr.display_name, pr.avatar_url
         from public.posts p
         left join public.profiles pr on pr.user_id = p.author_id
@@ -752,6 +872,10 @@ export async function hydrateTicketDisplay(
         author_username: row.username || row.display_name,
         author_avatar_seed: row.username || row.display_name,
         author_avatar_url: row.avatar_url,
+        author_profile_id: row.author_id,
+        space_slug: null,
+        space_title: null,
+        flag_reason: null,
         media_type: row.media_type,
         media_url,
         thumb_url,

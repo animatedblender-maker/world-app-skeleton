@@ -21,9 +21,11 @@ export {
 export {
   upsertTicketFromReport,
   claimNextTicket,
+  claimTicketById,
   releaseTicket,
   resolveTicket,
   getClaimedTicketForActor,
+  getTicketById,
   openTicketCount,
   hydrateTicketDisplay,
   backfillAutoTicketsFromFlaggedPosts,
