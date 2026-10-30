@@ -50,6 +50,7 @@ export {
   listPolicyLeaves,
   policyTreeForClient,
   outcomeToResolveAction,
+  leafSeverity,
 } from './policy-tree.js';
 export type {
   PolicyLeaf,
@@ -58,3 +59,10 @@ export type {
   PolicyOption,
   PolicyOutcome,
 } from './policy-tree.js';
+export {
+  applyRemovalEnforcement,
+  listOpenStrikes,
+  clearOpenStrikes,
+  MILD_STRIKE_THRESHOLD,
+} from './enforcement.js';
+export type { TicketQueue } from './tickets.js';

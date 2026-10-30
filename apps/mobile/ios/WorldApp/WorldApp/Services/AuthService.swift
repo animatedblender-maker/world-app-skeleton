@@ -38,7 +38,10 @@ final class AuthService {
 
     private let sessionKey = "worldapp.auth.session"
     private(set) var session: AuthSession?
-    private var refreshTask: Task<String, Error>?
+    /// True while `refreshAccessToken` runs on this MainActor stack.
+    private var isRefreshingToken = false
+    /// Callers that arrived mid-refresh — resumed when the owner finishes.
+    private var refreshWaiters: [CheckedContinuation<String, Error>] = []
 
     private init() {
         session = loadSession()
@@ -61,25 +64,30 @@ final class AuthService {
             return session.accessToken
         }
 
-        // Coalesce concurrent refreshes. Call `refreshAccessToken` directly on this
-        // MainActor context when we own the refresh — wrapping in another `@MainActor`
-        // Task and awaiting it from MainActor can stall under load (avatar upload freeze).
-        if let refreshTask {
-            return try await refreshTask.value
+        // Coalesce concurrent refreshes on this MainActor stack. Never spawn
+        // `Task { @MainActor in … }` and await it from MainActor — that deadlocks
+        // under load (avatar upload / Leave↔Join freezes).
+        if isRefreshingToken {
+            return try await withCheckedThrowingContinuation { cont in
+                refreshWaiters.append(cont)
+            }
         }
 
-        let task = Task<String, Error> { @MainActor in
-            defer { self.refreshTask = nil }
-            // Re-check after winning the race.
-            if let s = self.session, s.expiresAt >= Date().timeIntervalSince1970 + 60 {
-                return s.accessToken
-            }
-            return try await self.refreshAccessToken()
+        isRefreshingToken = true
+        do {
+            let token = try await refreshAccessToken()
+            let waiters = refreshWaiters
+            refreshWaiters = []
+            isRefreshingToken = false
+            for waiter in waiters { waiter.resume(returning: token) }
+            return token
+        } catch {
+            let waiters = refreshWaiters
+            refreshWaiters = []
+            isRefreshingToken = false
+            for waiter in waiters { waiter.resume(throwing: error) }
+            throw error
         }
-        refreshTask = task
-        // Yield so the refresh Task can start immediately on MainActor.
-        await Task.yield()
-        return try await task.value
     }
 
     private func refreshAccessToken() async throws -> String {

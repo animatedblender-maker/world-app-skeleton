@@ -45,6 +45,10 @@ export function cleanText(value: unknown, maxLen: number): string {
     .replace(/ SUB /g, ' SPACE ')
     .replace(/ Sub /g, ' Space ')
     .replace(/ sub /g, ' space ');
+  // Reddit user shorthand u/name → @name
+  text = text.replace(/\bu\//gi, '@');
+  // Reddit path shorthand r/funny → space/funny
+  text = text.replace(/\br\//gi, 'space/');
   if (text.length > maxLen) text = `${text.slice(0, maxLen - 1).trimEnd()}…`;
   return text;
 }

@@ -92,16 +92,21 @@ struct PublicProfileView: View {
 
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .center, spacing: 10) {
-                        if let name = profile.displayName, !name.isEmpty {
-                            Text(name)
-                                .font(.system(size: 24, weight: .regular, design: .serif))
-                                .foregroundStyle(Theme.ink)
-                                .lineLimit(2)
-                                .minimumScaleFactor(0.85)
-                        } else if profile.displayName?.isEmpty != false {
-                            Text("Member")
-                                .font(.system(size: 24, weight: .regular, design: .serif))
-                                .foregroundStyle(Theme.ink)
+                        HStack(spacing: 6) {
+                            if let name = profile.displayName, !name.isEmpty {
+                                Text(name)
+                                    .font(.system(size: 24, weight: .regular, design: .serif))
+                                    .foregroundStyle(Theme.ink)
+                                    .lineLimit(2)
+                                    .minimumScaleFactor(0.85)
+                            } else if profile.displayName?.isEmpty != false {
+                                Text("Member")
+                                    .font(.system(size: 24, weight: .regular, design: .serif))
+                                    .foregroundStyle(Theme.ink)
+                            }
+                            if profile.showsVerifiedBadge {
+                                MatteryaVerifiedBadge(size: 18)
+                            }
                         }
 
                         if !isOwner, !profile.isDemoUser {

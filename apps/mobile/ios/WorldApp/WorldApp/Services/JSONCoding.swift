@@ -76,7 +76,8 @@ extension Profile {
             deactivatedAt: row["deactivated_at"] as? String,
             deletedAt: row["deleted_at"] as? String,
             createdAt: row["created_at"] as? String ?? "",
-            updatedAt: row["updated_at"] as? String ?? ""
+            updatedAt: row["updated_at"] as? String ?? "",
+            isVerified: row["is_verified"] as? Bool
         )
     }
 }
@@ -126,6 +127,7 @@ extension Conversation {
             lastMessageAt: row["last_message_at"] as? String,
             isRequest: row["is_request"] as? Bool ?? false,
             requestStatus: row["request_status"] as? String,
+            surface: row["surface"] as? String ?? "primary",
             members: members,
             lastMessage: lastMessageRow.map { Message.fromGraphQL($0) }
         )

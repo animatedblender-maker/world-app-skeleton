@@ -31,7 +31,7 @@ struct ChatShareCard: View {
         }
         if let b = effective.bodyText?.trimmingCharacters(in: .whitespacesAndNewlines), !b.isEmpty {
             // Full sanitizer — strips hub_origin / sid= stamps, not just spark prefixes.
-            let cleaned = (ContentSanitizer.clean(b) ?? ContentSanitizer.stripInternalMarkers(b))
+            let cleaned = ContentSanitizer.displayText(b)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if cleaned.isEmpty { return nil }
             return String(cleaned.prefix(100))

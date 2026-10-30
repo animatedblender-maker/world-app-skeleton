@@ -15,20 +15,23 @@ final class ShareService {
 
     private init() {}
 
+    /// iOS-only deep links (`matterya://…`) — open in WorldApp, never as a web page.
+    private static let appScheme = "matterya"
+
     var appInviteURL: URL {
-        URL(string: "https://matterya.com/download")!
+        URL(string: "\(Self.appScheme)://invite")!
     }
 
     func postURL(_ postID: String) -> URL {
-        URL(string: "https://matterya.com/post/\(postID)")!
+        URL(string: "\(Self.appScheme)://post/\(postID)")!
     }
 
     func profileURL(username: String) -> URL {
-        URL(string: "https://matterya.com/profile/\(username)")!
+        URL(string: "\(Self.appScheme)://profile/\(username)")!
     }
 
     func newsURL(_ newsID: String) -> URL {
-        URL(string: "https://matterya.com/news/\(newsID)")!
+        URL(string: "\(Self.appScheme)://news/\(newsID)")!
     }
 
     func shareText(for content: ShareContent) -> String {
@@ -45,7 +48,7 @@ final class ShareService {
         case .news(let item):
             return item.title
         case .appInvite:
-            return "Join me on Matterya — connect with your country and the world."
+            return "Join me on Matterya."
         case .custom(let title, _, _):
             return title
         }
@@ -114,6 +117,9 @@ final class ShareService {
             if let username = parts.dropFirst().first { return .publicProfile(username: username) }
         case "news":
             if let id = parts.dropFirst().first { return .news(id) }
+        case "invite", "download", "open":
+            // App invite — scheme open is enough; no further navigation.
+            return nil
         case "play":
             guard parts.count >= 2 else { return nil }
             let section = parts[1].lowercased()

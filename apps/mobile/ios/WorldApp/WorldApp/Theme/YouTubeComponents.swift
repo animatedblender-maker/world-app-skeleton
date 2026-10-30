@@ -37,6 +37,8 @@ struct YouTubeAppHeader: View {
     @Environment(AppState.self) private var appState
 
     var onSearch: () -> Void
+    /// Trailing Library control — replaces the redundant second “Matterya Hubs” title row.
+    var onLibrary: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 8) {
@@ -55,6 +57,18 @@ struct YouTubeAppHeader: View {
                         .frame(width: 40, height: 40)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Search")
+
+                if let onLibrary {
+                    Button(action: onLibrary) {
+                        Image(systemName: "rectangle.stack.fill")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(Theme.ink)
+                            .frame(width: 40, height: 40)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Library")
+                }
 
                 Button {
                     toggleNotifications()
@@ -73,6 +87,7 @@ struct YouTubeAppHeader: View {
                     .frame(width: 40, height: 40)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Notifications")
             }
             .fixedSize(horizontal: true, vertical: false)
         }
@@ -216,8 +231,9 @@ struct YouTubeCompactRelatedRow: View {
                 YouTubeVideoThumbnail(post: post, maxPixelSize: 520, showsPlayIcon: false, frameStyle: .card)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    if let headline = post.displayHeadline {
-                        Text(headline)
+                    // One caption: body when present; headline only when body empty.
+                    if !post.displayExcerpt.isEmpty {
+                        Text(post.displayExcerpt)
                             .font(.system(.subheadline, design: .serif))
                             .fontWeight(.medium)
                             .foregroundStyle(Theme.ink)

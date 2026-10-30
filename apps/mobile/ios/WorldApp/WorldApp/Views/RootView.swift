@@ -15,7 +15,14 @@ struct RootView: View {
                 authenticatedShell
             } else if appState.isAuthenticated {
                 // Rare: session known but shell not marked ready yet (e.g. mid-login).
-                sessionRestoringSplash
+                // Outer WorldAppApp splash already covers cold open — never stack a second glow.
+                if appState.isLaunchSplashVisible {
+                    Color.clear
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .screenBackground()
+                } else {
+                    sessionRestoringSplash
+                }
             } else {
                 // Logged out or brand-new install only.
                 AuthView()

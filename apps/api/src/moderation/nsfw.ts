@@ -74,6 +74,10 @@ export function rebrandCompetitorNames(value: string | null | undefined): string
     .replace(/ SUB /g, ' SPACE ')
     .replace(/ Sub /g, ' Space ')
     .replace(/ sub /g, ' space ');
+  // Reddit user shorthand u/name → @name
+  out = out.replace(/\bu\//gi, '@');
+  // Reddit path shorthand r/funny → space/funny
+  out = out.replace(/\br\//gi, 'space/');
   return out;
 }
 

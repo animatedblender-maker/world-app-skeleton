@@ -176,8 +176,9 @@ def clean_text(text: Any, max_len: int) -> str:
     if text is None:
         return ""
     s = str(text).replace("\x00", "").strip()
-    # Never surface the source platform name in comments / captions.
-    s = re.sub(r"tiktok", "matterya", s, flags=re.IGNORECASE)
+    # Never surface source platform names — longer tokens first (subreddit before reddit).
+    for token in ("subreddit", "reddit", "tiktok"):
+        s = re.sub(token, "matterya", s, flags=re.IGNORECASE)
     if len(s) > max_len:
         s = s[:max_len]
     return s

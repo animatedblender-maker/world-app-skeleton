@@ -35,7 +35,7 @@ Temp frame files are deleted in `finally`. Spam/scam still sets `state = held` (
 | Signal | Effect |
 |--------|--------|
 | Spam / scam local rules | `held` (hidden) |
-| Adult keywords in text | platform **Flagged** + open report |
+| Mature / adult keywords in text | platform **Flagged** + open report |
 | NSFW video ≥ threshold | platform **Flagged** + open report (all spaces) |
 | Classifier / ffmpeg failure | `auto_scan_video_failed` action only (no mass-flag) |
 

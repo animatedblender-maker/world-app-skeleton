@@ -94,20 +94,43 @@ struct ConversationView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 10) {
-                            ForEach(visibleMessages) { message in
+                            ForEach(Array(visibleMessages.enumerated()), id: \.element.id) { index, message in
+                                let mine = message.senderID == currentUserID
+                                let prev = index > 0 ? visibleMessages[index - 1] : nil
+                                let clusterStart = !message.isCallLog
+                                    && (prev == nil
+                                        || prev?.isCallLog == true
+                                        || prev?.senderID != message.senderID)
+                                // Masquerade: only @matterya gets an avatar; everyone else is @handle.
+                                // Normal Messages: avatars on both sides, including mine.
+                                let masqueradeChrome = usesMasqueradeChatChrome
+                                let matteryaSender = !mine && isOfficialMatteryaSender(message)
+                                let showAvatar = clusterStart && (
+                                    masqueradeChrome ? matteryaSender : true
+                                )
+                                let showUsername = masqueradeChrome && clusterStart && !matteryaSender
                                 MessageBubble(
                                     message: message,
-                                    isMine: message.senderID == currentUserID,
+                                    isMine: mine,
                                     peerLastReadAt: peerLastReadAt,
                                     isLastReadByPeer: message.id == lastReadOwnMessageID,
                                     reactionSummary: reactionSummaries[message.id],
                                     replyAuthorName: replyAuthorName(for: message),
+                                    showSenderAvatar: showAvatar,
+                                    showUsernameHeader: showUsername,
+                                    usernameHeader: bubbleUsernameHeader(for: message, isMine: mine),
+                                    avatarURL: bubbleAvatarURL(for: message, isMine: mine),
+                                    avatarSeed: bubbleAvatarSeed(for: message, isMine: mine),
                                     onReply: { replyingTo = message },
                                     onLike: { Task { await toggleMessageLike(message) } },
                                     onReact: { emoji in Task { await reactToMessage(message, emoji: emoji) } },
                                     onUnsend: { Task { await unsendMessage(message) } },
                                     onRemoveLocally: { removeMessageLocally(message) },
-                                    onOpenShare: { share in openShareDestination(share) }
+                                    onReport: mine ? nil : { reason in
+                                        Task { await reportMessage(message, reason: reason) }
+                                    },
+                                    onOpenShare: { share in openShareDestination(share) },
+                                    onOpenSender: { openSenderProfile(message) }
                                 )
                                 .id(message.id)
                             }
@@ -234,36 +257,58 @@ struct ConversationView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Theme.canvas, for: .navigationBar)
         .scrollDismissesKeyboard(.interactively)
+        // Embedded Masquerade chat uses MasqueradePushChrome (Back → Inbox); hide system bar.
+        .toolbar(usesMasqueradeChatChrome && appState.selectedTab == .anonymous ? .hidden : .automatic, for: .navigationBar)
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                HStack(spacing: 6) {
-                    Text(title)
-                        .font(.headline)
-                        .foregroundStyle(Theme.ink)
-                    if otherMember?.isVerified == true
-                        || otherMember?.username?.lowercased() == "matterya" {
-                        MatteryaVerifiedBadge(size: 15)
+            if !(usesMasqueradeChatChrome && appState.selectedTab == .anonymous) {
+                ToolbarItem(placement: .principal) {
+                    Button {
+                        openOtherProfile()
+                    } label: {
+                        HStack(spacing: 8) {
+                            if let other = otherMember {
+                                // Masquerade toolbar: avatar only for official @matterya.
+                                if !usesMasqueradeChatChrome || isOfficialMatteryaPeer(other) {
+                                    AvatarView(
+                                        url: other.avatarURL,
+                                        seed: other.username ?? other.userID,
+                                        size: 28
+                                    )
+                                }
+                            }
+                            HStack(spacing: 5) {
+                                Text(masqueradeToolbarTitle)
+                                    .font(.headline)
+                                    .foregroundStyle(Theme.ink)
+                                    .lineLimit(1)
+                                if otherMember.map(isOfficialMatteryaPeer) == true {
+                                    MatteryaVerifiedBadge(size: 15)
+                                }
+                            }
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(masqueradeToolbarTitle) profile")
                 }
-            }
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button {
-                    Task { await callManager.startCall(conversationID: conversation.id, kind: .audio, peer: otherMember) }
-                } label: {
-                    Image(systemName: "phone.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(callManager.canStartCall ? Theme.ink : Theme.inkMuted)
-                }
-                .disabled(!callManager.canStartCall)
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        Task { await callManager.startCall(conversationID: conversation.id, kind: .audio, peer: otherMember) }
+                    } label: {
+                        Image(systemName: "phone.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(callManager.canStartCall ? Theme.ink : Theme.inkMuted)
+                    }
+                    .disabled(!callManager.canStartCall)
 
-                Button {
-                    Task { await callManager.startCall(conversationID: conversation.id, kind: .video, peer: otherMember) }
-                } label: {
-                    Image(systemName: "video.fill")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(callManager.canStartCall ? Theme.ink : Theme.inkMuted)
+                    Button {
+                        Task { await callManager.startCall(conversationID: conversation.id, kind: .video, peer: otherMember) }
+                    } label: {
+                        Image(systemName: "video.fill")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(callManager.canStartCall ? Theme.ink : Theme.inkMuted)
+                    }
+                    .disabled(!callManager.canStartCall)
                 }
-                .disabled(!callManager.canStartCall)
             }
         }
         .task(id: conversation.id) {
@@ -320,6 +365,110 @@ struct ConversationView: View {
     // MARK: - Share routing (card tap)
 
     /// Card / arrow → Sparks, Hubs watch, or post. Never autoplay.
+    private func openOtherProfile() {
+        guard let other = otherMember else { return }
+        appState.openPublicProfile(username: other.username, userID: other.userID)
+    }
+
+    /// Masquerade Inbox opens land on Messages tab — keep handle-only chrome via this flag.
+    private var usesMasqueradeChatChrome: Bool {
+        appState.selectedTab == .anonymous || appState.masqueradeChatChrome
+    }
+
+    private var masqueradeToolbarTitle: String {
+        guard usesMasqueradeChatChrome else { return title }
+        if let other = otherMember, isOfficialMatteryaPeer(other) {
+            return title
+        }
+        if let handle = otherMember?.username?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !handle.isEmpty {
+            return "@\(handle)"
+        }
+        return title
+    }
+
+    /// Official @matterya only — verified badge alone is not enough for an avatar.
+    private func isOfficialMatteryaPeer(_ author: PostAuthor) -> Bool {
+        let handle = (author.username ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return handle == "matterya"
+    }
+
+    /// Official Matterya — only sender that keeps an avatar inside Masquerade chrome.
+    private func isOfficialMatteryaSender(_ message: Message) -> Bool {
+        let handle = (message.sender?.username ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if handle == "matterya" { return true }
+        if let other = otherMember, other.userID == message.senderID {
+            return isOfficialMatteryaPeer(other)
+        }
+        // Fallback when sender payload omitted username but peer is Matterya.
+        if handle.isEmpty, let other = otherMember, isOfficialMatteryaPeer(other), !message.senderID.isEmpty {
+            return other.userID == message.senderID
+        }
+        return false
+    }
+
+    private func bubbleUsernameHeader(for message: Message, isMine: Bool) -> String {
+        if isMine {
+            let handle = AnonymousStore.shared.displayUsername
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !handle.isEmpty { return "@\(handle)" }
+            return "You"
+        }
+        if let name = message.sender?.username?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            return "@\(name)"
+        }
+        if let name = message.sender?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            return name
+        }
+        if let other = otherMember {
+            if let u = other.username, !u.isEmpty { return "@\(u)" }
+            if let d = other.displayName, !d.isEmpty { return d }
+        }
+        return "Matterya"
+    }
+
+    private func bubbleAvatarURL(for message: Message, isMine: Bool) -> String? {
+        if isMine {
+            return appState.currentProfile?.avatarURL
+        }
+        return message.sender?.avatarURL ?? otherMember?.avatarURL
+    }
+
+    private func bubbleAvatarSeed(for message: Message, isMine: Bool) -> String {
+        if isMine {
+            return appState.currentProfile?.username
+                ?? appState.currentProfile?.userID
+                ?? currentUserID
+                ?? "me"
+        }
+        return message.sender?.username
+            ?? message.sender?.userID
+            ?? otherMember?.username
+            ?? message.senderID
+    }
+
+    private func openSenderProfile(_ message: Message) {
+        if message.senderID == currentUserID {
+            appState.openProfileFromMenu()
+            return
+        }
+        if let sender = message.sender, !sender.userID.isEmpty {
+            appState.openPublicProfile(username: sender.username, userID: sender.userID)
+            return
+        }
+        if let other = otherMember, other.userID == message.senderID {
+            openOtherProfile()
+            return
+        }
+        let sid = message.senderID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sid.isEmpty else { return }
+        appState.openPublicProfile(username: nil, userID: sid)
+    }
+
     private func openShareDestination(_ share: Message.ShareInfo) {
         chatMiniPlaying = false
         ChatShareRouting.open(share, appState: appState)
@@ -834,6 +983,26 @@ struct ConversationView: View {
     private func removeMessageLocally(_ message: Message) {
         HiddenMessagesStore.hide(conversationID: conversation.id, messageID: message.id)
     }
+
+    private func reportMessage(_ message: Message, reason: String) async {
+        guard !message.id.hasPrefix("pending-") else { return }
+        do {
+            let ok = try await MessagesService.shared.reportMessage(message.id, reason: reason)
+            await MainActor.run {
+                appState.showToast(
+                    ok ? "Message reported. Thank you." : "Could not report message.",
+                    style: ok ? .info : .error
+                )
+            }
+        } catch {
+            await MainActor.run {
+                appState.showToast(
+                    (error as? LocalizedError)?.errorDescription ?? error.localizedDescription,
+                    style: .error
+                )
+            }
+        }
+    }
 }
 
 private struct MessageReactionSummary {
@@ -936,17 +1105,29 @@ private struct MessageBubble: View {
     var isLastReadByPeer: Bool = false
     let reactionSummary: MessageReactionSummary?
     let replyAuthorName: String?
+    /// Avatar at cluster start (both sides in normal Messages).
+    var showSenderAvatar: Bool = false
+    /// Masquerade: light username above the bubble instead of avatars.
+    var showUsernameHeader: Bool = false
+    var usernameHeader: String = ""
+    var avatarURL: String? = nil
+    var avatarSeed: String = ""
     let onReply: () -> Void
     let onLike: () -> Void
     let onReact: (String) -> Void
     let onUnsend: () -> Void
     let onRemoveLocally: () -> Void
+    var onReport: ((String) -> Void)? = nil
     var onOpenShare: ((Message.ShareInfo) -> Void)? = nil
+    var onOpenSender: (() -> Void)? = nil
 
     @State private var resolvedImageURL: URL?
     @State private var showsStatusDetail = false
     @State private var swipeOffset: CGFloat = 0
     @State private var showImageLightbox = false
+    @State private var showReportConfirm = false
+
+    private let avatarSlot: CGFloat = 34
 
     var body: some View {
         if message.isCallLog {
@@ -1007,9 +1188,23 @@ private struct MessageBubble: View {
                 }
             }
 
-            HStack(alignment: .top, spacing: 0) {
-                if isMine { Spacer(minLength: 48) }
+            HStack(alignment: .bottom, spacing: 8) {
+                if !isMine {
+                    if showSenderAvatar {
+                        senderAvatarSlot
+                    } else if !showUsernameHeader {
+                        // Normal Messages: keep column aligned under a prior avatar.
+                        Color.clear.frame(width: avatarSlot, height: avatarSlot)
+                    }
+                }
+                if isMine { Spacer(minLength: 40) }
                 VStack(alignment: isMine ? .trailing : .leading, spacing: 4) {
+                    if showUsernameHeader, !usernameHeader.isEmpty {
+                        Text(usernameHeader)
+                            .font(.caption)
+                            .foregroundStyle(Theme.inkMuted)
+                            .padding(.horizontal, 4)
+                    }
                     bubbleContent
                     reactionStrip
                     messageMeta
@@ -1023,7 +1218,14 @@ private struct MessageBubble: View {
                             onLike()
                         }
                 }
-                if !isMine { Spacer(minLength: 48) }
+                if isMine {
+                    if showSenderAvatar {
+                        senderAvatarSlot
+                    } else if !showUsernameHeader {
+                        Color.clear.frame(width: avatarSlot, height: avatarSlot)
+                    }
+                }
+                if !isMine { Spacer(minLength: 40) }
             }
             .offset(x: swipeOffset)
         }
@@ -1060,6 +1262,12 @@ private struct MessageBubble: View {
                 } label: {
                     Label("Unsend for Everyone", systemImage: "arrow.uturn.backward.circle")
                 }
+            } else if onReport != nil {
+                Button(role: .destructive) {
+                    showReportConfirm = true
+                } label: {
+                    Label("Report", systemImage: "flag")
+                }
             }
             Button(role: .destructive) {
                 onRemoveLocally()
@@ -1067,8 +1275,30 @@ private struct MessageBubble: View {
                 Label("Remove from This Device", systemImage: "trash")
             }
         }
+        .matteryaReportDialog("Report message", isPresented: $showReportConfirm) { reason in
+            onReport?(reason)
+        }
         .task(id: message.mediaPath) {
             await resolveImageURLIfNeeded()
+        }
+    }
+
+    @ViewBuilder
+    private var senderAvatarSlot: some View {
+        if showSenderAvatar {
+            Button {
+                onOpenSender?()
+            } label: {
+                AvatarView(
+                    url: avatarURL,
+                    seed: avatarSeed.isEmpty ? message.senderID : avatarSeed,
+                    size: avatarSlot
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open profile")
+        } else {
+            Color.clear.frame(width: avatarSlot, height: avatarSlot)
         }
     }
 
@@ -1186,9 +1416,8 @@ private struct MessageBubble: View {
 
             if let text = message.displayText {
                 // Always ink on paper — accentBright is matte/off-white, so white text was invisible.
-                Text(text)
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.ink)
+                // `**bold**` markers render as bold (composer rich controls can come later).
+                MatteryaRichText(text: text, font: .subheadline, color: Theme.ink)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(

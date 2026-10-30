@@ -1204,6 +1204,10 @@ export class PostsService {
       link_published_at: row.link_published_at ?? null,
       link_image_url: row.link_image_url ?? null,
       link_snippet: row.link_snippet ?? null,
+      is_adult:
+        row.is_adult === true ||
+        String(row.moderation_status || '').toLowerCase() === 'sensitive',
+      moderation_status: row.moderation_status ?? null,
     };
   }
 

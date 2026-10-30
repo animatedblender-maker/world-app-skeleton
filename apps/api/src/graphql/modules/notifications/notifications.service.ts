@@ -245,6 +245,80 @@ export class NotificationsService {
     ]);
   }
 
+  /** Author notice when moderation removes their content. */
+  async notifyModerationRemoval(
+    targetId: string,
+    opts: {
+      entityType: string;
+      entityId: string;
+      rootLabel: string;
+    }
+  ): Promise<void> {
+    if (!targetId || !opts.entityId) return;
+    await pool.query(
+      `
+      insert into public.notifications
+        (user_id, actor_id, type, entity_type, entity_id)
+      values
+        ($1, null, 'moderation_removal', $2, $3)
+      `,
+      [targetId, opts.entityType, opts.entityId]
+    );
+    const body = `Your post was removed for ${opts.rootLabel}.`;
+    await Promise.all([
+      this.push.sendToUser(targetId, {
+        title: 'Matterya moderation',
+        body,
+        url: `/`,
+        tag: `moderation_removal:${opts.entityId}`,
+      }),
+      this.apns.sendToUser(targetId, {
+        title: 'Matterya moderation',
+        body,
+        data: {
+          type: 'moderation_removal',
+          entityId: opts.entityId,
+          entityType: opts.entityType,
+        },
+      }),
+    ]);
+  }
+
+  /** Reporter notice when we take action on something they reported. */
+  async notifyReportResolved(
+    targetId: string,
+    opts: { entityType: string; entityId: string }
+  ): Promise<void> {
+    if (!targetId || !opts.entityId) return;
+    await pool.query(
+      `
+      insert into public.notifications
+        (user_id, actor_id, type, entity_type, entity_id)
+      values
+        ($1, null, 'moderation_report_resolved', $2, $3)
+      `,
+      [targetId, opts.entityType, opts.entityId]
+    );
+    const body = 'Thanks — we removed content you reported.';
+    await Promise.all([
+      this.push.sendToUser(targetId, {
+        title: 'Matterya moderation',
+        body,
+        url: `/`,
+        tag: `moderation_report_resolved:${opts.entityId}`,
+      }),
+      this.apns.sendToUser(targetId, {
+        title: 'Matterya moderation',
+        body,
+        data: {
+          type: 'moderation_report_resolved',
+          entityId: opts.entityId,
+          entityType: opts.entityType,
+        },
+      }),
+    ]);
+  }
+
   async notifyMessage(
     targetId: string,
     actorId: string,

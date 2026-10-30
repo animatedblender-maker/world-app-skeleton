@@ -71,6 +71,10 @@ struct ConversationRouteView: View {
             if ActiveConversationFocus.isViewing(conversationID) {
                 ActiveConversationFocus.set(nil)
             }
+            // Leaving the thread clears Masquerade handle-only chrome for the next Messages open.
+            if appState.masqueradeChatChrome {
+                appState.masqueradeChatChrome = false
+            }
         }
     }
 

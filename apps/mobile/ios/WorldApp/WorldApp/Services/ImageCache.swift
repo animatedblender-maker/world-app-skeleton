@@ -128,7 +128,7 @@ final class ImageCache: @unchecked Sendable {
         // Cap is independent of how many poster URLs already resolve — when every
         // row needs Frame0, urls.count==0 used to zero the cap and leave black tiles.
         // Settled Hubs open/rails need a denser band so R2 long-form never stays black.
-        let cap = fling ? 2 : 28
+        let cap = fling ? 2 : 8
         let unique = Array(Set(urls.map(\.absoluteString))).prefix(min(cap, max(urls.count, 0)))
             .compactMap(URL.init(string:))
         let priority: TaskPriority = fling ? .background : .utility
@@ -697,6 +697,78 @@ final class FeedPhotoZoomGate {
     }
 }
 
+/// Pinch-zoom any media (video player, custom chrome). Same UIKit 2-finger path as photos.
+/// Content keeps hit-testing so player controls still receive taps.
+struct FeedPinchZoomContainer<Content: View>: View {
+    var maxScale: CGFloat = 4
+    var onZoomingChanged: ((Bool) -> Void)? = nil
+    @ViewBuilder var content: () -> Content
+
+    @State private var scale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var announcedZooming = false
+
+    private var isZooming: Bool { scale > 1.01 || announcedZooming }
+
+    var body: some View {
+        Color.clear
+            .overlay {
+                content()
+                    .scaleEffect(scale)
+                    .offset(offset)
+            }
+            .overlay {
+                if isZooming {
+                    Color.black.opacity(min(0.45, Double(max(scale, 1.15) - 1) * 0.28))
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay {
+                FeedPhotoPinchOverlay(
+                    onBegan: { setZooming(true) },
+                    onChanged: { next, pan in
+                        let clamped = min(max(next, 1), maxScale)
+                        setZooming(true)
+                        scale = clamped
+                        offset = pan
+                    },
+                    onEnded: {
+                        withAnimation(.interpolatingSpring(stiffness: 260, damping: 28)) {
+                            scale = 1
+                            offset = .zero
+                        } completion: {
+                            setZooming(false)
+                        }
+                    }
+                )
+                // Must stay false — a hit-testing overlay ate pause/timeline taps.
+                .allowsHitTesting(false)
+            }
+            .clipped()
+            .contentShape(Rectangle())
+            .onDisappear {
+                if announcedZooming {
+                    announcedZooming = false
+                    onZoomingChanged?(false)
+                    FeedPhotoZoomGate.shared.end()
+                }
+                scale = 1
+                offset = .zero
+            }
+    }
+
+    private func setZooming(_ zooming: Bool) {
+        guard zooming != announcedZooming else { return }
+        announcedZooming = zooming
+        onZoomingChanged?(zooming)
+        if zooming {
+            FeedPhotoZoomGate.shared.begin()
+        } else {
+            FeedPhotoZoomGate.shared.end()
+        }
+    }
+}
+
 /// Feed photo: UIKit pinch (ScrollView swallows SwiftUI MagnificationGesture).
 /// Zooms under the fingers; release springs back to 1×.
 struct FeedPinchZoomPhoto: View {
@@ -742,8 +814,8 @@ struct FeedPinchZoomPhoto: View {
                 }
             }
             .overlay {
-                // Pinch overlay must NOT steal 1-finger scroll (Sparks/Hubs stay smooth
-                // because they have no UIKit hit layer). Overlay only claims 2-finger / zoom.
+                // Recognizers attach to the overlay parent — this view must not steal
+                // 1-finger scroll or taps (photos + Masquerade video chrome).
                 FeedPhotoPinchOverlay(
                     onBegan: {
                         setZooming(true)
@@ -763,7 +835,7 @@ struct FeedPinchZoomPhoto: View {
                         }
                     }
                 )
-                .allowsHitTesting(true)
+                .allowsHitTesting(false)
             }
             .clipped()
             .contentShape(Rectangle())
@@ -803,7 +875,9 @@ private struct FeedPhotoPinchOverlay: UIViewRepresentable {
 
     func makeUIView(context: Context) -> FeedPhotoPinchView {
         let view = FeedPhotoPinchView()
-        view.isUserInteractionEnabled = true
+        // Interaction stays off — recognizers live on the overlay parent so
+        // video timeline / pause / mute keep receiving single-finger taps.
+        view.isUserInteractionEnabled = false
         view.isMultipleTouchEnabled = true
         view.backgroundColor = .clear
         view.isOpaque = false
@@ -831,13 +905,18 @@ private final class FeedPhotoPinchView: UIView, UIGestureRecognizerDelegate {
     private var liveScale: CGFloat = 1
     private var panTranslation: CGSize = .zero
     private var pinchActive = false
+    /// Host that owns the recognizers — ancestor of both film + chrome so 1-finger
+    /// taps reach player controls while 2-finger pinch still fires.
+    private weak var gestureHost: UIView?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        // Clear — hitTest decides when we own touches (2-finger / zoom only).
+        // Do NOT sit in the hit-test path — that stole timeline / pause taps when
+        // FeedPinchZoomContainer wrapped MatteryaHubPlayerView. Recognizers attach
+        // to the SwiftUI overlay parent (ancestor of the player) instead.
         backgroundColor = .clear
         isMultipleTouchEnabled = true
-        isUserInteractionEnabled = true
+        isUserInteractionEnabled = false
         isOpaque = false
 
         pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
@@ -845,7 +924,6 @@ private final class FeedPhotoPinchView: UIView, UIGestureRecognizerDelegate {
         pinch.cancelsTouchesInView = true
         pinch.delaysTouchesBegan = false
         pinch.delaysTouchesEnded = false
-        addGestureRecognizer(pinch)
 
         pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         pan.delegate = self
@@ -853,14 +931,35 @@ private final class FeedPhotoPinchView: UIView, UIGestureRecognizerDelegate {
         pan.maximumNumberOfTouches = 2
         pan.cancelsTouchesInView = true
         pan.delaysTouchesBegan = false
-        addGestureRecognizer(pan)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
-    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        bounds.contains(point)
+    override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        attachRecognizers(to: superview)
+    }
+
+    override func removeFromSuperview() {
+        attachRecognizers(to: nil)
+        super.removeFromSuperview()
+    }
+
+    private func attachRecognizers(to host: UIView?) {
+        if let old = gestureHost {
+            old.removeGestureRecognizer(pinch)
+            old.removeGestureRecognizer(pan)
+        }
+        gestureHost = host
+        guard let host else { return }
+        if pinch.view !== host { host.addGestureRecognizer(pinch) }
+        if pan.view !== host { host.addGestureRecognizer(pan) }
+    }
+
+    /// Never claim hits — player chrome / scroll must receive 1-finger touches.
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        nil
     }
 
     @objc private func handlePinch(_ gr: UIPinchGestureRecognizer) {
@@ -889,7 +988,7 @@ private final class FeedPhotoPinchView: UIView, UIGestureRecognizerDelegate {
 
     @objc private func handlePan(_ gr: UIPanGestureRecognizer) {
         guard pinchActive || liveScale > 1.05 else { return }
-        let t = gr.translation(in: self)
+        let t = gr.translation(in: gr.view)
         panTranslation = CGSize(width: t.x, height: t.y)
         onChanged?(max(liveScale, 1.05), panTranslation)
         if gr.state == .ended || gr.state == .cancelled {

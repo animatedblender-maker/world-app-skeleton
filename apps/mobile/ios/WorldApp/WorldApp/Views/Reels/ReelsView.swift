@@ -173,11 +173,14 @@ private struct ReelCard: View {
                     Button {
                         appState.openPublicProfile(username: post.author?.username, userID: post.authorID)
                     } label: {
-                        HStack {
+                        HStack(spacing: 6) {
                             AvatarView(url: post.author?.avatarURL, seed: post.authorID, size: 36)
                             Text(post.author?.displayName ?? "Member")
                                 .font(.subheadline.weight(.bold))
                                 .foregroundStyle(.white)
+                            if post.author?.showsVerifiedBadge == true {
+                                MatteryaVerifiedBadge(size: 13)
+                            }
                         }
                     }
                     .buttonStyle(.plain)
@@ -190,13 +193,16 @@ private struct ReelCard: View {
                 if let text = post.displayCaption ?? post.displayHeadline {
                     TranslatableCaption(
                         text: text,
+                        collapsedLineLimit: 3,
                         font: .subheadline,
                         color: .white.opacity(0.9),
                         lineSpacing: 2,
-                        plainLineLimit: 4,
-                        buttonTint: .white.opacity(0.85),
-                        expandable: false
+                        uiTextStyle: .subheadline,
+                        buttonTint: .white.opacity(0.9),
+                        expandable: true,
+                        expandedLineLimit: 10
                     )
+                    .id("reel-caption-\(post.id)")
                 }
 
                 HStack {

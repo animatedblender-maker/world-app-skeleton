@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 /// Global frame of the chat mini “video hole” so continuous playback can dock without remounting.
@@ -39,6 +40,8 @@ struct GlobalHubPlaybackLayer: View {
     /// Morph-first minimize: use mini layout while `hubPlaybackExpanded` is still true
     /// so watch chrome can clear before the session flips (no canvas/grey hole).
     @State private var forceMiniLayout = false
+    /// Ignore pause blips for a beat after morph (layout settle used to clear hubPlaybackPlaying).
+    @State private var ignorePauseUntil: Date = .distantPast
 
     private var expanded: Bool { appState.hubPlaybackExpanded }
     private var landscapeFullscreen: Bool { appState.hubPlaybackLandscapeFullscreen }
@@ -91,13 +94,14 @@ struct GlobalHubPlaybackLayer: View {
                 .persistentSystemOverlays(landscapeFullscreen ? .hidden : .automatic)
             }
         }
-        // Snappy YouTube morph — hangy 0.42 interactiveSpring left grey slabs mid-path.
-        .animation(isPullingMinimize ? nil : MatteryaMotion.minimize, value: forceMiniLayout)
-        .animation(isPullingMinimize ? nil : MatteryaMotion.expand, value: expanded)
+        // YouTube-smooth morph: spring the film frame only. Never animate on tab/nav path
+        // (that re-laid out mini on every push). Pull-drag stays 1:1 (nil animation).
+        .animation(isPullingMinimize ? nil : MatteryaMotion.ytMorph, value: forceMiniLayout)
+        .animation(isPullingMinimize ? nil : MatteryaMotion.ytExpand, value: expanded)
         .animation(MatteryaMotion.ytMorph, value: landscapeFullscreen)
-        .animation(MatteryaMotion.ytMorph, value: hasDockSlot)
-        .animation(MatteryaMotion.micro, value: appState.hubPlaybackPost?.id)
-        .animation(MatteryaMotion.micro, value: appState.navigationPath.isEmpty)
+        // Never animate dock-slot appearance — bar mount after mini-land used to
+        // re-tween the film and looked like a second hitch at the top-half stage.
+        .animation(nil, value: hasDockSlot)
         .onChange(of: expanded) { _, isExpanded in
             if !isExpanded {
                 // Session already mini — pin geometry, clear grab state.
@@ -132,36 +136,68 @@ struct GlobalHubPlaybackLayer: View {
             forceMiniLayout = false
         }
         .onChange(of: appState.hubPlaybackPlaying) { _, playing in
-            // Chat → Hubs / mini play: re-assert AVPlayer the moment AppState wants sound.
+            // Only kick AV when leaving a true pause — morph/tab leave must not spam resume.
             guard playing, appState.hubPlaybackPost != nil else { return }
-            NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+            guard MediaPlaybackCoordinator.shared.continuousHubPlayer?.rate ?? 0 < 0.05 else { return }
+            MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+                userMuted: appState.hubPlaybackMuted,
+                rate: appState.hubPlaybackRate
+            )
         }
     }
 
     /// Drive film into the mini strip, then flip session flags (morph-first — no grey hole).
+    /// Same idea as YouTube: animate the player frame, keep AV rolling, flip chrome after land.
     private func commitMinimizeMorph() {
         let returnToChat = appState.hubMinimizeReturnToChat
-        var clear = Transaction()
-        clear.disablesAnimations = true
-        withTransaction(clear) {
-            appState.hubPlaybackPullProgress = 1
-            isPullingMinimize = false
+        // Keep audio/video alive for the entire morph — never accept a pause blip.
+        if !appState.hubPlaybackPlaying {
+            appState.hubPlaybackPlaying = true
         }
-        withAnimation(MatteryaMotion.minimize) {
+        ignorePauseUntil = Date().addingTimeInterval(0.45)
+        // Do NOT touch AppState here — pullProgress is already ≥ threshold from the
+        // finger, and writing it again re-entered YouTubeAppView on the morph frame.
+        // Animate ONLY local geometry from the current pull offset into the mini strip.
+        withAnimation(MatteryaMotion.ytMorph) {
             forceMiniLayout = true
+            isPullingMinimize = false
             dragOffset = 0
         }
         Task { @MainActor in
-            // ~spring response — film must sit in the mini strip before chrome mounts.
-            try? await Task.sleep(nanoseconds: 220_000_000)
+            // Match MatteryaMotion.ytMorph easeOut 0.22s — flip session once the film has landed.
+            try? await Task.sleep(nanoseconds: 230_000_000)
             var pin = Transaction()
             pin.disablesAnimations = true
             withTransaction(pin) {
                 forceMiniLayout = true
                 dragOffset = 0
+                isPullingMinimize = false
             }
+            ignorePauseUntil = Date().addingTimeInterval(0.15)
+            // Single finish — no AV reassert storm (was hitching mid-morph).
             appState.finishMinimizeHubPlayback(returnToChat: returnToChat)
         }
+    }
+
+    /// Pull / morph scrim — blur home behind the shrinking film.
+    private var minimizeScrimVisible: Bool {
+        // Only while the session is still expanded (incl. morph-first). Drop the
+        // instant mini lands so the blur never sticks under the floating strip.
+        !landscapeFullscreen
+            && expanded
+            && (isPullingMinimize || forceMiniLayout || appState.hubPlaybackPullProgress > 0.02)
+    }
+
+    private var minimizeScrimOpacity: Double {
+        if forceMiniLayout { return 0.92 }
+        let p = max(dragProgress, appState.hubPlaybackPullProgress)
+        return Double(min(1, 0.15 + p * 0.85))
+    }
+
+    private var minimizeScrimInk: Double {
+        if forceMiniLayout { return 0.22 }
+        let p = max(dragProgress, appState.hubPlaybackPullProgress)
+        return Double(min(0.28, 0.06 + p * 0.22))
     }
 
     // MARK: - Stage (one tree → one AVPlayer)
@@ -174,6 +210,15 @@ struct GlobalHubPlaybackLayer: View {
             // Never claim empty space for hits.
             Color.clear
                 .frame(width: geo.size.width, height: geo.size.height)
+                .allowsHitTesting(false)
+
+            // Pre-warmed UIKit blur — always mounted (opacity 0 when idle) so the first
+            // pull never pays UIVisualEffect creation cost (that was a 1–2s stall).
+            HubMinimizeBlurBackdrop()
+                .opacity(minimizeScrimVisible ? minimizeScrimOpacity : 0)
+                .overlay(Theme.ink.opacity(minimizeScrimVisible ? minimizeScrimInk : 0))
+                .frame(width: geo.size.width, height: geo.size.height)
+                .animation(isPullingMinimize ? nil : MatteryaMotion.ytMorph, value: minimizeScrimOpacity)
                 .allowsHitTesting(false)
 
             // Film + mini chrome in ONE box, then offset together.
@@ -195,25 +240,6 @@ struct GlobalHubPlaybackLayer: View {
                         onClose: { stop() }
                     )
                     .frame(width: layout.width, height: layout.height)
-                }
-
-                if showExpandedStage, !landscapeFullscreen, isPullingMinimize, dragOffset > 28 {
-                    VStack {
-                        Spacer()
-                        Label(
-                            dragProgress > 0.55 ? "Release for mini player" : "Pull down for mini",
-                            systemImage: "rectangle.bottomhalf.inset.filled"
-                        )
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.paper)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(Theme.ink.opacity(0.55), in: Capsule())
-                        .padding(.bottom, 16)
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
-                    }
-                    .frame(width: layout.width, height: layout.height)
-                    .allowsHitTesting(false)
                 }
             }
             .frame(width: layout.width, height: layout.height)
@@ -362,14 +388,30 @@ struct GlobalHubPlaybackLayer: View {
         )
     }
 
+    private var rateBinding: Binding<Float> {
+        Binding(
+            get: { appState.hubPlaybackRate },
+            set: { appState.hubPlaybackRate = $0 }
+        )
+    }
+
     @ViewBuilder
     private func playerSurface(for post: CountryPost, showControls: Bool) -> some View {
-        // Resume from feed playhead so open continues where the user left off.
+        // Resume from the furthest known playhead so Continue watching opens at the
+        // last second watched (stored), while live feed handoff still wins via park.
         let parkedT = SparkWarmPool.shared.parkedPlayer(for: post.id)?.currentTime().seconds
         let stored = YouTubeCatalogService.shared.playbackPosition(for: post.id)
+        let sharedStored: Double = {
+            guard let shared = post.sharedPostID, shared != post.id else { return 0 }
+            return YouTubeCatalogService.shared.playbackPosition(for: shared)
+        }()
+        let forced = appState.hubPlaybackForcedResumeSeconds
         let resumeAt: Double = {
-            if let parkedT, parkedT.isFinite, parkedT > 0.05 { return parkedT }
-            return stored > 0.05 ? stored : 0
+            let parked = (parkedT?.isFinite == true && (parkedT ?? 0) > 0.05) ? (parkedT ?? 0) : 0
+            let disk = max(stored, sharedStored, forced)
+            // Prefer live mid-clip park when it's clearly ahead; otherwise disk resume.
+            if parked > 0.45, parked + 1 >= disk { return parked }
+            return disk > 0.05 ? disk : parked
         }()
         if let url = post.playableVideoURL {
             let posterCandidates: [URL?] = [
@@ -386,24 +428,35 @@ struct GlobalHubPlaybackLayer: View {
             // Sparks pattern: Frame 0 poster under film until AV paints.
             ZStack {
                 Color.black
-                let fitFilm = showExpandedStage || landscapeFullscreen
-                if let poster {
-                    CachedAsyncImage(
-                        url: poster,
-                        maxPixelSize: showControls ? 900 : 480,
-                        contentMode: fitFilm ? .fit : .fill,
-                        placeholder: AnyView(Color.black)
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-                    .allowsHitTesting(false)
-                } else {
-                    FrameZeroFallbackPoster(
-                        postID: post.id,
-                        videoURL: url,
-                        fillsFrame: !fitFilm
-                    )
-                    .allowsHitTesting(false)
+                // Keep gravity stable while morphing — flipping fit↔fill mid-shrink pauses AV
+                // and leaves a grey trail. Only fill once the session is settled mini.
+                let settledMini = !appState.hubPlaybackExpanded
+                    && !forceMiniLayout
+                    && !landscapeFullscreen
+                let morphing = forceMiniLayout || isPullingMinimize
+                    || appState.hubPlaybackPullProgress > 0.02
+                let fitFilm = !settledMini
+                // Settled mini + mid-morph: AV layer alone. Poster decode/layout mid-shrink
+                // was hitching the morph for a second or two.
+                if !settledMini, !morphing {
+                    if let poster {
+                        CachedAsyncImage(
+                            url: poster,
+                            maxPixelSize: 720,
+                            contentMode: fitFilm ? .fit : .fill,
+                            placeholder: AnyView(Color.black)
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                        .allowsHitTesting(false)
+                    } else {
+                        FrameZeroFallbackPoster(
+                            postID: post.id,
+                            videoURL: url,
+                            fillsFrame: !fitFilm
+                        )
+                        .allowsHitTesting(false)
+                    }
                 }
                 MatteryaHubPlayerView(
                     url: url,
@@ -413,12 +466,14 @@ struct GlobalHubPlaybackLayer: View {
                     postID: post.id,
                     showsControls: showControls,
                     loops: false,
-                    // Expanded + landscape FS: aspect-fit (never crop). Mini: fill the strip.
-                    fillsFrame: !(showExpandedStage || landscapeFullscreen),
+                    // Always fit on the continuous player — flipping fit↔fill after minimize
+                    // paused AV and lagged the morph. Mini letterboxes slightly; worth it.
+                    fillsFrame: false,
                     isMuted: mutedBinding,
+                    playbackRate: rateBinding,
                     allowsFullscreen: showControls,
                     isLandscapeFullscreen: landscapeFullscreen,
-                    // Survive Sparks open/close — resume mini mid-clip without black remount.
+                    // Survive Sparks open/close — resume mid-clip without black remount.
                     protectAsContinuousHubs: true,
                     // Meta-pull / FS button → same-player landscape (no remount cover).
                     externalFullscreenToken: appState.hubPlaybackFullscreenToken,
@@ -443,6 +498,30 @@ struct GlobalHubPlaybackLayer: View {
                             PerformanceTelemetry.flushSoon()
                             appState.clearContinuePlayback(for: post.id)
                         }
+                        // Continue watching safety net: if we still opened behind the saved
+                        // playhead (warm-pool claim raced ahead of seek), force seek now.
+                        let target = max(resumeAt, appState.hubPlaybackForcedResumeSeconds)
+                        if target > 1,
+                           let live = MediaPlaybackCoordinator.shared.continuousHubPlayer {
+                            let head = live.currentTime().seconds
+                            if !(head.isFinite && head + 1.5 >= target) {
+                                live.seek(
+                                    to: CMTime(seconds: target, preferredTimescale: 600),
+                                    toleranceBefore: .zero,
+                                    toleranceAfter: .zero
+                                ) { finished in
+                                    guard finished else { return }
+                                    DispatchQueue.main.async {
+                                        if appState.hubPlaybackPlaying {
+                                            live.safePlayImmediately(atRate: appState.hubPlaybackRate)
+                                        }
+                                        appState.hubPlaybackForcedResumeSeconds = 0
+                                    }
+                                }
+                            } else {
+                                appState.hubPlaybackForcedResumeSeconds = 0
+                            }
+                        }
                         // Re-assert play if something paused us during mount.
                         if appState.hubPlaybackPlaying {
                             NotificationCenter.default.post(
@@ -454,6 +533,19 @@ struct GlobalHubPlaybackLayer: View {
                     onPlayingChange: { playing in
                         // Don't clear playing while Sparks is open (we paused intentionally).
                         if appState.reelsViewerContext != nil, !playing { return }
+                        // Minimize morph / settle: ignore pause blips from layout churn.
+                        if !playing,
+                           forceMiniLayout
+                            || isPullingMinimize
+                            || appState.hubPlaybackPullProgress > 0.01
+                            || Date() < ignorePauseUntil {
+                            appState.hubPlaybackPlaying = true
+                            NotificationCenter.default.post(
+                                name: .matteryaResumePlaybackAfterInterrupt,
+                                object: nil
+                            )
+                            return
+                        }
                         appState.hubPlaybackPlaying = playing
                     },
                     onVideoSize: { size in
@@ -508,13 +600,19 @@ struct GlobalHubPlaybackLayer: View {
                 let progress = dragging
                     ? MatteryaPullDownDismiss.pullProgress(forVertical: max(0, value.translation.height))
                     : 0
-                // Finger 1:1 — drive chrome fade via pull progress (never leave canvas up).
+                // Local geometry every frame; AppState only when crossing the watch-drop
+                // threshold (once) — continuous AppState writes rebuilt Hubs every tick.
                 var t = Transaction()
                 t.disablesAnimations = true
                 withTransaction(t) {
                     dragOffset = offset
                     isPullingMinimize = dragging
-                    appState.setHubPlaybackPullProgress(progress)
+                    let previous = appState.hubPlaybackPullProgress
+                    if dragging, previous < 0.05, progress >= 0.05 {
+                        appState.setHubPlaybackPullProgress(0.05)
+                    } else if !dragging, previous > 0 {
+                        appState.setHubPlaybackPullProgress(0)
+                    }
                 }
             }
             .onEnded { value in
@@ -530,7 +628,15 @@ struct GlobalHubPlaybackLayer: View {
                 )
                 if shouldMini {
                     ReelsTwistHaptics.pullDismiss()
-                    // Morph-first: clear chrome + shrink film, then flip session.
+                    // One AppState write to drop watch chrome; keep dragOffset so the film
+                    // does not snap back to the top-half stage before morph.
+                    var pin = Transaction()
+                    pin.disablesAnimations = true
+                    withTransaction(pin) {
+                        if appState.hubPlaybackPullProgress < 0.99 {
+                            appState.hubPlaybackPullProgress = 1
+                        }
+                    }
                     appState.minimizeHubPlayback(returnToChat: true)
                 } else {
                     withAnimation(MatteryaMotion.ytMorph) {
@@ -558,4 +664,17 @@ private struct HubHitShapeModifier: ViewModifier {
             content
         }
     }
+}
+
+/// Always-mounted system blur (UIKit). Opacity is faded by the parent — never create
+/// the effect view on the pull/morph frame.
+private struct HubMinimizeBlurBackdrop: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIVisualEffectView {
+        let view = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        view.isUserInteractionEnabled = false
+        view.backgroundColor = .clear
+        return view
+    }
+
+    func updateUIView(_ uiView: UIVisualEffectView, context: Context) {}
 }

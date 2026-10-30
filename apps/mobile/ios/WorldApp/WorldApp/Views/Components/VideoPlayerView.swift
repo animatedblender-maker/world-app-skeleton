@@ -2579,8 +2579,8 @@ struct InFrameVideoPlayer: View {
                             fillsFrame: fillsFrame,
                             topChromeReserve: topChromeReserve,
                             bottomChromeReserve: bottomChromeReserve,
-                            // Silent buffer while approaching; claim warm on activate.
-                            preloadsWhenInactive: true,
+                            // Feed neighbors must not keep buffering — warm pool claims on activate.
+                            preloadsWhenInactive: false,
                             onViewed: onViewed,
                             onFramesReady: {
                                 guard playGate else { return }

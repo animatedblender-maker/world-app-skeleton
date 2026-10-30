@@ -8,12 +8,18 @@ import {
   Output,
   SimpleChanges,
 } from '@angular/core';
+import { DomSanitizer, type SafeHtml } from '@angular/platform-browser';
 import { Router } from '@angular/router';
 
 import type { CountryPost } from '../core/models/post.model';
 import { Frame0PosterService } from '../core/services/frame0-poster.service';
 import { PostsService } from '../core/services/posts.service';
 import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util';
+import {
+  formatInlineBold,
+  isAdultPost,
+  rebrandCompetitorNames,
+} from '../core/utils/content-sanitize';
 import { HubsCatalogService } from '../hubs/hubs-catalog.service';
 import { PostCommentsComponent } from './post-comments.component';
 import { VideoPlayerComponent } from './video-player.component';
@@ -46,7 +52,9 @@ import { VideoPlayerComponent } from './video-player.component';
         </div>
       </div>
 
-      <h2 class="headline" *ngIf="headline" (click)="openPost()">{{ headline }}</h2>
+      <div class="headline-row" *ngIf="showAdultBadge" (click)="openPost()">
+        <span class="adult-badge" aria-label="18 plus content">18+</span>
+      </div>
 
       <!-- Media — Facebook feed dimensions (FacebookMediaLayout) -->
       <div
@@ -129,7 +137,13 @@ import { VideoPlayerComponent } from './video-player.component';
         </ng-template>
       </div>
 
-      <p class="body" *ngIf="bodyText" (click)="openPost()">{{ bodyText }}</p>
+      <!-- One caption: body when present; headline only when body empty (never both). -->
+      <p
+        class="body"
+        *ngIf="feedCaptionHtml"
+        (click)="openPost()"
+        [innerHTML]="feedCaptionHtml"
+      ></p>
 
       <!-- Actions — iOS FacebookPostCard: heart / bubble.right / arrowshape.turn.up.right / bookmark -->
       <div class="actions">
@@ -316,13 +330,33 @@ import { VideoPlayerComponent } from './video-player.component';
         cursor: pointer;
         padding: 0 4px;
       }
+      .headline-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        margin: 0 16px 10px;
+        cursor: pointer;
+      }
       .headline {
         font-family: 'Iowan Old Style', Palatino, Georgia, serif;
         font-size: 17px;
         font-weight: 500;
         line-height: 1.3;
-        margin: 0 16px 10px;
-        cursor: pointer;
+        margin: 0;
+        flex: 1;
+        min-width: 0;
+      }
+      .adult-badge {
+        flex-shrink: 0;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        color: #faf7f2;
+        background: rgba(28, 25, 23, 0.85);
+        padding: 2px 6px;
+        border-radius: 999px;
+        line-height: 1.2;
+        margin-top: 2px;
       }
       /*
        * Facebook news-feed media (FacebookMediaLayout / FB feed):
@@ -517,6 +551,20 @@ import { VideoPlayerComponent } from './video-player.component';
         overflow: hidden;
         cursor: pointer;
       }
+      .body strong {
+        font-weight: 700;
+        color: inherit;
+      }
+      .body strong.md-h {
+        display: inline;
+        font-size: 1.2em;
+        font-weight: 700;
+        color: inherit;
+      }
+      .body em {
+        font-style: italic;
+        color: inherit;
+      }
       .actions {
         display: flex;
         align-items: center;
@@ -618,7 +666,8 @@ export class MatteryaPostCardComponent implements OnChanges {
     private catalog: HubsCatalogService,
     private frame0: Frame0PosterService,
     private cdr: ChangeDetectorRef,
-    private router: Router
+    private router: Router,
+    private sanitizer: DomSanitizer
   ) {}
 
   ngOnChanges(changes: SimpleChanges): void {
@@ -679,8 +728,9 @@ export class MatteryaPostCardComponent implements OnChanges {
     return resolveAvatarUrl(this.post.author?.avatar_url, seed) || null;
   }
 
+  /** Country under the author name is hidden on post cards. */
   get locationLine(): string | null {
-    return this.post.country_name || this.post.country_code || null;
+    return null;
   }
 
   get relativeTime(): string {
@@ -688,8 +738,12 @@ export class MatteryaPostCardComponent implements OnChanges {
   }
 
   get headline(): string | null {
-    const t = (this.post.title || '').trim();
+    const t = rebrandCompetitorNames(this.post.title || '').trim();
     return t || null;
+  }
+
+  get showAdultBadge(): boolean {
+    return isAdultPost(this.post);
   }
 
   get bodyText(): string {
@@ -704,8 +758,21 @@ export class MatteryaPostCardComponent implements OnChanges {
       )
       .join('\n')
       .trim();
-    // If title duplicates body start, still show body.
-    return body;
+    return rebrandCompetitorNames(body);
+  }
+
+  /** Single feed caption: body when present; headline only when body is empty. */
+  get feedCaption(): string {
+    const body = this.bodyText;
+    if (body) return body;
+    return this.headline || '';
+  }
+
+  /** Caption with `**bold**` rendered as <strong> (HTML-escaped first). */
+  get feedCaptionHtml(): SafeHtml | null {
+    const caption = this.feedCaption;
+    if (!caption) return null;
+    return this.sanitizer.bypassSecurityTrustHtml(formatInlineBold(caption));
   }
 
   get hasMedia(): boolean {

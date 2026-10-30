@@ -78,8 +78,9 @@ struct AnonymousSpacesDirectoryView: View {
                     ForEach(spaces) { space in
                         AnonymousSpaceCard(
                             space: space,
+                            isJoined: store.isJoined(space),
                             onOpen: { store.pushSpace(slug: space.slug) },
-                            onJoin: space.isJoined == true || space.isPaid
+                            onJoin: store.isJoined(space) || space.isPaid
                                 ? nil
                                 : { _ = await store.joinSpace(space) }
                         )
@@ -110,13 +111,13 @@ struct AnonymousSpacesDirectoryView: View {
 
 struct AnonymousSpaceCard: View {
     let space: AnonymousSpace
+    /// Effective membership (store override preferred). Defaults to payload flag.
+    var isJoined: Bool = false
     /// Opens the space (title / body tap). Nil = non-interactive card chrome only.
     var onOpen: (() -> Void)? = nil
     /// Join when the viewer is not a member. Nil hides the control (already joined / paid / onboarding owns the CTA).
     var onJoin: (() async -> Void)? = nil
     @State private var joining = false
-
-    private var isJoined: Bool { space.isJoined == true }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {

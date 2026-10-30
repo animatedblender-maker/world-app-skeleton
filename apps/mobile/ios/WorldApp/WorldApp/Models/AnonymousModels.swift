@@ -412,6 +412,9 @@ struct AnonymousNotification: Identifiable, Codable, Hashable, Sendable {
         case "reply": return "New reply"
         case "mention": return "Mention"
         case "space": return "Space update"
+        case "moderation_removal": return "Post removed"
+        case "moderation_report_resolved": return "Report update"
+        case "moderation_account": return "Account notice"
         default: return "Masquerade alert"
         }
     }

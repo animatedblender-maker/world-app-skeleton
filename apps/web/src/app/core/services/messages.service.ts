@@ -6,13 +6,14 @@ import { PostAuthor } from '../models/post.model';
 import { supabase } from '../../supabase/supabase.client';
 
 const CONVERSATIONS_QUERY = `
-query Conversations($limit: Int) {
-  conversations(limit: $limit) {
+query Conversations($limit: Int, $inbox: String) {
+  conversations(limit: $limit, inbox: $inbox) {
     id
     is_direct
     created_at
     updated_at
     last_message_at
+    surface
     members {
       user_id
       display_name
@@ -250,12 +251,18 @@ export class MessagesService {
     this.pendingConversationSubject.next(null);
   }
 
-  async listConversations(limit = 30): Promise<Conversation[]> {
+  async listConversations(limit = 30, inbox: 'primary' | 'masquerade' | 'requests' | 'all' = 'primary'): Promise<Conversation[]> {
     const { conversations } = await this.gql.request<{ conversations: any[] }>(
       CONVERSATIONS_QUERY,
-      { limit }
+      { limit, inbox }
     );
-    const mapped = (conversations ?? []).map((row) => this.mapConversation(row));
+    const mapped = (conversations ?? [])
+      .map((row) => this.mapConversation(row))
+      .filter((convo) => {
+        const surface = String(convo.surface || 'primary').toLowerCase();
+        if (inbox === 'masquerade') return surface === 'masquerade';
+        return surface !== 'masquerade';
+      });
     return await Promise.all(mapped.map((convo) => this.hydrateConversation(convo)));
   }
 
@@ -361,12 +368,14 @@ export class MessagesService {
   }
 
   private mapConversation(row: any): Conversation {
+    const surfaceRaw = String(row.surface || 'primary').toLowerCase();
     return {
       id: row.id,
       is_direct: !!row.is_direct,
       created_at: row.created_at,
       updated_at: row.updated_at ?? row.created_at,
       last_message_at: row.last_message_at ?? null,
+      surface: surfaceRaw === 'masquerade' ? 'masquerade' : 'primary',
       members: Array.isArray(row.members) ? row.members.map((m: any) => this.mapAuthor(m) as PostAuthor) : [],
       last_message: row.last_message ? this.mapMessage(row.last_message) : null,
     };

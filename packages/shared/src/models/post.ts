@@ -41,6 +41,9 @@ export type CountryPost = {
   link_published_at?: string | null;
   link_image_url?: string | null;
   link_snippet?: string | null;
+  /** Mature content / 18+ — from server thin-card or GraphQL moderation_status. */
+  is_adult?: boolean | null;
+  moderation_status?: string | null;
 };
 
 export type PostComment = {

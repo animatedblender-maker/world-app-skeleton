@@ -201,6 +201,13 @@ def pack_dirs(folder: Path) -> List[Path]:
 
 _CONFESS_BARE = re.compile(r"^\s*CONFESS\s*#\s*\d+\s*[:\-–—]?\s*", re.I | re.M)
 _ANY_BRACKET = re.compile(r"\[[^\]]*\]")
+# Reddit NSFW interstitial chrome accidentally scraped as post body.
+_MATURE_GATE = re.compile(
+    r"(?:(?:u/|@)\w+\s+)?"
+    r"This is mature content and may not be appropriate for certain viewers\."
+    r"(?:\s*To continue, use the app to verify you're over 18 and browse anonymously\.)?",
+    re.I | re.S,
+)
 
 
 def strip_confess_number_tags(text: str) -> str:
@@ -209,9 +216,13 @@ def strip_confess_number_tags(text: str) -> str:
         return text
     out = _ANY_BRACKET.sub("", text)
     out = _CONFESS_BARE.sub("", out)
+    out = _MATURE_GATE.sub("", out)
+    # Reddit user/path shorthand → Masquerade (@handle, space/…).
+    out = re.sub(r"\bu/", "@", out, flags=re.I)
+    out = re.sub(r"\br/", "space/", out, flags=re.I)
     out = re.sub(r"[ \t]{2,}", " ", out)
     out = re.sub(r"\s+\.", ".", out).strip()
-    return out or text.strip()
+    return out.strip()
 
 
 def pick_body(post: Dict[str, Any]) -> Tuple[str, str]:
@@ -367,6 +378,9 @@ def clean_comment_text(raw: Any) -> str:
     t = re.sub(r"\boriginal\s+poster\b", "author", t, flags=re.I)
     t = re.sub(r"\bOP\b", "Author", t)
     t = re.sub(r"\b[Oo]p\b", "Author", t)
+    # Reddit user/path shorthand → Masquerade.
+    t = re.sub(r"\bu/", "@", t, flags=re.I)
+    t = re.sub(r"\br/", "space/", t, flags=re.I)
     t = re.sub(r"\s+", " ", t).strip()
     return t[:2000] if len(t) >= 4 else ""
 
@@ -695,14 +709,62 @@ def main() -> int:
     import psycopg2
     from psycopg2.extras import RealDictCursor
 
-    conn = psycopg2.connect(db_url, connect_timeout=20)
-    conn.autocommit = False
+    def open_conn():
+        c = psycopg2.connect(
+            db_url,
+            connect_timeout=30,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=5,
+        )
+        c.autocommit = False
+        # Drop idle-in-transaction killers on long comment inserts.
+        with c.cursor() as kcur:
+            kcur.execute("set statement_timeout = 0")
+            kcur.execute("set idle_in_transaction_session_timeout = 0")
+        c.commit()
+        return c
+
+    conn = open_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    def reconnect(reason: str = "") -> None:
+        nonlocal conn, cur
+        print(f"  reconnecting DB… {reason}", flush=True)
+        try:
+            conn.close()
+        except Exception:
+            pass
+        for attempt in range(1, 8):
+            try:
+                conn = open_conn()
+                cur = conn.cursor(cursor_factory=RealDictCursor)
+                print(f"  reconnected (attempt {attempt})", flush=True)
+                return
+            except Exception as exc:
+                wait = min(60, 2 ** attempt)
+                print(f"  reconnect failed ({exc}); sleep {wait}s", flush=True)
+                import time as _time
+
+                _time.sleep(wait)
+        raise RuntimeError("could not reconnect to DATABASE_URL")
+
+    def safe_commit() -> None:
+        try:
+            conn.commit()
+        except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
+            reconnect(str(exc))
 
     # Create personas in a short txn first — never hold the whole mix open.
     print(f"ensuring personas (floor={PERSONA_FLOOR})…", flush=True)
-    personas = ensure_seed_personas(cur, min_available=PERSONA_FLOOR)
-    conn.commit()
+    try:
+        personas = ensure_seed_personas(cur, min_available=PERSONA_FLOOR)
+        safe_commit()
+    except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
+        reconnect(str(exc))
+        personas = ensure_seed_personas(cur, min_available=PERSONA_FLOOR)
+        safe_commit()
     print(f"seed personas ready: {len(personas)}", flush=True)
 
     def backfill_missing_media() -> int:
@@ -834,43 +896,56 @@ def main() -> int:
                 created = now
             score = int(post.get("score") or post.get("like_count") or 0)
 
-            author_id, personas = pick_seed_author(cur, personas)
-
-            cur.execute(
-                """
-                insert into anonymous.posts (
-                  space_id, author_profile_id, title, body, state, score,
-                  media_type, media_url, thumb_url, source_ref, created_at, updated_at
+            try:
+                author_id, personas = pick_seed_author(cur, personas)
+                cur.execute(
+                    """
+                    insert into anonymous.posts (
+                      space_id, author_profile_id, title, body, state, score,
+                      media_type, media_url, thumb_url, source_ref, created_at, updated_at
+                    )
+                    values (
+                      %s, %s::uuid, %s, %s, 'active', %s,
+                      %s, %s, %s, %s, %s, now()
+                    )
+                    on conflict (source_ref) do nothing
+                    returning id
+                    """,
+                    (
+                        space["id"],
+                        author_id,
+                        title[:200] if title else None,
+                        body[:10000] or (title[:10000] if title else ""),
+                        score,
+                        media_type,
+                        media_url,
+                        thumb_url,
+                        source_ref,
+                        created,
+                    ),
                 )
-                values (
-                  %s, %s::uuid, %s, %s, 'active', %s,
-                  %s, %s, %s, %s, %s, now()
-                )
-                on conflict (source_ref) do nothing
-                returning id
-                """,
-                (
-                    space["id"],
-                    author_id,
-                    title[:200] if title else None,
-                    body[:10000] or (title[:10000] if title else ""),
-                    score,
-                    media_type,
-                    media_url,
-                    thumb_url,
-                    source_ref,
-                    created,
-                ),
-            )
-            row = cur.fetchone()
+                row = cur.fetchone()
+            except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
+                reconnect(str(exc))
+                # Pack may already be inserted — count as skip and continue.
+                skipped += 1
+                continue
             if row:
                 inserted += 1
-                seed_comments_for_post(
-                    cur, row["id"], author_id, pack, personas, post_created=created
-                )
+                try:
+                    seed_comments_for_post(
+                        cur, row["id"], author_id, pack, personas, post_created=created
+                    )
+                except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
+                    reconnect(str(exc))
+                    # Post landed; comments can catch up on a later pass.
+                    print(
+                        f"    …{slug} comment seed interrupted after post {row['id']}: {exc}",
+                        flush=True,
+                    )
                 since_commit += 1
                 if since_commit >= COMMIT_EVERY:
-                    conn.commit()
+                    safe_commit()
                     since_commit = 0
                     print(
                         f"    …{slug} inserted={inserted} skipped={skipped}",
@@ -883,7 +958,7 @@ def main() -> int:
                         break
                 skipped += 1
         if since_commit:
-            conn.commit()
+            safe_commit()
         return inserted, skipped
 
     def refresh_space_count(space: dict) -> None:
@@ -1041,7 +1116,7 @@ def main() -> int:
             total_inserted += inserted
             total_skipped += skipped
 
-    conn.commit()
+    safe_commit()
     cur.close()
     conn.close()
     print(f"done inserted={total_inserted} skipped={total_skipped}")

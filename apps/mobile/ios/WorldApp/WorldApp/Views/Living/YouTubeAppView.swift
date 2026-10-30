@@ -66,20 +66,26 @@ struct YouTubeAppView: View {
     private static let hubsCatalogMemoryCap = 2200
     /// Rank sample on the navigate hop — larger samples freeze first open.
     private static let hubsFirstPaintRankCap = 96
-    /// Cards per horizontal Netflix rail — product floor is 15; thin categories are replaced.
-    private static let hubsRailCardCount = 15
+    /// Unique cards per rail. UIKit loops 2× this set — keep lean for scroll weight.
+    private static let hubsRailCardCount = 8
     /// First-hop vibe rows (expanded after paint).
     private static let hubsVibeRailCountFirstPaint = 2
-    /// Full Netflix vibe rows after deferred densify (kept lean — 5×15 posters felt heavy).
+    /// Full Netflix vibe rows after deferred densify.
     private static let hubsVibeRailCount = 3
     /// Extra “More to watch” chunk rows under the vibe shelves.
     private static let hubsMoreRailRowsFirstPaint = 1
     private static let hubsMoreRailRows = 2
-    /// Thumb warm head per shelf — full rail stays 15; only decode the visible lead.
-    private static let hubsRailPrefetchCount = 6
-    /// Premium-but-light shelf posters (196/480 froze Hubs + stampeded /v1/poster).
-    private static let hubsRailCardWidth: CGFloat = 168
-    private static let hubsPeopleRailCardWidth: CGFloat = 180
+    /// Thumb warm head per shelf — only the visible lead (big posters are costly).
+    private static let hubsRailPrefetchCount = 3
+    /// Netflix-wide shelf posters (~62% of screen, peek of next card).
+    private static var hubsRailCardWidth: CGFloat {
+        let screen = UIScreen.main.bounds.width
+        return min(280, max(220, (screen * 0.62).rounded()))
+    }
+    private static var hubsPeopleRailCardWidth: CGFloat {
+        let screen = UIScreen.main.bounds.width
+        return min(300, max(240, (screen * 0.68).rounded()))
+    }
     /// True after first useful paint — rebuildCachedHubsRails uses denser counts.
     @State private var hubsRailsDense = false
     /// Skip network/warm on quick Hubs re-entry when the shell is already useful.
@@ -968,7 +974,7 @@ struct YouTubeAppView: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 22) {
+                        LazyVStack(alignment: .leading, spacing: 28) {
                             // Netflix-style: hero + horizontal rails. Categories are rows, not chips.
                             if let hero = hubsHeroPost {
                                 hubsHeroBillboard(hero)
@@ -1348,7 +1354,7 @@ struct YouTubeAppView: View {
             ZStack(alignment: .bottomLeading) {
                 YouTubeVideoThumbnail(
                     post: post,
-                    maxPixelSize: 720,
+                    maxPixelSize: 900,
                     showsPlayIcon: false,
                     frameStyle: .card,
                     embedsFrame: false,
@@ -1356,7 +1362,8 @@ struct YouTubeAppView: View {
                     showsHubBadge: false
                 )
                 .frame(maxWidth: .infinity)
-                .frame(height: 240)
+                // Cinema billboard — ~16:9 of the content column, Netflix-tall.
+                .frame(height: min(320, max(260, UIScreen.main.bounds.width * 0.72)))
                 .clipped()
 
                 LinearGradient(
@@ -1377,7 +1384,7 @@ struct YouTubeAppView: View {
                         .foregroundStyle(Theme.paper.opacity(0.78))
                         .textCase(.uppercase)
                     Text(post.displayHeadline ?? post.displayTitle ?? "Watch now")
-                        .font(.title2.weight(.bold))
+                        .font(.title.weight(.bold))
                         .foregroundStyle(Theme.paper)
                         .lineLimit(2)
                         .shadow(color: .black.opacity(0.35), radius: 8, y: 2)
@@ -1412,9 +1419,10 @@ struct YouTubeAppView: View {
         cardWidth: CGFloat,
         onNearEnd: (() -> Void)? = nil
     ) -> some View {
-        // Algorithm target: ~15 ranked long-form cards; rail loops endlessly sideways.
+        // Netflix-wide cards; rail loops endlessly sideways (lean unique set × 3 cycles).
         let railPosts = Array(posts.prefix(Self.hubsRailCardCount))
-        return VStack(alignment: .leading, spacing: 10) {
+        let rowHeight = HubsShelfThumbCard.rowHeight(width: cardWidth, showsMetadata: true)
+        return VStack(alignment: .leading, spacing: 12) {
             if !title.isEmpty {
                 Text(title)
                     .font(.title3.weight(.bold))
@@ -1426,14 +1434,15 @@ struct YouTubeAppView: View {
 
             HubsLoopingHorizontalRail(
                 posts: railPosts,
-                spacing: 12,
+                spacing: 14,
+                rowHeight: rowHeight,
                 onNearEnd: onNearEnd
             ) { post, _ in
                 HubsShelfThumbCard(
                     post: post,
                     width: cardWidth,
                     showsMetadata: true,
-                    titleFont: .caption.weight(.semibold),
+                    titleFont: .subheadline.weight(.semibold),
                     extractFrameIfNeeded: false,
                     onTap: { openVideo(post) }
                 )
@@ -1441,7 +1450,7 @@ struct YouTubeAppView: View {
         }
     }
 
-    /// Pad Continue watching toward ~15 — history first, then affinity-ranked long-form.
+    /// Pad Continue watching toward the rail floor — history first, then affinity-ranked long-form.
     /// Dedupe by media fingerprint so the same clip from two channels never sits adjacent.
     private static func padContinueRail(
         _ seed: [CountryPost],

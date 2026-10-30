@@ -49,16 +49,34 @@ enum SurfacePageClient {
             "cursor": cursor,
         ]
         if let slug, !slug.isEmpty { q["slug"] = slug }
-        // Server-side watched/already-in-pager exclude — keeps endless swipe on fresh R2.
-        let exclude = Array(excludeIds.prefix(400))
-        if !exclude.isEmpty {
-            q["exclude"] = exclude.joined(separator: ",")
+        // Compact exclude only — 400 long r2: paths blew past URL limits, timed out
+        // the shared URLSession, and froze tab switches (gesture gate).
+        if let exclude = compactExcludeQuery(excludeIds), !exclude.isEmpty {
+            q["exclude"] = exclude
         }
         return await get(
             path: "/v1/sparks",
             query: q.compactMapValues { $0 },
             allowMissingMedia: false
         )
+    }
+
+    /// Cap exclude list by count + raw byte size. Prefer short UUIDs over long r2 paths.
+    static func compactExcludeQuery(_ ids: [String], maxIds: Int = 48, maxChars: Int = 1800) -> String? {
+        var out: [String] = []
+        var seen = Set<String>()
+        var chars = 0
+        // Short ids first so we pack more unique watches into the budget.
+        let ordered = ids.sorted { $0.count < $1.count }
+        for raw in ordered {
+            let id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty, seen.insert(id).inserted else { continue }
+            let add = id.count + (out.isEmpty ? 0 : 1)
+            if out.count >= maxIds || chars + add > maxChars { break }
+            out.append(id)
+            chars += add
+        }
+        return out.isEmpty ? nil : out.joined(separator: ",")
     }
 
     /// Walk `/v1/sparks` newest-first until `want` unviewed items or the cursor ends.
@@ -75,10 +93,10 @@ enum SurfacePageClient {
         var cursor = startingCursor
         var pages = 0
         let pageSize = min(max(want, 24), 48)
-        // Merge local watched into server exclude so pages aren't wasted on already-seen clips.
-        var serverExclude = Array(excluding.prefix(200))
+        // Small server exclude — client still filters viewed locally after each page.
+        var serverExclude = Array(excluding.prefix(48))
         if skipViewed {
-            serverExclude.append(contentsOf: SparkDiscoveryEngine.viewedIDList(limit: 400))
+            serverExclude.append(contentsOf: SparkDiscoveryEngine.viewedIDList(limit: 64))
         }
         var seenEx = Set<String>()
         serverExclude = serverExclude.filter { seenEx.insert($0).inserted }

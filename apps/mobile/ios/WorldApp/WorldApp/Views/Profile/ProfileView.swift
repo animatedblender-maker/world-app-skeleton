@@ -113,12 +113,17 @@ struct ProfileView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
-                    if let name = profile?.displayName, !name.isEmpty {
-                        Text(name)
-                            .font(.system(size: 26, weight: .regular, design: .serif))
-                            .foregroundStyle(Theme.ink)
-                            .lineLimit(2)
-                            .minimumScaleFactor(0.85)
+                    HStack(spacing: 6) {
+                        if let name = profile?.displayName, !name.isEmpty {
+                            Text(name)
+                                .font(.system(size: 26, weight: .regular, design: .serif))
+                                .foregroundStyle(Theme.ink)
+                                .lineLimit(2)
+                                .minimumScaleFactor(0.85)
+                        }
+                        if profile?.showsVerifiedBadge == true {
+                            MatteryaVerifiedBadge(size: 18)
+                        }
                     }
 
                     if let username = profile?.username {

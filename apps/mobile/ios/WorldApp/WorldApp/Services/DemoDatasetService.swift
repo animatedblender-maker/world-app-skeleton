@@ -492,7 +492,7 @@ actor DemoDatasetService {
         DemoPersonNames.normalizeAuthorID(raw)
     }
 
-    /// Stable partner id for dialogue threads (one Matterya person for all non-OP replies).
+    /// Stable partner id for dialogue threads (one Matterya person for all non-author replies).
     nonisolated private static func stablePartnerAuthorID(rootPostID: String) -> String {
         let seed = hashSeedStatic("partner|\(rootPostID)")
         let number = Int(seed % 90_000) + 1_000
@@ -542,7 +542,7 @@ actor DemoDatasetService {
                         countryCode: root.countryCode
                     )
             } else if let parentID = comment.parentID, let parentSpeaker = speakerOfComment[parentID] {
-                // Reply: the other party in a two-person dialogue (OP ↔ partner).
+                // Reply: the other party in a two-person dialogue (author ↔ partner).
                 if parentSpeaker == opID {
                     speakerID = partnerID
                     speakerAuthor = partnerAuthor

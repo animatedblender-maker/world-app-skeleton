@@ -38,3 +38,6 @@ fastlane/test_output
 # Bundle artifacts
 *.orig
 
+# WhisperKit Core ML models (~464MB) — fetched by scripts/fetch_whisperkit_model.sh
+apps/mobile/ios/WorldApp/WorldApp/Resources/WhisperKit/openai_whisper-small/
+

@@ -168,15 +168,8 @@ struct MainTabView: View {
             if appState.selectedTab == .messages {
                 messagesShellMounted = true
             }
-            // Pre-mount Hubs shell after Feed settles — first tap is opacity-only, not a remount.
-            // YouTubeAppView .task/.onAppear no-op until selectedTab == .hubs (no thumb storm).
-            if !hubsShellMounted {
-                Task(priority: .utility) { @MainActor in
-                    try? await Task.sleep(nanoseconds: 1_600_000_000)
-                    guard !hubsShellMounted else { return }
-                    hubsShellMounted = true
-                }
-            }
+            // Do not pre-mount Hubs — keeping Feed + Hubs + Masquerade hot made the whole app heavy.
+            // First Hubs tap mounts the shell; later hops stay mounted to avoid remount freeze.
         }
         .onReceive(NotificationCenter.default.publisher(for: .masqueradeUnreadDidChange)) { note in
             let count = (note.userInfo?["count"] as? Int) ?? 0

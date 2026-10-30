@@ -6,6 +6,8 @@ import os
 /// (Lives in this file so Xcode target membership matches — do not split out.)
 enum Frame0PosterCache: Sendable {
     private static let state = OSAllocatedUnfairLock(initialState: [String: URL]())
+    /// Known missing frame0 keys — skip GET storms from VideoThumbnailView / Hubs rails.
+    private static let misses = OSAllocatedUnfairLock(initialState: Set<String>())
 
     nonisolated static func url(for postID: String) -> URL? {
         let key = postID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -13,9 +15,27 @@ enum Frame0PosterCache: Sendable {
         return state.withLock { $0[key] }
     }
 
+    nonisolated static func isKnownMiss(_ postID: String) -> Bool {
+        let key = postID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return false }
+        return misses.withLock { $0.contains(key) }
+    }
+
+    nonisolated static func rememberMiss(_ postID: String) {
+        let key = postID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        misses.withLock { set in
+            set.insert(key)
+            if set.count > 8000, let first = set.first {
+                set.remove(first)
+            }
+        }
+    }
+
     nonisolated static func store(_ postID: String, _ url: URL) {
         let key = postID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
+        misses.withLock { $0.remove(key) }
         state.withLock { map in
             map[key] = url
             if map.count > 4000, let first = map.keys.first {
@@ -26,6 +46,11 @@ enum Frame0PosterCache: Sendable {
 
     nonisolated static func storeBatch(_ posters: [String: URL]) {
         guard !posters.isEmpty else { return }
+        misses.withLock { set in
+            for id in posters.keys {
+                set.remove(id.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        }
         state.withLock { map in
             for (id, url) in posters {
                 let key = id.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -45,16 +70,20 @@ actor Frame0PosterResolver {
     static let shared = Frame0PosterResolver()
 
     private struct CacheEntry {
-        let url: URL
+        /// Nil = known miss (`poster_unavailable` / 404). Do not re-hit the API until TTL.
+        let url: URL?
         let cachedAt: Date
+        var isNegative: Bool { url == nil }
     }
 
     private var cache: [String: CacheEntry] = [:]
     private var inflight: [String: Task<URL?, Never>] = [:]
     private let cacheTTL: TimeInterval = 6 * 3600
-    /// Cap parallel single-poster GETs — enough for Netflix rails without starving thumbs.
+    /// Missing frame0 webp is common for image packs / incomplete extracts — keep quiet.
+    private let negativeTTL: TimeInterval = 45 * 60
+    /// Cap parallel single-poster GETs — keep low so feed/hubs cold-start isn't starved.
     private var activeFetches = 0
-    private let maxConcurrentFetches = 4
+    private let maxConcurrentFetches = 2
     private var fetchWaiters: [CheckedContinuation<Void, Never>] = []
     /// Coalesce overlapping prefetch windows (Feed + Hubs + Sparks open-path).
     private var batchInFlight = false
@@ -65,23 +94,73 @@ actor Frame0PosterResolver {
     /// Debounce UI notifies — awaiting MainActor per chunk froze scroll (dual-mounted Feed+Hubs).
     private var pendingNotifyIDs: Set<String> = []
     private var notifyFlushTask: Task<Void, Never>?
+    /// Soft-timeout negative TTL — stop retry storms while api.matterya.com is cold.
+    private let softFailTTL: TimeInterval = 90
+    /// Miss logs are silent by default — missing frame0 is normal for image packs.
+    private var negativeLogBudget = 0
+
+    private func entryStillFresh(_ entry: CacheEntry) -> Bool {
+        let ttl = entry.isNegative ? negativeTTL : cacheTTL
+        return Date().timeIntervalSince(entry.cachedAt) < ttl
+    }
+
+    private func rememberNegative(_ postID: String, ttl: TimeInterval? = nil) {
+        cache[postID] = CacheEntry(url: nil, cachedAt: Date())
+        // Soft TTL: overwrite cachedAt so entryStillFresh uses negativeTTL; for short soft fails
+        // we still store nil URL — callers treat as miss until natural expiry.
+        if let ttl, ttl < negativeTTL {
+            // Store with an artificial older timestamp so it expires after `ttl`.
+            cache[postID] = CacheEntry(
+                url: nil,
+                cachedAt: Date().addingTimeInterval(-(negativeTTL - ttl))
+            )
+        }
+        Frame0PosterCache.rememberMiss(postID)
+        if cache.count > 6000, let first = cache.keys.first {
+            cache.removeValue(forKey: first)
+        }
+    }
+
+    private func rememberPositive(_ postID: String, _ url: URL) {
+        cache[postID] = CacheEntry(url: url, cachedAt: Date())
+        if cache.count > 6000, let first = cache.keys.first {
+            cache.removeValue(forKey: first)
+        }
+        Frame0PosterCache.store(postID, url)
+    }
 
     /// Signed Frame 0 URL for a post (derived from media_path / r2_key on the server).
     func posterURL(postID: String, fallback: URL? = nil) async -> URL? {
         let key = postID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return fallback }
 
-        if let hit = cache[key], Date().timeIntervalSince(hit.cachedAt) < cacheTTL {
-            return hit.url
+        if let hit = cache[key], entryStillFresh(hit) {
+            return hit.url ?? fallback
+        }
+        // Process-wide miss set — VideoThumbnailView must not re-GET after batch soft-miss.
+        if Frame0PosterCache.isKnownMiss(key) {
+            rememberNegative(key)
+            return fallback
+        }
+        // Batch circuit open → soft-miss singles. Do not stampede /v1/poster/{id}
+        // (that starved URLSession and froze tab switches while api was cold).
+        if Date() < batchCircuitOpenUntil {
+            rememberNegative(key, ttl: softFailTTL)
+            return fallback
         }
         if let existing = inflight[key] {
             return await existing.value ?? fallback
         }
 
         await acquireFetchSlot()
-        if let hit = cache[key], Date().timeIntervalSince(hit.cachedAt) < cacheTTL {
+        if let hit = cache[key], entryStillFresh(hit) {
             releaseFetchSlot()
-            return hit.url
+            return hit.url ?? fallback
+        }
+        if Frame0PosterCache.isKnownMiss(key) {
+            rememberNegative(key)
+            releaseFetchSlot()
+            return fallback
         }
         if let existing = inflight[key] {
             releaseFetchSlot()
@@ -132,7 +211,7 @@ actor Frame0PosterResolver {
 
         let missing = ids.filter { id in
             guard let hit = cache[id] else { return true }
-            return Date().timeIntervalSince(hit.cachedAt) >= cacheTTL
+            return !entryStillFresh(hit)
         }
         guard !missing.isEmpty else { return }
 
@@ -162,6 +241,10 @@ actor Frame0PosterResolver {
                     if MediaURLResolver.isBlockedR2PublicURL(url) { continue }
                     cache[id] = CacheEntry(url: url, cachedAt: stamped)
                     mirroredMutable[id] = url
+                }
+                // Batch soft-skips missing frame0 — remember negatives so cells stop GET-storming.
+                for id in chunk where mirroredMutable[id] == nil {
+                    rememberNegative(id)
                 }
                 if cache.count > 6000, let first = cache.keys.first {
                     cache.removeValue(forKey: first)
@@ -211,18 +294,32 @@ actor Frame0PosterResolver {
         do {
             let url = try await fetchOne(postID: postID)
             // Same reject as batch — never mirror dead pub-*.r2.dev into UI cache.
-            if MediaURLResolver.isBlockedR2PublicURL(url) { return fallback }
-            cache[postID] = CacheEntry(url: url, cachedAt: Date())
-            if cache.count > 6000, let first = cache.keys.first {
-                cache.removeValue(forKey: first)
+            if MediaURLResolver.isBlockedR2PublicURL(url) {
+                rememberNegative(postID)
+                return fallback
             }
-            Frame0PosterCache.store(postID, url)
+            rememberPositive(postID, url)
             scheduleUINotify(ids: [postID])
             return url
+        } catch is PosterResolveError {
+            rememberNegative(postID)
+            return fallback
         } catch {
-            #if DEBUG
-            print("[Frame0Poster] \(postID.prefix(8)): \(error.localizedDescription)")
-            #endif
+            let urlError = error as? URLError
+            let ns = error as NSError
+            let code = urlError?.code
+            let isTimeout = code == .timedOut
+                || (ns.domain == NSURLErrorDomain && ns.code == NSURLErrorTimedOut)
+            // -1011 badServerResponse / any 4xx-shaped miss: permanent-ish negative.
+            if code == .badServerResponse || code == .cannotParseResponse {
+                rememberNegative(postID)
+                return fallback
+            }
+            // Timeouts under cold API — brief negative so Hubs rails don't stampede.
+            if isTimeout {
+                rememberNegative(postID, ttl: softFailTTL)
+                return fallback
+            }
             return fallback
         }
     }
@@ -254,29 +351,58 @@ actor Frame0PosterResolver {
         }
     }
 
+    private enum PosterResolveError: Error {
+        case unavailable
+        case badURL
+        case parse
+
+        var logLabel: String {
+            switch self {
+            case .unavailable: return "poster_unavailable"
+            case .badURL: return "bad_url"
+            case .parse: return "parse"
+            }
+        }
+    }
+
     private func fetchOne(postID: String) async throws -> URL {
         let base = AppConfig.apiBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard let endpoint = URL(string: "\(base)/v1/poster/\(postID)") else {
-            throw URLError(.badURL)
+            throw PosterResolveError.badURL
         }
         var req = URLRequest(url: endpoint)
         req.httpMethod = "GET"
-        req.timeoutInterval = 6
+        // Short — cold API must not pin connection slots for 6–12s per id.
+        req.timeoutInterval = 4
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        if let token = await MainActor.run(body: { AuthService.shared.accessToken() }) {
+        if let token = await cachedBearerToken() {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         let (data, response) = try await URLSession.shared.data(for: req)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
+        guard let http = response as? HTTPURLResponse else {
+            throw PosterResolveError.unavailable
+        }
+        // Soft-miss: any 4xx (live still returns 404 JSON poster_unavailable).
+        if (400..<500).contains(http.statusCode) {
+            throw PosterResolveError.unavailable
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw PosterResolveError.unavailable
         }
         struct REST: Decodable {
             let ok: Bool?
-            let url: String
+            let url: String?
+            let error: String?
         }
-        let body = try JSONDecoder().decode(REST.self, from: data)
-        guard let url = URL(string: body.url), url.scheme != nil else {
-            throw URLError(.cannotParseResponse)
+        // Non-JSON / empty → treat as miss, never surface NSURLError -1011 to the log.
+        guard let body = try? JSONDecoder().decode(REST.self, from: data) else {
+            throw PosterResolveError.unavailable
+        }
+        if body.ok == false || body.error == "poster_unavailable" || body.url == nil {
+            throw PosterResolveError.unavailable
+        }
+        guard let urlString = body.url, let url = URL(string: urlString), url.scheme != nil else {
+            throw PosterResolveError.parse
         }
         return url
     }
@@ -289,10 +415,10 @@ actor Frame0PosterResolver {
         var req = URLRequest(url: endpoint)
         req.httpMethod = "POST"
         // Match Surface cold-start headroom; parallel open-path used to trip 10s.
-        req.timeoutInterval = 12
+        req.timeoutInterval = 10
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let token = await MainActor.run(body: { AuthService.shared.accessToken() }) {
+        if let token = await cachedBearerToken() {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         req.httpBody = try JSONSerialization.data(withJSONObject: ["postIds": postIDs])
@@ -306,5 +432,18 @@ actor Frame0PosterResolver {
         }
         let body = try JSONDecoder().decode(REST.self, from: data)
         return body.posters ?? [:]
+    }
+
+    /// One MainActor hop per burst — dozens of `await MainActor.run` for token froze UI.
+    private var bearerCache: (token: String, at: Date)?
+    private func cachedBearerToken() async -> String? {
+        if let hit = bearerCache, Date().timeIntervalSince(hit.at) < 30 {
+            return hit.token
+        }
+        let token = await MainActor.run { AuthService.shared.accessToken() }
+        if let token {
+            bearerCache = (token, Date())
+        }
+        return token
     }
 }

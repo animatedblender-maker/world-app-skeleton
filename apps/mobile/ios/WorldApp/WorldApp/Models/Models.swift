@@ -573,7 +573,7 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
     let linkTitle: String?
     let externalRefType: String?
     let externalRefID: String?
-    /// Server / thin-card flag for NSFW (18+). Optional so older disk cache still decodes.
+    /// Server / thin-card flag for Mature content (18+). Optional so older disk cache still decodes.
     let isAdult: Bool?
 
     init(

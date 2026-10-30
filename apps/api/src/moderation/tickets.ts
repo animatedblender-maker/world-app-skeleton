@@ -32,7 +32,10 @@ export type TicketRow = {
   created_at: string;
   reporter_user_id: string | null;
   reporter_profile_id: string | null;
+  queue: TicketQueue;
 };
+
+export type TicketQueue = 'content' | 'account';
 
 export type UpsertTicketInput = {
   platform: ModerationPlatform;
@@ -46,11 +49,13 @@ export type UpsertTicketInput = {
   previewBody?: string | null;
   previewMediaUrl?: string | null;
   actor?: string;
+  /** content = post/comment queue; account = strike / account-review queue */
+  queue?: TicketQueue;
 };
 
 let ticketsSchemaEnsured = false;
 
-/** Ensure Pass can hand a ticket to another moderator (per-actor skip list). */
+/** Ensure Pass handoff + account-queue / strikes schema. */
 export async function ensureTicketsSchema(): Promise<void> {
   if (ticketsSchemaEnsured) return;
   await pool.query(`
@@ -58,9 +63,40 @@ export async function ensureTicketsSchema(): Promise<void> {
       add column if not exists passed_by text[] not null default '{}'::text[]
   `);
   await pool.query(`
+    alter table public.moderation_tickets
+      add column if not exists queue text not null default 'content'
+  `);
+  await pool.query(`
     create index if not exists moderation_tickets_open_fifo_idx
       on public.moderation_tickets (last_report_at asc, created_at asc)
       where status = 'open'
+  `);
+  await pool.query(`
+    create index if not exists moderation_tickets_open_queue_idx
+      on public.moderation_tickets (queue, last_report_at asc)
+      where status = 'open'
+  `);
+  await pool.query(`
+    create table if not exists public.account_strikes (
+      id uuid primary key default gen_random_uuid(),
+      subject_kind text not null check (subject_kind in ('user', 'anonymous_profile')),
+      subject_id uuid not null,
+      leaf_id text not null,
+      root_category text not null,
+      severity text not null check (severity in ('mild', 'severe')),
+      source_ticket_id uuid,
+      source_target_kind text,
+      source_target_id uuid,
+      created_at timestamptz not null default now(),
+      cleared_at timestamptz,
+      cleared_by text,
+      clear_note text
+    )
+  `);
+  await pool.query(`
+    create index if not exists account_strikes_open_idx
+      on public.account_strikes (subject_kind, subject_id, created_at desc)
+      where cleared_at is null
   `);
   ticketsSchemaEnsured = true;
 }
@@ -99,9 +135,11 @@ async function logAction(
 
 /** Create or bump an open/claimed ticket for a target. */
 export async function upsertTicketFromReport(input: UpsertTicketInput): Promise<string> {
+  await ensureTicketsSchema();
   const category = normalizeCategory(input.category);
   const source = input.source === 'auto' ? 'auto' : 'user';
   const actor = input.actor || 'reporter';
+  const queue: TicketQueue = input.queue === 'account' ? 'account' : 'content';
   const client = await pool.connect();
   try {
     await client.query('begin');
@@ -110,14 +148,14 @@ export async function upsertTicketFromReport(input: UpsertTicketInput): Promise<
       insert into public.moderation_tickets (
         platform, target_kind, target_id,
         reporter_user_id, reporter_profile_id,
-        category, source,
+        category, source, queue,
         preview_title, preview_body, preview_media_url,
         status, report_count, last_report_at, updated_at
       ) values (
         $1, $2, $3::uuid,
         $4::uuid, $5::uuid,
-        $6, $7,
-        $8, $9, $10,
+        $6, $7, $8,
+        $9, $10, $11,
         'open', 1, now(), now()
       )
       on conflict (target_kind, target_id) where (status in ('open', 'claimed'))
@@ -132,6 +170,11 @@ export async function upsertTicketFromReport(input: UpsertTicketInput): Promise<
         category = case
           when excluded.source = 'auto' then excluded.category
           else public.moderation_tickets.category
+        end,
+        -- Escalate into account queue when requested.
+        queue = case
+          when excluded.queue = 'account' then 'account'
+          else public.moderation_tickets.queue
         end
       returning id
       `,
@@ -143,6 +186,7 @@ export async function upsertTicketFromReport(input: UpsertTicketInput): Promise<
         input.reporterProfileId ?? null,
         category,
         source,
+        queue,
         input.previewTitle ?? null,
         input.previewBody ?? null,
         input.previewMediaUrl ?? null,
@@ -173,9 +217,14 @@ export async function upsertTicketFromReport(input: UpsertTicketInput): Promise<
 /** Claim the next open unassigned ticket (one-at-a-time). */
 export async function claimNextTicket(
   actor: string,
-  opts?: { excludeTicketId?: string | null; excludeTicketIds?: string[] | null }
+  opts?: {
+    excludeTicketId?: string | null;
+    excludeTicketIds?: string[] | null;
+    queue?: TicketQueue;
+  }
 ): Promise<TicketRow | null> {
   await ensureTicketsSchema();
+  const queue: TicketQueue = opts?.queue === 'account' ? 'account' : 'content';
   const excludeIds = [
     ...(opts?.excludeTicketIds ?? []),
     opts?.excludeTicketId ?? null,
@@ -193,6 +242,7 @@ export async function claimNextTicket(
         from public.moderation_tickets
         where status = 'open'
           and assigned_to is null
+          and coalesce(queue, 'content') = $3
           and not (id = any($2::uuid[]))
           and not ($1 = any(coalesce(passed_by, '{}'::text[])))
         -- Mix auto + user reports for now; priority ordering comes later.
@@ -213,9 +263,11 @@ export async function claimNextTicket(
         t.id, t.platform, t.target_kind, t.target_id, t.category, t.status, t.source,
         t.report_count, t.last_report_at::text, t.preview_title, t.preview_body,
         t.preview_media_url, t.assigned_to, t.claimed_at::text, t.mod_action, t.mod_category,
-        t.created_at::text
+        t.created_at::text,
+        t.reporter_user_id::text, t.reporter_profile_id::text,
+        coalesce(t.queue, 'content') as queue
       `,
-      [actor, excludeIds]
+      [actor, excludeIds, queue]
     );
     const ticket = rows[0] ?? null;
     if (ticket) {
@@ -530,6 +582,8 @@ export async function resolveTicket(opts: {
   action: ResolveAction;
   category?: string | null;
   note?: string | null;
+  /** Policy leaf id from the decision tree (drives severity / notices). */
+  leafId?: string | null;
 }): Promise<{ ok: boolean; error?: string }> {
   const modCategory = opts.action === 'skip' ? null : normalizeCategory(opts.category);
   if (opts.action !== 'skip' && !isModerationCategory(modCategory)) {
@@ -537,15 +591,27 @@ export async function resolveTicket(opts: {
   }
 
   const client = await pool.connect();
+  let resolvedTicket: TicketRow | null = null;
+  let removalSubject: {
+    kind: 'user' | 'anonymous_profile';
+    id: string;
+    username?: string | null;
+  } | null = null;
+  let reporterUserIds: string[] = [];
+  let reporterProfileIds: string[] = [];
+
   try {
     await client.query('begin');
+    await ensureTicketsSchema();
     const { rows } = await client.query<TicketRow>(
       `
       select
         id, platform, target_kind, target_id, category, status, source,
         report_count, last_report_at::text, preview_title, preview_body,
         preview_media_url, assigned_to, claimed_at::text, mod_action, mod_category,
-        created_at::text
+        created_at::text,
+        reporter_user_id::text, reporter_profile_id::text,
+        coalesce(queue, 'content') as queue
       from public.moderation_tickets
       where id = $1::uuid
       for update
@@ -560,6 +626,35 @@ export async function resolveTicket(opts: {
     if (ticket.status !== 'claimed' && ticket.status !== 'open') {
       await client.query('rollback');
       return { ok: false, error: 'already_resolved' };
+    }
+
+    // Capture author + reporters before archive/delete so notices still work.
+    if (opts.action === 'remove' && ticket.queue !== 'account') {
+      try {
+        const {
+          resolveRemovalSubject,
+          listFeedReporterUserIds,
+          listAnonReporterProfileIds,
+        } = await import('./enforcement.js');
+        removalSubject = await resolveRemovalSubject(ticket);
+        if (ticket.target_kind === 'post') {
+          if (ticket.platform === 'masquerade') {
+            reporterProfileIds = await listAnonReporterProfileIds(
+              ticket.target_id,
+              'post'
+            );
+          } else {
+            reporterUserIds = await listFeedReporterUserIds(ticket.target_id);
+          }
+        } else if (ticket.target_kind === 'comment' && ticket.platform === 'masquerade') {
+          reporterProfileIds = await listAnonReporterProfileIds(
+            ticket.target_id,
+            'comment'
+          );
+        }
+      } catch (err: any) {
+        console.warn('[resolveTicket] pre-remove capture', err?.message ?? err);
+      }
     }
 
     if (opts.action === 'remove' && modCategory) {
@@ -674,17 +769,40 @@ export async function resolveTicket(opts: {
       targetKind: ticket.target_kind,
       targetId: ticket.target_id,
       platform: ticket.platform,
-      detail: { note: opts.note ?? null, prior_category: ticket.category },
+      detail: {
+        note: opts.note ?? null,
+        prior_category: ticket.category,
+        leaf_id: opts.leafId ?? null,
+      },
     });
 
     await client.query('commit');
-    return { ok: true };
+    resolvedTicket = ticket;
   } catch (err) {
     await client.query('rollback');
     throw err;
   } finally {
     client.release();
   }
+
+  // After commit: notices + strikes (must not roll back a successful remove).
+  if (opts.action === 'remove' && resolvedTicket && resolvedTicket.queue !== 'account') {
+    void import('./enforcement.js')
+      .then(({ applyRemovalEnforcement }) =>
+        applyRemovalEnforcement({
+          ticket: resolvedTicket!,
+          leafId: opts.leafId ?? null,
+          subject: removalSubject,
+          reporterUserIds,
+          reporterProfileIds,
+        })
+      )
+      .catch((err: any) =>
+        console.warn('[resolveTicket] enforcement', err?.message ?? err)
+      );
+  }
+
+  return { ok: true };
 }
 
 const TICKET_SELECT = `
@@ -692,20 +810,26 @@ const TICKET_SELECT = `
   report_count, last_report_at::text, preview_title, preview_body,
   preview_media_url, assigned_to, claimed_at::text, mod_action, mod_category,
   created_at::text,
-  reporter_user_id::text, reporter_profile_id::text
+  reporter_user_id::text, reporter_profile_id::text,
+  coalesce(queue, 'content') as queue
 `;
 
-export async function getClaimedTicketForActor(actor: string): Promise<TicketRow | null> {
+export async function getClaimedTicketForActor(
+  actor: string,
+  opts?: { queue?: TicketQueue }
+): Promise<TicketRow | null> {
+  const queue: TicketQueue = opts?.queue === 'account' ? 'account' : 'content';
   const { rows } = await pool.query<TicketRow>(
     `
     select ${TICKET_SELECT}
     from public.moderation_tickets
     where status = 'claimed'
       and assigned_to = $1
+      and coalesce(queue, 'content') = $2
     order by claimed_at desc
     limit 1
     `,
-    [actor]
+    [actor, queue]
   );
   return rows[0] ?? null;
 }
@@ -814,9 +938,19 @@ export async function claimTicketById(
   }
 }
 
-export async function openTicketCount(): Promise<number> {
+export async function openTicketCount(opts?: {
+  queue?: TicketQueue;
+}): Promise<number> {
+  await ensureTicketsSchema();
+  const queue: TicketQueue = opts?.queue === 'account' ? 'account' : 'content';
   const { rows } = await pool.query<{ n: string }>(
-    `select count(*)::text as n from public.moderation_tickets where status = 'open'`
+    `
+    select count(*)::text as n
+    from public.moderation_tickets
+    where status = 'open'
+      and coalesce(queue, 'content') = $1
+    `,
+    [queue]
   );
   return Number(rows[0]?.n || 0);
 }

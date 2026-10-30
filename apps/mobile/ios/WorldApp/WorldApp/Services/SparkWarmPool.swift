@@ -27,16 +27,16 @@ final class SparkWarmPool {
 
         /// Balanced light — keep whole-app weight down (Hubs + Feed + Masquerade co-mounted).
         static var playerAhead: Int { playerAheadSparks }
-        static var playerAheadFeed: Int { isConstrained ? 1 : 2 }
-        static var playerAheadSparks: Int { isConstrained ? 2 : 3 }
+        static var playerAheadFeed: Int { isConstrained ? 1 : 1 }
+        static var playerAheadSparks: Int { isConstrained ? 1 : 2 }
         static var playerAheadHubs: Int { 1 }
         static var thumbAhead: Int { isConstrained ? 3 : 4 }
         static var deepPrerollFeed: Int { isConstrained ? 1 : 2 }
         static var deepPrerollSparks: Int { 2 }
         static var deepPrerollHubs: Int { 1 }
-        static var maxSlots: Int { isConstrained ? 4 : 5 }
+        static var maxSlots: Int { isConstrained ? 3 : 4 }
         static var playerBehind: Int { 1 }
-        static var maxConcurrentWarms: Int { isConstrained ? 1 : 2 }
+        static var maxConcurrentWarms: Int { isConstrained ? 1 : 1 }
         static var forwardBufferDeep: Double { isConstrained ? 3 : 4 }
         static var forwardBufferLight: Double { isConstrained ? 1.5 : 2 }
     }

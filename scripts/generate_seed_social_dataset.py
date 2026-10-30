@@ -21,9 +21,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 IOS_PUBLIC = ROOT / "apps" / "mobile" / "ios" / "App" / "App" / "public"
-COUNTRIES_GEOJSON = IOS_PUBLIC / "countries50m.geojson"
-NAMES_BY_COUNTRY = IOS_PUBLIC / "names-by-country.json"
+WEB_PUBLIC = ROOT / "apps" / "web" / "public"
+COUNTRIES_GEOJSON = (
+    IOS_PUBLIC / "countries50m.geojson"
+    if (IOS_PUBLIC / "countries50m.geojson").exists()
+    else WEB_PUBLIC / "countries50m.geojson"
+)
+# Prefer web public names-by-country (canonical); never fall back to User# inventing.
+NAMES_BY_COUNTRY = (
+    WEB_PUBLIC / "names-by-country.json"
+    if (WEB_PUBLIC / "names-by-country.json").exists()
+    else IOS_PUBLIC / "names-by-country.json"
+)
 OUTPUT_DIR = IOS_PUBLIC / "seed_social"
+FAKE_USERS_60K = ROOT / "fake_users_60k_real_names" / "fake_users_60k.jsonl"
 
 TOPICS = [
     "daily life",
@@ -226,10 +237,20 @@ def slug(value: str) -> str:
 
 
 def pick_name(rng: random.Random, names: dict, code: str) -> tuple[str, str]:
+    """Country-appropriate real names only — never User# / country / Hubs."""
     pool = names.get(code) or names.get("GLOBAL") or {}
-    first = pool.get("first") or ["Alex", "Sam", "Maya", "Noah", "Lina", "Omar"]
-    last = pool.get("last") or ["Khan", "Smith", "Garcia", "Kim", "Nasser", "Ivanov"]
-    return rng.choice(first), rng.choice(last)
+    firsts = [str(x).strip() for x in (pool.get("first") or []) if str(x).strip()]
+    lasts = [str(x).strip() for x in (pool.get("last") or []) if str(x).strip()]
+    # Soft filter: drop obvious junk tokens
+    junk = {"user", "hubs", "channel", "member", "admin", "bot", "test"}
+    firsts = [f for f in firsts if f.casefold() not in junk and not re.fullmatch(r"user_?\d+", f, re.I)]
+    lasts = [l for l in lasts if l.casefold() not in junk]
+    if firsts and lasts:
+        return rng.choice(firsts), rng.choice(lasts)
+    # Real-looking Latin fallbacks (still not User#)
+    return rng.choice(["Maya", "Omar", "Lina", "Noah", "Aisha", "Jonas"]), rng.choice(
+        ["Nguyen", "Hassan", "Keller", "Silva", "Rahman", "Berg"]
+    )
 
 
 def country_rows() -> list[dict]:

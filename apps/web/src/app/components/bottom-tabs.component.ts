@@ -45,12 +45,24 @@ type TabKey = 'feed' | 'anonymous' | 'hubs' | 'messages' | 'profile';
       </button>
 
       <button type="button" class="tab-btn" aria-label="Hubs" [class.active]="active === 'hubs'" (click)="goHubs()">
-        <svg class="tab-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
-          <rect x="3.5" y="3.5" width="7" height="7" rx="1.2" />
-          <rect x="13.5" y="3.5" width="7" height="7" rx="1.2" />
-          <rect x="3.5" y="13.5" width="7" height="7" rx="1.2" />
-          <rect x="13.5" y="13.5" width="7" height="7" rx="1.2" />
-        </svg>
+        <!-- Same TV + app-icon mark as the Matterya Hubs header / feed chip. -->
+        <span class="hubs-tab-mark" aria-hidden="true">
+          <svg class="tab-svg hubs-tv" viewBox="0 0 24 24" fill="none">
+            <path d="M7.5 3.2 L8.8 5.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M16.5 3.1 L15.2 5.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <rect x="3.2" y="4.6" width="17.6" height="12.2" rx="2.4" fill="rgba(254,253,251,0.96)" stroke="currentColor" stroke-width="1.45"/>
+            <path d="M11.2 16.8 L10.6 20.2 L13.4 20.2 L12.8 16.8 Z" fill="currentColor"/>
+            <path d="M6.5 21.1 Q12 22.4 17.5 21.2" stroke="currentColor" stroke-width="1.55" stroke-linecap="round"/>
+          </svg>
+          <img
+            class="hubs-tab-icon"
+            src="assets/matterya-app-icon.png"
+            alt=""
+            width="10"
+            height="10"
+            decoding="async"
+          />
+        </span>
         <span class="tab-label">Hubs</span>
       </button>
 
@@ -182,6 +194,28 @@ type TabKey = 'feed' | 'anonymous' | 'hubs' | 'messages' | 'profile';
       }
       .tab-btn.active .tab-svg {
         stroke-width: 2;
+      }
+      .hubs-tab-mark {
+        position: relative;
+        width: 26px;
+        height: 26px;
+        display: grid;
+        place-items: center;
+      }
+      .hubs-tab-mark .hubs-tv {
+        width: 26px;
+        height: 26px;
+      }
+      .hubs-tab-icon {
+        position: absolute;
+        top: 7px;
+        left: 50%;
+        width: 10px;
+        height: 10px;
+        transform: translateX(-50%);
+        border-radius: 2px;
+        object-fit: cover;
+        pointer-events: none;
       }
       .tab-dot {
         position: absolute;

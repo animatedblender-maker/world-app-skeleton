@@ -56,7 +56,8 @@ enum ContentSanitizer {
     }
 
     /// User-facing copy: never show competitor / source-platform names.
-    /// `subreddit` → `space`, `reddit` → `masquerade`, TikTok → `matterya`.
+    /// `subreddit` → `space`, `reddit` → `masquerade`, TikTok → `matterya`,
+    /// `u/name` → `@name`.
     /// Longer tokens first so `subreddit` is not partially rewritten.
     /// Compiled once — image cards hit `clean` many times per SwiftUI body pass.
     private static let rebrandPairs: [(NSRegularExpression, String)] = {
@@ -74,6 +75,8 @@ enum ContentSanitizer {
             ("\\btiktok\\b", "matterya"),
             // Reddit path shorthand r/funny → space/funny
             ("\\br/", "space/"),
+            // Reddit user shorthand u/name → @name (Masquerade handles).
+            ("\\bu/", "@"),
         ]
         return pairs.compactMap { pattern, replacement in
             guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {

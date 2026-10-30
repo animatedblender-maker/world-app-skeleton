@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Matterya Pre-Release Sprint Report</title>
+<style>
+  :root { --paper:#f8f6f2; --ink:#1a1714; --muted:#6b635a; --accent:#7b6346; --border:#e0d9cf; --code:#f0ebe3; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background:var(--paper); color:var(--ink); line-height:1.55; }
+  .wrap { max-width:920px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:1.85rem; letter-spacing:-0.02em; margin:0 0 8px; }
+  h2 { font-size:1.35rem; margin-top:2.2rem; border-bottom:1px solid var(--border); padding-bottom:6px; }
+  h3 { font-size:1.1rem; margin-top:1.4rem; color:var(--accent); }
+  p { margin:0.65rem 0; }
+  a { color:var(--accent); }
+  code { background:var(--code); padding:0.1em 0.35em; border-radius:4px; font-size:0.9em; }
+  pre { background:#1a1714; color:#f5f0e8; padding:14px 16px; border-radius:10px; overflow-x:auto; font-size:0.85rem; }
+  pre code { background:none; padding:0; color:inherit; }
+  table { width:100%; border-collapse:collapse; margin:1rem 0; font-size:0.92rem; background:white; border-radius:10px; overflow:hidden; box-shadow:0 1px 0 var(--border); }
+  th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--border); vertical-align:top; }
+  th { background:#efe8dc; font-weight:600; }
+  tr:last-child td { border-bottom:none; }
+  ul, ol { padding-left:1.35rem; }
+  li { margin:0.35rem 0; }
+  hr { border:none; border-top:1px solid var(--border); margin:2rem 0; }
+  .banner { background:linear-gradient(135deg,#1a1714,#3d3429); color:#f8f6f2; padding:18px 20px; border-radius:12px; margin-bottom:28px; }
+  .banner strong { color:#e8c9a0; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="banner">
+      <div style="font-size:0.85rem;opacity:0.85;letter-spacing:0.06em;text-transform:uppercase;">Matterya · Pre-release</div>
+      <div style="font-size:1.4rem;font-weight:600;margin-top:4px;">Sprint Report</div>
+      <div style="color:#cfc6b8;margin-top:8px;font-size:0.92rem;">Branch <strong>ios-native</strong> · Open from any device on your LAN</div>
+    </div>
+<h1>Matterya iOS — Pre-Release Sprint Report</h1>
+<p><strong>Branch:</strong> <code>ios-native</code>  </p>
+<p><strong>Date:</strong> 2026-08-17  </p>
+<p><strong>Audience:</strong> Founder / release gate  </p>
+<p><strong>Scope:</strong> Butter-smooth functionality, messaging mastery, recsys integrity, no layout redesign  </p>
+<p><strong>Commits (this sprint window):</strong> <code>68bd53c</code> → <code>f895260</code> → <code>acf8532</code> (plus earlier feed/FS work <code>8e5118f</code>, <code>bf260b7</code>, <code>a23a499</code>, …)</p>
+<hr/>
+<h2>1. Executive summary</h2>
+<p>This sprint treated Matterya as <strong>one product surface</strong> (feed, Sparks, Hubs, messages, calls, push, comments) and closed the gaps that make an app feel “almost ready” but not shippable:</p>
+<table><thead><tr><th>Theme</th><th>Outcome</th></tr></thead><tbody>
+<tr><td><strong>Smoothness</strong></td><td>Deeper feed pool, earlier prefetch, stickier autoplay, less random pause</td></tr>
+<tr><td><strong>Sparks integrity</strong></td><td>Watched clips no longer reappear via share/original ID mismatch</td></tr>
+<tr><td><strong>Hubs polish</strong></td><td>Mini black screen, FS edge black, FS exit direction, scroll vs FS pull</td></tr>
+<tr><td><strong>Copy hygiene</strong></td><td><code>sid=uuid…</code> control stamps stripped from feed/profile/chat</td></tr>
+<tr><td><strong>Messaging</strong></td><td>Cleaner long-press menu; call UI themed + <strong>speaker</strong> control</td></tr>
+<tr><td><strong>Push</strong></td><td>Message alerts keep sound; foreground chime; time-sensitive APNs</td></tr>
+<tr><td><strong>Comments</strong></td><td>Hub/seed threads load &amp; save on-device (were silently empty)</td></tr>
+<tr><td><strong>Recsys</strong></td><td>Related / “More on Matterya” hard-prefer unviewed</td></tr>
+</tbody></table>
+<p><strong>Layout was not redesigned</strong> — only behavior, routing, sanitization, audio, and engagement correctness.</p>
+<hr/>
+<h2>2. What we shipped (by product area)</h2>
+<h3>2.1 Home feed &amp; performance</h3>
+<p><strong>Problems</strong></p>
+<ul>
+<li>Hubs cards cold-started (long black wait).</li>
+<li>Videos paused without leaving frame (focus glitch + hard silence).</li>
+<li>Feed hit “loading more” too early (tiny window / late prefetch).</li>
+<li>Watched Sparks reappeared (identity + soft recycle).</li>
+</ul>
+<p><strong>Fixes</strong></p>
+<ul>
+<li><strong>Pool:</strong> first window ~20, page size 40, background fill to <strong>56+</strong> posts.</li>
+<li><strong>Prefetch:</strong> load-more at ~32% of pool; silent background top-up (spinner only if almost empty).</li>
+<li><strong>Warm:</strong> head + upcoming Sparks/Hubs resolve + <code>SparkWarmPool</code>.</li>
+<li><strong>Hubs feed cards:</strong> <code>loops: true</code>, start at 0, re-warm on focus win.</li>
+<li><strong>Focus:</strong> longer debounce; no instant <code>silenceAll</code> when winner is briefly nil; stickier keep-visible thresholds.</li>
+<li><strong>Unviewed:</strong> discovery keys (post + share + origin); hard drop viewed while unviewed remain; softer recycle only deep in session.</li>
+</ul>
+<p><strong>Instagram-class approach (what we aligned to)</strong></p>
+<table><thead><tr><th>Layer</th><th>Industry pattern</th><th>Matterya now</th></tr></thead><tbody>
+<tr><td>Client</td><td>Always-ahead cursor + local window</td><td><code>HomeFeedStore</code> buffer + window grow</td></tr>
+<tr><td>Media</td><td>Warm N ahead AVPlayers</td><td><code>SparkWarmPool</code> + archive resolve</td></tr>
+<tr><td>Solo audio</td><td>One audible player</td><td><code>MediaPlaybackCoordinator</code> + continuous protect</td></tr>
+<tr><td>Ranking</td><td>Unviewed / relationship first</td><td>Phase-0 <code>sessionHomeFeedOrder</code> + <code>FeedCompositionEngine</code></td></tr>
+<tr><td>Backend (later)</td><td>Rank service + feature store</td><td><code>RecommendationClient</code> + warehouse tables exist; not blocking ship</td></tr>
+</tbody></table>
+<p><strong>Still heavier than IG</strong> if we over-warm (32 deep players). Next optimization (post-ship OK): feed deep-preroll 2–4 only; keep Sparks player at 8–14.</p>
+<hr/>
+<h3>2.2 Hubs continuous player</h3>
+<table><thead><tr><th>Issue</th><th>Fix</th></tr></thead><tbody>
+<tr><td>FS double-enter / rebuffer</td><td>In-place <code>fsProgress</code> morph — same AVPlayer</td></tr>
+<tr><td>White notch / bottom in FS</td><td>Edge-to-edge black + hide tab bar</td></tr>
+<tr><td>FS exit felt wrong</td><td><strong>Swipe up</strong> exits (not down)</td></tr>
+<tr><td>Meta pull blocked comments scroll</td><td>FS pull only when scroll is <strong>at top</strong></td></tr>
+<tr><td><strong>Mini black screen</strong></td><td>Higher mini z-index (65), <strong>fill</strong> mini frame, reassert play/audio; <strong>dock film to measured mini hole</strong> (<code>adb9c1d</code> — floating bar was ignored → black ink bed)</td></tr>
+</tbody></table>
+<hr/>
+<h3>2.3 Copy / “sid blabla” stamps</h3>
+<p><strong>Cause:</strong> <code>__hub_origin__|sid=…|aid=…</code> stripped prefix but left control payload; some UI used raw <code>post.body</code>.</p>
+<p><strong>Fix</strong></p>
+<ul>
+<li>Stronger <code>ContentSanitizer</code> (control lines, <code>sid=</code> regex, multi-key stamps).</li>
+<li><code>displayBody</code> / <code>displayExcerpt</code> / <code>displayHeadline</code> gates.</li>
+<li><code>PostCardView</code>, <code>ProfilePostCard</code>, chat share headlines use sanitized fields.</li>
+</ul>
+<hr/>
+<h3>2.4 Messaging (chat)</h3>
+<table><thead><tr><th>Area</th><th>Status after sprint</th></tr></thead><tbody>
+<tr><td>Bubbles</td><td>Theme paper / <code>accentBright</code> mine / surface peer</td></tr>
+<tr><td>Swipe reply</td><td>Unchanged (works)</td></tr>
+<tr><td><strong>Long-press menu</strong></td><td><strong>Reply, Like, React, Copy, Unsend, Remove</strong> (was react-only + destructive)</td></tr>
+<tr><td>Share cards in chat</td><td>Sanitized headlines (no sid stamps)</td></tr>
+<tr><td>Read label</td><td>Last-read “Read · time” (not double-check ticks — acceptable v1)</td></tr>
+</tbody></table>
+<p><strong>Not in this sprint (documented for next):</strong> forward, multi-select delete, edit message, delivery ticks.</p>
+<hr/>
+<h3>2.5 Calls</h3>
+<table><thead><tr><th>Control</th><th>Before</th><th>After</th></tr></thead><tbody>
+<tr><td>Accept / Decline / End</td><td>✅</td><td>✅</td></tr>
+<tr><td>Mute</td><td>✅</td><td>✅</td></tr>
+<tr><td>Camera on/off (video)</td><td>✅</td><td>✅</td></tr>
+<tr><td><strong>Speaker / earpiece</strong></td><td>❌</td><td>✅ <code>toggleSpeaker</code> + UI button</td></tr>
+<tr><td>Theme</td><td>Hardcoded blue-black</td><td>Matterya <strong>ink / canvasDeep / accent</strong> gradient</td></tr>
+<tr><td>CallKit ring</td><td><code>MatteryaCall.caf</code></td><td>unchanged</td></tr>
+<tr><td>In-app ring</td><td><code>MatteryaCallRing.mp3</code></td><td>unchanged</td></tr>
+</tbody></table>
+<p><strong>Not yet:</strong> flip camera, hold/merge, multi-party.</p>
+<hr/>
+<h3>2.6 Push notifications</h3>
+<table><thead><tr><th>Type</th><th>Sound</th><th>Behavior</th></tr></thead><tbody>
+<tr><td><strong>Message</strong> (background)</td><td>APNs <code>sound: default</code> + time-sensitive</td><td>Banner when not in that chat</td></tr>
+<tr><td><strong>Message</strong> (foreground)</td><td>System chime <code>1003</code> + banner/sound</td><td>Suppressed if chat open</td></tr>
+<tr><td><strong>Call</strong> (VoIP / CallKit)</td><td>Custom <code>MatteryaCall.caf</code></td><td>Full ring path</td></tr>
+<tr><td><strong>Call</strong> (in-app)</td><td><code>MatteryaCallRing.mp3</code></td><td>Foreground</td></tr>
+</tbody></table>
+<p><strong>WhatsApp parity note:</strong> custom message <code>.caf</code> not bundled yet; system default + foreground chime is shippable. Optional next: <code>MatteryaMessage.caf</code> in bundle + APNs <code>sound</code> name.</p>
+<hr/>
+<h3>2.7 Comments</h3>
+<p><strong>Critical bug fixed:</strong> Hub/seed posts (<code>ia_*</code>, non-UUID, etc.) always hit GraphQL → empty success → comments vanished after leave.</p>
+<p><strong>Now</strong></p>
+<ul>
+<li><code>listComments</code> / <code>addComment</code> / <code>likeComment</code> short-circuit <strong><code>HubEngagementStore</code></strong> for local-engagement IDs.</li>
+<li>Origin + share merge still works for hybrid cases.</li>
+<li>GraphQL failure falls back to local so Hubs never “silent fail.”</li>
+</ul>
+<p>Feed expand + Hubs watch use the same <code>PostsService</code> path → both benefit.</p>
+<hr/>
+<h3>2.8 Recsys / “will users see new content?”</h3>
+<table><thead><tr><th>Surface</th><th>Unviewed-first?</th><th>Notes</th></tr></thead><tbody>
+<tr><td><strong>Home feed</strong></td><td>✅ Hard</td><td>Discovery keys; composition drops viewed while unviewed remain</td></tr>
+<tr><td><strong>Sparks player</strong></td><td>✅ Hard</td><td>mark watched on page; queue excludes viewed</td></tr>
+<tr><td><strong>Hubs For you shelves</strong></td><td>✅ Prefer (per slug)</td><td>Viewed demoted; deep endless can recycle (by design when exhausted)</td></tr>
+<tr><td><strong>More on Matterya (related)</strong></td><td>✅ Harder now</td><td>Pass 1 unviewed-only across tiers; seen only if shelf empty</td></tr>
+</tbody></table>
+<p><strong>Answer for release:</strong> Yes — users should consistently get <strong>new Sparks/feed items</strong> until the unviewed library is exhausted; related shelf prefers unwatched long-form first.</p>
+<hr/>
+
+<hr/>
+<h2>4. Performance sprint (IG-class) — shipped</h2>
+<table><thead><tr><th>Layer</th><th>Now</th></tr></thead><tbody>
+<tr><td><strong>AVPlayer warm</strong></td><td>Feed deep preroll <strong>2–4</strong> by RAM tier; max slots 8/14/18; fling = thumbs only</td></tr>
+<tr><td><strong>Server rank</strong></td><td><code>POST /v1/recommendation/rank</code> policy <code>server.v2</code> + 20s cache; home + Sparks</td></tr>
+<tr><td><strong>CDN edge</strong></td><td><code>POST /v1/playback/batch</code> + ranged GET warm for feed head</td></tr>
+<tr><td><strong>MainActor</strong></td><td><code>rankForSessionAsync</code> → off-main <code>FeedCompositionEngine.compose</code></td></tr>
+</tbody></table>
+<h3>Risks (updated)</h3>
+<table><thead><tr><th>Risk</th><th>Severity</th><th>Status</th></tr></thead><tbody>
+<tr><td>No custom message .caf</td><td>Low</td><td>Accepted — system default + chime</td></tr>
+<tr><td>Hubs recycle watched deep in session</td><td>Low</td><td>Expected after exhaustion</td></tr>
+<tr><td>Feed warm memory spike</td><td>Med → Low</td><td><strong>Mitigated</strong> — deep 2–4 + slot caps</td></tr>
+<tr><td>Flip camera / forward message</td><td>Low</td><td>Backlog</td></tr>
+<tr><td>Full automated UI tests</td><td>Med</td><td>Manual QA checklist is the gate</td></tr>
+</tbody></table>
+
+<h2>3. Tab-by-tab readiness (functionality)</h2>
+<table><thead><tr><th>Tab</th><th>Expectation</th><th>Gate</th></tr></thead><tbody>
+<tr><td><strong>Feed</strong></td><td>Endless, following-priority mix, hubs/sparks autoplay sticky, no sid text, delete sticks</td><td>Ready to QA</td></tr>
+<tr><td><strong>Hubs</strong></td><td>Continuous watch → mini (video visible) → FS black edges; related unviewed; comments local</td><td>Ready to QA</td></tr>
+<tr><td><strong>Messages</strong></td><td>Chat menu complete enough; push sound; calls mute/speaker/camera/end</td><td>Ready to QA</td></tr>
+<tr><td><strong>Profile</strong></td><td>Delete sync via tombstone; excerpts sanitized</td><td>Ready to QA</td></tr>
+<tr><td><strong>Globe</strong></td><td>Untouched this sprint (no layout change)</td><td>Smoke only</td></tr>
+<tr><td><strong>Sparks</strong></td><td>Unviewed queue + mark all identities</td><td>Ready to QA</td></tr>
+</tbody></table>
+<hr/>
+<h2>4. Architecture notes for “why IG still feels lighter”</h2>
+<ol>
+<li><strong>Native list virtualization</strong> — we use SwiftUI <code>LazyVStack</code> (good) but still over-warm AVPlayers on feed.  </li>
+<li><strong>Server rank</strong> — IG does heavy ranking server-side; we do Phase-0 client + optional rank API.  </li>
+<li><strong>CDN edge</strong> — media latency dominates “hubs load time”; warm pool is the right client countermeasure.  </li>
+<li><strong>MainActor ranking</strong> — still ranks large pools on main; post-ship: off-main compose.</li>
+</ol>
+<p>None of these block a tester build; they define the next performance sprint.</p>
+<hr/>
+<h2>5. Remaining risks (honest)</h2>
+<table><thead><tr><th>Risk</th><th>Severity</th><th>Mitigation / next</th></tr></thead><tbody>
+<tr><td>No custom message <code>.caf</code></td><td>Low</td><td>System default + chime; add branded sound later</td></tr>
+<tr><td>Hubs endless recycle can re-show watched deep in session</td><td>Low</td><td>Expected after exhaustion</td></tr>
+<tr><td>Feed warm may still spike memory on low devices</td><td>Med</td><td>Cap deep preroll to 2–4 after beta metrics</td></tr>
+<tr><td>Flip camera / forward message</td><td>Low</td><td>Backlog</td></tr>
+<tr><td>Full automated UI tests</td><td>Med</td><td>Manual QA checklist below</td></tr>
+</tbody></table>
+<hr/>
+<h2>6. Manual QA checklist (pre-distribute)</h2>
+<h3>Feed</h3>
+<ul>
+<li>[ ] Scroll 50+ cards without long spinner</li>
+<li>[ ] Hubs card starts without multi-second black</li>
+<li>[ ] No random pause while card fully on screen</li>
+<li>[ ] No <code>sid=</code> text under any video</li>
+<li>[ ] Watched Spark does not reappear as share</li>
+<li>[ ] Delete post → gone on profile + after force quit</li>
+</ul>
+<h3>Hubs</h3>
+<ul>
+<li>[ ] Minimize → <strong>video visible</strong> in mini (not black)</li>
+<li>[ ] FS black at notch + bottom</li>
+<li>[ ] Swipe <strong>up</strong> exits FS</li>
+<li>[ ] Scroll comments freely; pull FS only at top</li>
+<li>[ ] Comment on archive/seed video → persists after leave/reopen</li>
+<li>[ ] Related shelf mostly unwatched first</li>
+</ul>
+<h3>Messages</h3>
+<ul>
+<li>[ ] Long-press: Reply, Like, React, Copy, Unsend, Remove</li>
+<li>[ ] Message push while background → banner + sound</li>
+<li>[ ] Open chat → no banner for that thread</li>
+<li>[ ] Audio call: mute, <strong>speaker</strong>, end</li>
+<li>[ ] Video call: mute, speaker, camera off, end</li>
+<li>[ ] CallKit ring uses Matterya tone</li>
+</ul>
+<h3>Sparks</h3>
+<ul>
+<li>[ ] Swipe past 20 → no recent watched repeats</li>
+<li>[ ] Open from feed share → marks both identities</li>
+</ul>
+<hr/>
+<h2>7. Commits reference</h2>
+<table><thead><tr><th>Commit</th><th>Focus</th></tr></thead><tbody>
+<tr><td><code>8e5118f</code></td><td>Feed ahead-buffer + stickier hubs autoplay</td></tr>
+<tr><td><code>68bd53c</code></td><td>Hard unviewed Sparks (origin+share keys)</td></tr>
+<tr><td><code>a23a499</code> / <code>bf260b7</code> / <code>c1eabe1</code></td><td>FS scroll gate, swipe-up exit, black edges</td></tr>
+<tr><td><code>f895260</code></td><td>Sid kill, mini paint, chat/call/push polish</td></tr>
+<tr><td><code>acf8532</code></td><td>Hubs comments local path</td></tr>
+<tr><td><code>9590479</code></td><td>This sprint report</td></tr>
+<tr><td>*(follow-up)*</td><td>Mini docks to floating hole; API/model strip hub <code>sid=</code>; chat title sanitized</td></tr>
+</tbody></table>
+<hr/>
+<h2>8. Recommendation</h2>
+<p><strong>Ship a TestFlight / internal distribute build from <code>ios-native</code> HEAD after the QA checklist.</strong>  </p>
+<p>This is the right “last run before distribute”: correctness of engagement, unviewed discovery, messaging parity, and continuous playback are in place. The remaining items are <strong>polish and scale</strong> (custom message sound, camera flip, feed warm budget), not core product holes.</p>
+<hr/>
+<p>*Report generated as part of the pre-release engineering sprint. Team: Grok coding agent + parallel explore audits.*</p>
+  </div>
+</body>
+</html>

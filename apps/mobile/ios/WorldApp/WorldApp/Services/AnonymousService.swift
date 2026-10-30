@@ -5,13 +5,13 @@ import Foundation
 enum AnonymousService {
     /// First paint stays under a soft budget; one retry covers cold wakes.
     private static let timeout: TimeInterval = 45
-    /// Fat first page — one fetch covers a long first paint; load-more keeps it endless.
-    private static let feedFirstLimit = 48
-    static let feedPageLimit = 48
-    /// No hard stop — Masquerade For you stays endless (soft-recycle when ledger/cursor thin).
-    static let feedSoftCap = 10_000
-    /// Prefetch when this many cards remain (light-speed append).
-    static let feedPrefetchRemaining = 10
+    /// Lean pages — 48 media cards/hop was thrashing ImageIO + video poster extract.
+    private static let feedFirstLimit = 16
+    static let feedPageLimit = 16
+    /// Soft-recycle earlier so RAM does not hold thousands of signed media posts.
+    static let feedSoftCap = 180
+    /// Prefetch when this many cards remain.
+    static let feedPrefetchRemaining = 6
     /// First paint stays lean — endless load-more fills the rest.
     static let spacePostsPageLimit = 16
 

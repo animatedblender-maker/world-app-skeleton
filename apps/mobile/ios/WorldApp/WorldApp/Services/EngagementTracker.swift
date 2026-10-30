@@ -94,6 +94,21 @@ final class EngagementTracker {
                 durationMs: ms
             )
         }
+
+        // Image cards have no video onViewed — mark seen after a real glance so
+        // Home refresh / cold open cannot reshuffle the same Reddit photos.
+        if ms >= skipThresholdMs, Self.isHomeImageCard(entry.post) {
+            SparkDiscoveryEngine.markWatched(entry.post)
+            if entry.surface == RecommendationSurface.homeForYou.rawValue
+                || entry.surface == "home"
+            {
+                HomeFeedStore.shared.noteClipWatched(entry.post)
+            }
+        }
+    }
+
+    private static func isHomeImageCard(_ post: CountryPost) -> Bool {
+        PlayPlatformBridge.isHomeImageCard(post)
     }
 
     // MARK: - Video

@@ -81,6 +81,14 @@ final class AnonymousStore {
     var spacePostsLoadingMore = false
     var spacePostsHasMore = true
 
+    /// Optimistic membership by space id — Leave/Join chips read this so we never
+    /// rewrite every `spacesByFilter` list (that observation storm rebuilt the space
+    /// feed + AVPlayers and froze the app).
+    private(set) var membershipLocal: [String: Bool] = [:]
+    /// In-flight join/leave — blocks double-taps and Leave↔Join races.
+    private(set) var membershipBusyIds: Set<String> = []
+    private static let membershipNetworkTimeout: TimeInterval = 12
+
     var composerTitle: String = ""
     var composerBody: String = ""
     /// Bumps after a successful Space post so pickers/sheets can dismiss.
@@ -476,7 +484,26 @@ final class AnonymousStore {
 
     @discardableResult
     func joinSpace(_ space: AnonymousSpace) async -> Bool {
-        await ensureJoined(space)
+        // Directory / search / onboarding chips — never block the spinner on a cold API.
+        await ensureJoined(space, waitForServer: false)
+    }
+
+    /// Drop overrides that already match the server payload (keeps the map small).
+    private func reconcileMembershipLocal(with spaces: [AnonymousSpace]) {
+        guard !membershipLocal.isEmpty else { return }
+        for space in spaces {
+            guard let override = membershipLocal[space.id] else { continue }
+            if space.isJoined == override {
+                membershipLocal.removeValue(forKey: space.id)
+            }
+        }
+    }
+
+    private func applyingMembershipLocal(_ space: AnonymousSpace) -> AnonymousSpace {
+        guard let joined = membershipLocal[space.id] else { return space }
+        var copy = space
+        copy.isJoined = joined
+        return copy
     }
 
     // MARK: - Spaces
@@ -487,10 +514,19 @@ final class AnonymousStore {
         defer { spacesLoading[filter] = false }
         do {
             let page = try await AnonymousService.listSpaces(filter: filter)
+            // Apply optimistic overrides onto the fresh page so chips don't flicker.
+            let items = page.items.map { space -> AnonymousSpace in
+                var copy = space
+                if let joined = membershipLocal[space.id] {
+                    copy.isJoined = joined
+                }
+                return copy
+            }
             withAnimation(MatteryaMotion.insert) {
-                spacesByFilter[filter] = page.items
+                spacesByFilter[filter] = items
                 spacesCursor[filter] = page.nextCursor
             }
+            reconcileMembershipLocal(with: page.items)
         } catch let err as AnonymousError {
             if case .paidDisabled = err, filter == .paid {
                 spacesByFilter[filter] = []
@@ -527,7 +563,7 @@ final class AnonymousStore {
                 ?? (spacesByFilter[.joined] ?? []).first(where: matches)
                 ?? spacesByFilter.values.flatMap { $0 }.first(where: matches)
             if let known {
-                withAnimation(MatteryaMotion.snappy) { currentSpace = known }
+                withAnimation(MatteryaMotion.snappy) { currentSpace = applyingMembershipLocal(known) }
             }
             // Clear previous space's posts so we don't flash the wrong room.
             spacePosts = []
@@ -551,7 +587,7 @@ final class AnonymousStore {
                 )
                 let page = try await pageTask
                 if let fresh = await metaTask {
-                    withAnimation(MatteryaMotion.snappy) { currentSpace = fresh }
+                    withAnimation(MatteryaMotion.snappy) { currentSpace = applyingMembershipLocal(fresh) }
                 }
                 for item in page.items { postById[item.id] = item }
                 let spaceOwn = mergeOwnRecentPosts(into: page.items).filter {
@@ -565,7 +601,7 @@ final class AnonymousStore {
             }
 
             let space = try await AnonymousService.space(slug: trimmed)
-            withAnimation(MatteryaMotion.snappy) { currentSpace = space }
+            withAnimation(MatteryaMotion.snappy) { currentSpace = applyingMembershipLocal(space) }
             // Chronological + cursor — Hot/score order breaks keyset pagination.
             let page = try await AnonymousService.listPosts(
                 spaceId: space.id,
@@ -635,110 +671,155 @@ final class AnonymousStore {
             }
         }
         guard !urls.isEmpty else { return }
-        ImageCache.shared.prefetch(urls, maxPixelSize: 540, aggressive: true)
+        ImageCache.shared.prefetch(urls, maxPixelSize: 420, aggressive: false)
+    }
+
+    /// Effective membership — prefers optimistic override over directory / space payload.
+    func isJoined(_ space: AnonymousSpace) -> Bool {
+        if let override = membershipLocal[space.id] { return override }
+        return space.isJoined == true
+    }
+
+    func isMembershipBusy(_ spaceId: String) -> Bool {
+        membershipBusyIds.contains(spaceId)
     }
 
     @discardableResult
     func joinCurrentSpace() async -> Bool {
         guard let space = currentSpace else { return false }
-        return await ensureJoined(space)
+        // Chip path — paint Join→Leave instantly; network is fire-and-forget.
+        return await ensureJoined(space, waitForServer: false)
     }
 
     /// Join a Space when needed so POST / COMMENT succeed (API requires membership).
+    /// - Parameter waitForServer: `true` for composer/post (must land); `false` for Join chip.
     @discardableResult
-    func ensureJoined(_ space: AnonymousSpace) async -> Bool {
-        if space.isJoined == true {
-            if currentSpace?.id == space.id {
-                currentSpace?.isJoined = true
-            }
-            return true
-        }
+    func ensureJoined(_ space: AnonymousSpace, waitForServer: Bool = true) async -> Bool {
+        if isJoined(space) { return true }
         if space.isPaid {
             lastError = AnonymousError.paidDisabled.errorDescription
             return false
         }
-        // Optimistic UI — never leave the Join button spinning on a slow /spaces refresh.
-        markJoinedLocally(spaceId: space.id, slug: space.slug)
-        if currentSpace?.id == space.id || currentSpace?.slug == space.slug {
-            currentSpace?.isJoined = true
-            currentSpace?.memberCount = (currentSpace?.memberCount ?? 0) + 1
+        if membershipBusyIds.contains(space.id) {
+            // Another Leave/Join is in flight — wait briefly for it if posting.
+            guard waitForServer else { return isJoined(space) }
+            let deadline = Date().addingTimeInterval(Self.membershipNetworkTimeout)
+            while membershipBusyIds.contains(space.id), Date() < deadline {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            return isJoined(space)
         }
+
+        applyMembershipOptimistic(spaceId: space.id, slug: space.slug, joined: true)
+        membershipBusyIds.insert(space.id)
+
+        if waitForServer {
+            let ok = await commitJoin(spaceId: space.id, slug: space.slug)
+            membershipBusyIds.remove(space.id)
+            return ok
+        }
+
+        let spaceId = space.id
+        let slug = space.slug
+        Task { @MainActor in
+            _ = await self.commitJoin(spaceId: spaceId, slug: slug)
+            self.membershipBusyIds.remove(spaceId)
+        }
+        return true
+    }
+
+    private func commitJoin(spaceId: String, slug: String) async -> Bool {
         do {
-            _ = try await AnonymousService.join(spaceId: space.id)
-            // Refresh joined list off the critical path (was awaiting and timing out).
-            Task { await loadSpaces(filter: .joined, force: true) }
+            try await withMembershipTimeout {
+                _ = try await AnonymousService.join(spaceId: spaceId)
+            }
+            // Soft directory sync later — never on the Join chip path.
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                await self.loadSpaces(filter: .joined, force: true)
+            }
             return true
         } catch let err as AnonymousError {
-            // Roll back optimistic join.
-            markLeftLocally(spaceId: space.id, slug: space.slug)
-            if currentSpace?.id == space.id || currentSpace?.slug == space.slug {
-                currentSpace?.isJoined = false
-                if let count = currentSpace?.memberCount {
-                    currentSpace?.memberCount = max(0, count - 1)
-                }
-            }
+            applyMembershipOptimistic(spaceId: spaceId, slug: slug, joined: false)
             lastError = err.errorDescription
             return false
         } catch {
-            markLeftLocally(spaceId: space.id, slug: space.slug)
-            if currentSpace?.id == space.id || currentSpace?.slug == space.slug {
-                currentSpace?.isJoined = false
-                if let count = currentSpace?.memberCount {
-                    currentSpace?.memberCount = max(0, count - 1)
-                }
-            }
+            applyMembershipOptimistic(spaceId: spaceId, slug: slug, joined: false)
             lastError = error.localizedDescription
             return false
-        }
-    }
-
-    private func markJoinedLocally(spaceId: String, slug: String) {
-        for key in spacesByFilter.keys {
-            guard var list = spacesByFilter[key] else { continue }
-            if let idx = list.firstIndex(where: { $0.id == spaceId || $0.slug == slug }) {
-                list[idx].isJoined = true
-                if let count = list[idx].memberCount {
-                    list[idx].memberCount = count + 1
-                }
-                spacesByFilter[key] = list
-            }
-        }
-    }
-
-    private func markLeftLocally(spaceId: String, slug: String) {
-        for key in spacesByFilter.keys {
-            guard var list = spacesByFilter[key] else { continue }
-            if let idx = list.firstIndex(where: { $0.id == spaceId || $0.slug == slug }) {
-                list[idx].isJoined = false
-                if let count = list[idx].memberCount {
-                    list[idx].memberCount = max(0, count - 1)
-                }
-                spacesByFilter[key] = list
-            }
         }
     }
 
     func leaveCurrentSpace() async {
         guard let space = currentSpace else { return }
-        // Optimistic leave so the Join button returns immediately.
-        currentSpace?.isJoined = false
-        if let count = currentSpace?.memberCount {
-            currentSpace?.memberCount = max(0, count - 1)
+        if membershipBusyIds.contains(space.id) { return }
+        if !isJoined(space) { return }
+
+        applyMembershipOptimistic(spaceId: space.id, slug: space.slug, joined: false)
+        membershipBusyIds.insert(space.id)
+        let spaceId = space.id
+        let slug = space.slug
+        // Never await network on the Leave chip — that blocked MainActor under cold API / seed locks.
+        Task { @MainActor in
+            defer { self.membershipBusyIds.remove(spaceId) }
+            do {
+                try await self.withMembershipTimeout {
+                    try await AnonymousService.leave(spaceId: spaceId)
+                }
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 800_000_000)
+                    await self.loadSpaces(filter: .joined, force: true)
+                }
+            } catch let err as AnonymousError {
+                self.applyMembershipOptimistic(spaceId: spaceId, slug: slug, joined: true)
+                self.lastError = err.errorDescription
+            } catch {
+                self.applyMembershipOptimistic(spaceId: spaceId, slug: slug, joined: true)
+                self.lastError = error.localizedDescription
+            }
         }
-        markLeftLocally(spaceId: space.id, slug: space.slug)
-        do {
-            try await AnonymousService.leave(spaceId: space.id)
-            Task { await loadSpaces(filter: .joined, force: true) }
-        } catch let err as AnonymousError {
-            currentSpace?.isJoined = true
-            currentSpace?.memberCount = (currentSpace?.memberCount ?? 0) + 1
-            markJoinedLocally(spaceId: space.id, slug: space.slug)
-            lastError = err.errorDescription
-        } catch {
-            currentSpace?.isJoined = true
-            currentSpace?.memberCount = (currentSpace?.memberCount ?? 0) + 1
-            markJoinedLocally(spaceId: space.id, slug: space.slug)
-            lastError = error.localizedDescription
+    }
+
+    /// Touch only the membership override + currentSpace flags — do not rewrite every filter list.
+    private func applyMembershipOptimistic(spaceId: String, slug: String, joined: Bool) {
+        membershipLocal[spaceId] = joined
+        if currentSpace?.id == spaceId || currentSpace?.slug == slug {
+            // Keep payload in sync for any code still reading `currentSpace.isJoined`,
+            // but avoid memberCount churn that forces heavy header relayout.
+            currentSpace?.isJoined = joined
+        }
+        // Patch the active directory filter in place (one list) so cards flip without a storm.
+        let keys: [AnonymousSpaceFilter] = [activeSpaceFilter, .joined]
+        var seen = Set<AnonymousSpaceFilter>()
+        for key in keys where seen.insert(key).inserted {
+            guard var list = spacesByFilter[key] else { continue }
+            if let idx = list.firstIndex(where: { $0.id == spaceId || $0.slug == slug }) {
+                let wasJoined = list[idx].isJoined == true
+                list[idx].isJoined = joined
+                if wasJoined != joined, let count = list[idx].memberCount {
+                    list[idx].memberCount = joined ? count + 1 : max(0, count - 1)
+                }
+                spacesByFilter[key] = list
+            }
+        }
+    }
+
+    private func withMembershipTimeout(
+        _ operation: @MainActor @escaping () async throws -> Void
+    ) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { @MainActor in
+                try await operation()
+            }
+            group.addTask {
+                try await Task.sleep(
+                    nanoseconds: UInt64(Self.membershipNetworkTimeout * 1_000_000_000)
+                )
+                throw AnonymousError.network("Membership timed out. Try again.")
+            }
+            // First finisher wins — success returns, timeout throws, then cancel the other.
+            try await group.next()
+            group.cancelAll()
         }
     }
 
@@ -914,8 +995,10 @@ final class AnonymousStore {
         if feed.count >= AnonymousService.feedSoftCap {
             feedHasMore = true
             // Trim oldest painted cards so RAM stays light while scroll stays endless.
-            let keep = Array(feed.suffix(600))
+            let keep = Array(feed.suffix(90))
+            let keepIDs = Set(keep.map(\.id))
             feed = keep
+            postById = postById.filter { keepIDs.contains($0.key) }
         }
         feedLoadingMore = true
         defer { feedLoadingMore = false }

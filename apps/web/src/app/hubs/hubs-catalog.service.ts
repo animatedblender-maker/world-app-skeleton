@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import type { CountryPost } from '../core/models/post.model';
 import { PostsService } from '../core/services/posts.service';
+import { rebrandCompetitorNames } from '../core/utils/content-sanitize';
 import { HubsSeedService } from './hubs-seed.service';
 
 export type HubsHomeFilter =
@@ -580,7 +581,7 @@ export class HubsCatalogService {
   displayBody(post: CountryPost): string {
     let body = String(post.body || '');
     body = body.replace(/__spark__\|/g, '').replace(/__story__\|[^\n]*/g, '').trim();
-    return body;
+    return rebrandCompetitorNames(body);
   }
 
   displayAuthor(post: CountryPost): string {

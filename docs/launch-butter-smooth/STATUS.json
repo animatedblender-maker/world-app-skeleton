@@ -3,9 +3,9 @@
   "phase": "fix-hubs-r2",
   "running": true,
   "started_at": "2026-10-01T15:00:00Z",
-  "updated_at": "2026-10-16T21:36:27Z",
+  "updated_at": "2026-10-16T21:38:32Z",
   "overall_pct": 59.6,
-  "headline": "CRITICAL: stop serving pub-*.r2.dev (CF1010) \u2014 back to signed R2 for hubs play+thumbs",
+  "headline": "API live signed R2 again \u2014 rebuild iOS 0b26f1b for hubs play+thumbs",
   "surfaces": [
     {
       "id": "feed",
@@ -181,6 +181,10 @@
     {
       "t": "2026-10-16T21:36:27Z",
       "msg": "Hubs broken: API returned pub-*.r2.dev (CF 1010). Thumbs same. Revert prefer-public; hubs resolve signed; skip dead poster URLs."
+    },
+    {
+      "t": "2026-10-16T21:38:32Z",
+      "msg": "Render live: /v1/playback + /v1/poster/batch return signed cloudflarestorage; Range 206 video+webp. Rebuild app 0b26f1b."
     }
   ]
 }

@@ -95,7 +95,7 @@ enum FeedCompositionEngine {
             }
 
             let viewed = SparkDiscoveryEngine.isViewed(post)
-                && !PlayPlatformBridge.isWrittenHomePost(post)
+                && !(PlayPlatformBridge.isWrittenHomePost(post) && !PlayPlatformBridge.isHomeImageCard(post))
             if policy.preferUnviewed, viewed, !policy.allowRecycleWhenExhausted {
                 continue
             }
@@ -164,7 +164,7 @@ enum FeedCompositionEngine {
         // Prefer unviewed videos. Written/text stay in the fresh pool.
         if policy.preferUnviewed {
             func isFreshVideo(_ c: RecommendationCandidate) -> Bool {
-                PlayPlatformBridge.isWrittenHomePost(c.post)
+                (PlayPlatformBridge.isWrittenHomePost(c.post) && !PlayPlatformBridge.isHomeImageCard(c.post))
                     || !SparkDiscoveryEngine.isViewed(c.post)
             }
             let fresh = out.filter(isFreshVideo)

@@ -38,7 +38,8 @@ enum ScreenshotMode {
         deactivatedAt: nil,
         deletedAt: nil,
         createdAt: ISO8601DateFormatter().string(from: Date()),
-        updatedAt: ISO8601DateFormatter().string(from: Date())
+        updatedAt: ISO8601DateFormatter().string(from: Date()),
+        isVerified: false
     )
 
     static var demoConversations: [Conversation] {

@@ -136,15 +136,26 @@ enum DemoPersonNames {
         )
     }
 
-    /// True when a stored display name is still a placeholder like "User 000123".
+    /// True when a stored display name is still a placeholder like "User 000123",
+    /// "Hubs", a bare country label, or other non-person seed leftovers.
     static func isPlaceholderDisplayName(_ value: String?) -> Bool {
         guard let raw = value?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
             return true
         }
         if raw.range(of: #"^User\s+\d+$"#, options: .regularExpression) != nil { return true }
-        if raw.range(of: #"^user\d+$"#, options: [.regularExpression, .caseInsensitive]) != nil { return true }
+        if raw.range(of: #"^user[_\s]?\d+$"#, options: [.regularExpression, .caseInsensitive]) != nil { return true }
         if raw.lowercased().hasPrefix("user_") { return true }
-        if raw.caseInsensitiveCompare("Member") == .orderedSame { return true }
+        let lower = raw.lowercased()
+        if lower == "member" || lower == "hubs" || lower == "channel" || lower == "user"
+            || lower == "admin" || lower == "bot" || lower == "demo" || lower == "test" {
+            return true
+        }
+        // Bare country / focus-folder labels that used to leak into “Shared from …”.
+        let countryLabels: Set<String> = [
+            "united states", "usa", "america", "germany", "deutschland",
+            "egypt", "albania", "france", "japan", "brazil", "canada",
+        ]
+        if countryLabels.contains(lower) { return true }
         return false
     }
 

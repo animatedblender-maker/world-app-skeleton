@@ -40,6 +40,24 @@ Buttons:
 - **Re-sign URLs only** — refresh 7‑day R2 presigns  
 - **Queue via Kafka** — enqueue job (needs `KAFKA_ENABLED`)
 
+## MIND embeddings catch-up cron
+
+Hourly job fills Voyage title/body vectors for posts that missed inline
+`scheduleEmbeddingForPost` (uploads + pipeline).
+
+```bash
+curl -X POST 'https://api.matterya.com/cron/mind-embeddings?limit=400' \
+  -H "x-cron-secret: PASTE_THE_SAME_SECRET_HERE"
+```
+
+Render Blueprint service: `matterya-mind-embeddings` (`15 * * * *`, script
+`apps/api/scripts/run-mind-embeddings-cron.mjs`). Same `CONTENT_CRON_SECRET` as
+content-pipeline. Web service also needs `VOYAGE_API_KEY` (and optional
+`MIND_EMBEDDINGS_ENABLED=true`).
+
+If Blueprint does not create the Cron Job on an existing account: Dashboard →
+New → Cron Job → copy settings from `render.yaml` (`matterya-mind-embeddings`).
+
 ## CONTENT_CRON_SECRET — what is it?
 
 **You invent it.** It is not from Cloudflare.

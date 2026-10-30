@@ -22,6 +22,8 @@ export type PolicyLeaf = {
   outcome: PolicyOutcome;
   /** Short policy rationale (ops only; not shown as Remove/Mark). */
   rationale?: string;
+  /** Escalation weight for account strikes. Only relevant when outcome is remove. */
+  severity?: 'mild' | 'severe';
 };
 
 export type PolicyBranch = {
@@ -67,7 +69,9 @@ export const POLICY_TREE: PolicyBranch = {
           {
             key: '0',
             label: 'Other / not listed',
-            node: leaf('other.unlisted', 'Other unlisted violation', 'other', 'mark', 'Catch-all until policy refined'),
+            node: leaf('other.unlisted', 'Other unlisted violation', 'other', 'mark', {
+              rationale: 'Catch-all until policy refined',
+            }),
           },
         ],
       },
@@ -80,7 +84,7 @@ export const POLICY_TREE: PolicyBranch = {
         'No violation / false positive',
         'other',
         'dismiss',
-        'Clears auto flags; content stays'
+        { rationale: 'Clears auto flags; content stays' }
       ),
     },
     {
@@ -91,7 +95,7 @@ export const POLICY_TREE: PolicyBranch = {
         'Needs second look',
         'other',
         'mark',
-        'Keep live tagged until policy/ops review'
+        { rationale: 'Keep live tagged until policy/ops review' }
       ),
     },
   ],
@@ -102,9 +106,17 @@ function leaf(
   label: string,
   root: ModerationCategorySlug,
   outcome: PolicyOutcome,
-  rationale?: string
+  opts?: { rationale?: string; severity?: 'mild' | 'severe' }
 ): PolicyLeaf {
-  return { kind: 'leaf', id, label, root, outcome, rationale };
+  return {
+    kind: 'leaf',
+    id,
+    label,
+    root,
+    outcome,
+    rationale: opts?.rationale,
+    severity: opts?.severity ?? (outcome === 'remove' ? 'mild' : undefined),
+  };
 }
 
 function branch(id: string, question: string, options: PolicyOption[]): PolicyBranch {
@@ -205,7 +217,8 @@ function harassmentTree(): PolicyNode {
             'harassment.threats.credible',
             'Credible threat of violence',
             'harassment',
-            'remove'
+            'remove',
+            { severity: 'severe' }
           ),
         },
         {
@@ -225,7 +238,8 @@ function harassmentTree(): PolicyNode {
             'harassment.threats.wish_harm',
             'Wishing harm / death wish',
             'harassment',
-            'remove'
+            'remove',
+            { severity: 'severe' }
           ),
         },
       ]),
@@ -251,7 +265,8 @@ function harassmentTree(): PolicyNode {
             'harassment.sexual.blackmail',
             'Sexual blackmail',
             'harassment',
-            'remove'
+            'remove',
+            { severity: 'severe' }
           ),
         },
         {
@@ -273,7 +288,8 @@ function harassmentTree(): PolicyNode {
         'harassment.stalking',
         'Stalking / repeated unwanted contact',
         'harassment',
-        'remove'
+        'remove',
+        { severity: 'severe' }
       ),
     },
     {
@@ -298,12 +314,16 @@ function hateTree(): PolicyNode {
         {
           key: '1',
           label: 'Dehumanizing language',
-          node: leaf('hate.protected.dehumanizing', 'Dehumanizing hate', 'hate', 'remove'),
+          node: leaf('hate.protected.dehumanizing', 'Dehumanizing hate', 'hate', 'remove', {
+            severity: 'severe',
+          }),
         },
         {
           key: '2',
           label: 'Slurs targeting a group',
-          node: leaf('hate.protected.slurs', 'Group-targeted slurs', 'hate', 'remove'),
+          node: leaf('hate.protected.slurs', 'Group-targeted slurs', 'hate', 'remove', {
+            severity: 'severe',
+          }),
         },
         {
           key: '3',
@@ -320,7 +340,9 @@ function hateTree(): PolicyNode {
     {
       key: '2',
       label: 'Praise of hate groups / atrocities',
-      node: leaf('hate.praise', 'Praise of hate groups', 'hate', 'remove'),
+      node: leaf('hate.praise', 'Praise of hate groups', 'hate', 'remove', {
+        severity: 'severe',
+      }),
     },
     {
       key: '3',
@@ -371,7 +393,7 @@ function matureTree(): PolicyNode {
         'Sexualization of minors',
         'mature',
         'remove',
-        'Zero tolerance — remove immediately'
+        { rationale: 'Zero tolerance — remove immediately', severity: 'severe' }
       ),
     },
     {
@@ -423,17 +445,23 @@ function violenceTree(): PolicyNode {
     {
       key: '1',
       label: 'Real-world graphic gore',
-      node: leaf('violence.gore', 'Graphic gore', 'violence', 'remove'),
+      node: leaf('violence.gore', 'Graphic gore', 'violence', 'remove', {
+        severity: 'severe',
+      }),
     },
     {
       key: '2',
       label: 'Animal cruelty',
-      node: leaf('violence.animal', 'Animal cruelty', 'violence', 'remove'),
+      node: leaf('violence.animal', 'Animal cruelty', 'violence', 'remove', {
+        severity: 'severe',
+      }),
     },
     {
       key: '3',
       label: 'Incitement to violent crime',
-      node: leaf('violence.incitement', 'Incitement to violence', 'violence', 'remove'),
+      node: leaf('violence.incitement', 'Incitement to violence', 'violence', 'remove', {
+        severity: 'severe',
+      }),
     },
     {
       key: '4',
@@ -453,7 +481,9 @@ function selfHarmTree(): PolicyNode {
     {
       key: '1',
       label: 'Promotion / instruction',
-      node: leaf('self_harm.promotion', 'Self-harm promotion', 'self_harm', 'remove'),
+      node: leaf('self_harm.promotion', 'Self-harm promotion', 'self_harm', 'remove', {
+        severity: 'severe',
+      }),
     },
     {
       key: '2',
@@ -468,7 +498,7 @@ function selfHarmTree(): PolicyNode {
         'Ideation seeking help',
         'self_harm',
         'mark',
-        'Keep for help resources; do not amplify'
+        { rationale: 'Keep for help resources; do not amplify' }
       ),
     },
     {
@@ -514,12 +544,16 @@ function scamTree(): PolicyNode {
     {
       key: '1',
       label: 'Financial fraud / fake giveaway',
-      node: leaf('scam.financial', 'Financial fraud', 'scam', 'remove'),
+      node: leaf('scam.financial', 'Financial fraud', 'scam', 'remove', {
+        severity: 'severe',
+      }),
     },
     {
       key: '2',
       label: 'Impersonation of Matterya / brands',
-      node: leaf('scam.impersonation', 'Brand impersonation scam', 'scam', 'remove'),
+      node: leaf('scam.impersonation', 'Brand impersonation scam', 'scam', 'remove', {
+        severity: 'severe',
+      }),
     },
     {
       key: '3',
@@ -539,17 +573,23 @@ function doxxingTree(): PolicyNode {
     {
       key: '1',
       label: 'Home address / phone / ID documents',
-      node: leaf('doxxing.pii_hard', 'Hard PII exposure', 'doxxing', 'remove'),
+      node: leaf('doxxing.pii_hard', 'Hard PII exposure', 'doxxing', 'remove', {
+        severity: 'severe',
+      }),
     },
     {
       key: '2',
       label: 'Private messages / intimate images without consent',
-      node: leaf('doxxing.intimate', 'Non-consensual intimate', 'doxxing', 'remove'),
+      node: leaf('doxxing.intimate', 'Non-consensual intimate', 'doxxing', 'remove', {
+        severity: 'severe',
+      }),
     },
     {
       key: '3',
       label: 'Workplace / school identifying info to harass',
-      node: leaf('doxxing.workplace', 'Workplace/school doxx', 'doxxing', 'remove'),
+      node: leaf('doxxing.workplace', 'Workplace/school doxx', 'doxxing', 'remove', {
+        severity: 'severe',
+      }),
     },
     {
       key: '4',
@@ -602,4 +642,9 @@ export function outcomeToResolveAction(
   if (outcome === 'remove') return 'remove';
   if (outcome === 'mark') return 'mark';
   return 'skip';
+}
+
+export function leafSeverity(leaf: PolicyLeaf): 'mild' | 'severe' {
+  if (leaf.outcome !== 'remove') return 'mild';
+  return leaf.severity === 'severe' ? 'severe' : 'mild';
 }

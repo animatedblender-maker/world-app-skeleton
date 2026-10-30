@@ -158,6 +158,9 @@ struct NotificationsPanelView: View {
         case "comment_like": return "\(actor) liked your comment"
         case "comment_reply", "reply": return "\(actor) replied to your comment"
         case "message": return "\(actor) sent you a message"
+        case "moderation_removal": return "Your post was removed by Matterya"
+        case "moderation_report_resolved": return "We took action on a post you reported"
+        case "moderation_account": return "Matterya account notice"
         default: return "\(actor) interacted with you"
         }
     }

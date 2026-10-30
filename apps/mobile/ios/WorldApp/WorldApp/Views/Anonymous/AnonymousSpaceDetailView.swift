@@ -41,11 +41,8 @@ struct AnonymousSpaceDetailView: View {
         .sheet(isPresented: $showModPanel) {
             AnonymousModPanelView(spaceTitle: store.currentSpace?.title ?? slug)
         }
-        .confirmationDialog("Report Space", isPresented: $showReport, titleVisibility: .visible) {
-            Button("Harassment", role: .destructive) { Task { await report("harassment") } }
-            Button("Spam", role: .destructive) { Task { await report("spam") } }
-            Button("Illegal or harmful", role: .destructive) { Task { await report("illegal") } }
-            Button("Cancel", role: .cancel) {}
+        .matteryaReportDialog("Report Space", isPresented: $showReport) { reason in
+            Task { await report(MatteryaReportCategories.slug(forLabel: reason)) }
         }
     }
 
@@ -168,20 +165,32 @@ struct AnonymousSpaceDetailView: View {
                     .buttonStyle(.plain)
                     .disabled(isPreparingComposer)
 
-                    if space.isJoined == true {
+                    let joined = store.isJoined(space)
+                    let busy = store.isMembershipBusy(space.id)
+                    if joined {
                         Button {
                             Task { await store.leaveCurrentSpace() }
                         } label: {
-                            spaceChip("Leave", systemImage: "rectangle.portrait.and.arrow.right", style: .quiet)
+                            spaceChip(
+                                busy ? "Leaving…" : "Leave",
+                                systemImage: "rectangle.portrait.and.arrow.right",
+                                style: .quiet
+                            )
                         }
                         .buttonStyle(.plain)
+                        .disabled(busy)
                     } else {
                         Button {
                             Task { await store.joinCurrentSpace() }
                         } label: {
-                            spaceChip("Join", systemImage: "person.badge.plus", style: .outline)
+                            spaceChip(
+                                busy ? "Joining…" : "Join",
+                                systemImage: "person.badge.plus",
+                                style: .outline
+                            )
                         }
                         .buttonStyle(.plain)
+                        .disabled(busy)
                     }
 
                     Spacer(minLength: 4)
@@ -632,11 +641,8 @@ struct AnonymousPostCard: View {
                 Theme.divider.frame(height: 0.5)
             }
         }
-        .confirmationDialog("Report post", isPresented: $showReport, titleVisibility: .visible) {
-            Button("Harassment", role: .destructive) { Task { await reportPost("harassment") } }
-            Button("Spam", role: .destructive) { Task { await reportPost("spam") } }
-            Button("Doxxing / identity", role: .destructive) { Task { await reportPost("doxxing") } }
-            Button("Cancel", role: .cancel) {}
+        .matteryaReportDialog("Report post", isPresented: $showReport) { reason in
+            Task { await reportPost(MatteryaReportCategories.slug(forLabel: reason)) }
         }
     }
 
@@ -705,7 +711,7 @@ struct AnonymousPostCard: View {
             // Clear+overlay+clipped — never a paper Color behind the bitmap (that was
             // the white letterbox/pillarbox). Tall memes grow the card (Reddit-style).
             // Feed decode stays light (540) — 720 was hitching Masquerade For you scroll.
-            let listPx: CGFloat = style == .thread ? 720 : 540
+            let listPx: CGFloat = style == .thread ? 540 : 420
             let corner: CGFloat = style == .feed ? 0 : 10
             let aspect = photoAspect
             Color.clear
@@ -718,7 +724,8 @@ struct AnonymousPostCard: View {
                         contentMode: .fill,
                         // Static muted tile — never an infinite spinner on failed/slow R2.
                         placeholder: AnyView(Theme.canvasMuted),
-                        urgent: true,
+                        // Feed must defer decode mid-fling; thread can stay snappy.
+                        urgent: style == .thread,
                         onZoomingChanged: { zooming in
                             isPhotoPinching = zooming
                         },
@@ -854,10 +861,10 @@ private struct MasqueradeVideoPoster: View {
             } else if let remote = remotePosterURL, !remoteFailed {
                 CachedAsyncImage(
                     url: remote,
-                    maxPixelSize: 540,
+                    maxPixelSize: 420,
                     contentMode: .fill,
                     placeholder: AnyView(Color.black),
-                    urgent: true,
+                    urgent: false,
                     onLoadFailed: { _ in remoteFailed = true }
                 )
                 .frame(maxWidth: .infinity)
@@ -878,12 +885,16 @@ private struct MasqueradeVideoPoster: View {
                 .stroke(Theme.border.opacity(0.7), lineWidth: 0.5)
         )
         .task(id: "\(postID)|\(videoURL.absoluteString)") {
-            // Wait out fling so space scroll does not fight AV decode.
+            // Prefer remote thumb — opening every R2 MP4 for frame-0 crushed Masquerade.
+            if remotePosterURL != nil, !remoteFailed { return }
             for _ in 0..<8 {
                 if !ScrollBudget.isFlinging { break }
                 try? await Task.sleep(nanoseconds: 120_000_000)
             }
             guard !Task.isCancelled else { return }
+            // Settle briefly so fling past cards never starts AV extract.
+            try? await Task.sleep(nanoseconds: 280_000_000)
+            guard !Task.isCancelled, !ScrollBudget.isFlinging else { return }
             if let image = await VideoFrameCache.shared.image(
                 for: postID,
                 videoURL: videoURL,

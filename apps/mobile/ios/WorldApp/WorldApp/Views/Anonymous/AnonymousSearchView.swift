@@ -351,11 +351,12 @@ struct AnonymousSearchView: View {
     private func spaceButton(_ space: AnonymousSpace) -> some View {
         AnonymousSpaceCard(
             space: space,
+            isJoined: store.isJoined(space),
             onOpen: {
                 commitHistory()
                 store.pushSpace(slug: space.slug)
             },
-            onJoin: space.isJoined == true || space.isPaid
+            onJoin: store.isJoined(space) || space.isPaid
                 ? nil
                 : { _ = await store.joinSpace(space) }
         )

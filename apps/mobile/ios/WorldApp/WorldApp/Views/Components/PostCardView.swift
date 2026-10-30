@@ -100,9 +100,7 @@ struct PostCardView: View {
             .buttonStyle(.plain)
         } else if !post.displayBody.isEmpty {
             Button { onOpenPost?() } label: {
-                Text(post.displayBody)
-                    .font(.body)
-                    .foregroundStyle(Theme.ink)
+                MatteryaRichText(text: post.displayBody, font: .body, color: Theme.ink)
                     .padding(.horizontal, Theme.pagePadding)
                     .padding(.bottom, 12)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -180,14 +178,9 @@ struct PostCardView: View {
                 .buttonStyle(.plain)
             }
 
-            // No headlines — caption/body only.
-            if !post.displayExcerpt.isEmpty, post.mediaURL != nil || post.thumbURL != nil {
+            // One caption: body when present; headline only when body empty.
+            if !post.displayExcerpt.isEmpty {
                 Text(post.displayExcerpt)
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.ink)
-                    .lineLimit(3)
-            } else if !post.displayBody.isEmpty {
-                Text(post.displayBody)
                     .font(.subheadline)
                     .foregroundStyle(Theme.ink)
                     .lineLimit(3)

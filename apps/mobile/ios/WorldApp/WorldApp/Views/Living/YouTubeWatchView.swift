@@ -28,9 +28,14 @@ struct YouTubeWatchView: View {
     @State private var dismissDragOffset: CGFloat = 0
     @State private var isPullingToMinimize = false
     @State private var isLiking = false
-    /// Endless related shelf — grows as the user scrolls.
+    /// Endless related shelf — grows as the user scrolls (unique long-form only, never loops).
     @State private var relatedWindow: [RelatedShelfItem] = []
     @State private var relatedCursor = 0
+    /// Growing unique candidate pool (seed + SlugShelf pages). Never modulo-recycled.
+    @State private var relatedPool: [CountryPost] = []
+    @State private var relatedShownIDs: Set<String> = []
+    @State private var isFetchingMoreRelated = false
+    @State private var relatedNetworkExhausted = false
     /// Scroll offset of meta content (0 = at top). Pull-down-to-FS only when near top.
     @State private var metaScrollOffset: CGFloat = 0
     /// Live pull progress for YT-style grab-to-fullscreen on non-video chrome.
@@ -40,7 +45,7 @@ struct YouTubeWatchView: View {
     @State private var showReportConfirm = false
     @State private var watchActionToast: String?
 
-    private let reportReasons = ["Spam", "Harassment", "Misinformation", "Other"]
+
 
     init(
         post: CountryPost,
@@ -84,8 +89,8 @@ struct YouTubeWatchView: View {
             return appState.hubPlaybackExpanded ? 1 : 0
         }
         guard appState.hubPlaybackExpanded else { return 0 }
-        // Once pull is underway, hide the entire watch chrome stack immediately.
-        if appState.hubPlaybackPullProgress > 0.08 { return 0 }
+        // Once pull/morph starts, snap chrome off — delayed fade left a grey trail.
+        if appState.hubPlaybackPullProgress > 0.01 { return 0 }
         return chromeOpacity
     }
 
@@ -101,7 +106,8 @@ struct YouTubeWatchView: View {
     /// paints through; canvas here was the grey box behind the morphing film.
     private var watchChromeBackground: Color {
         if !embedsPlayer { return .clear }
-        if isMinimizingGrab || appState.hubPlaybackPullProgress > 0.02 {
+        // Any pull/morph → instant clear (never interpolate canvas→clear = grey trail).
+        if isMinimizingGrab || appState.hubPlaybackPullProgress > 0.01 {
             return .clear
         }
         return Theme.canvas
@@ -110,7 +116,7 @@ struct YouTubeWatchView: View {
     /// Root backdrop — continuous path always clear so minimize never flashes canvas/ink.
     private var watchRootBackground: Color {
         if !embedsPlayer { return .clear }
-        if isMinimizingGrab || appState.hubPlaybackPullProgress > 0.02 {
+        if isMinimizingGrab || appState.hubPlaybackPullProgress > 0.01 {
             return .clear
         }
         return Theme.canvas
@@ -189,7 +195,7 @@ struct YouTubeWatchView: View {
                                 .padding(.top, 4)
                                 .id("comments-\(currentPost.id)")
 
-                            if !related.isEmpty || !relatedWindow.isEmpty {
+                            if !relatedWindow.isEmpty || !relatedPool.isEmpty || !related.isEmpty {
                                 relatedHeader
                                 LazyVStack(alignment: .leading, spacing: 0) {
                                     ForEach(relatedWindow) { item in
@@ -621,8 +627,9 @@ struct YouTubeWatchView: View {
     private var titleAndActionsChrome: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
-                if let headline = currentPost.displayHeadline {
-                    Text(headline)
+                // One caption: body when present; headline only when body empty.
+                if !currentPost.displayExcerpt.isEmpty {
+                    Text(currentPost.displayExcerpt)
                         .font(.system(size: 16, weight: .semibold, design: .default))
                         .foregroundStyle(isMinimizingGrab ? Theme.paper : Theme.ink)
                         .lineLimit(2)
@@ -659,17 +666,8 @@ struct YouTubeWatchView: View {
                 .padding(.top, 3)
                 .padding(.bottom, 6)
         }
-        .confirmationDialog(
-            "Report this video",
-            isPresented: $showReportConfirm,
-            titleVisibility: .visible
-        ) {
-            ForEach(reportReasons, id: \.self) { reason in
-                Button(reason, role: .destructive) {
-                    Task { await reportCurrentVideo(reason: reason) }
-                }
-            }
-            Button("Cancel", role: .cancel) {}
+        .matteryaReportDialog("Report this video", isPresented: $showReportConfirm) { reason in
+            Task { await reportCurrentVideo(reason: reason) }
         }
         .overlay(alignment: .bottom) {
             if let watchActionToast {
@@ -892,24 +890,136 @@ struct YouTubeWatchView: View {
     private func resetRelatedShelf() {
         relatedCursor = 0
         relatedWindow = []
-        appendRelatedPage(count: 16)
+        relatedShownIDs = [currentPost.id]
+        relatedNetworkExhausted = false
+        relatedPool = buildInitialRelatedPool()
+        // Netflix-dense related shelf under the player.
+        appendRelatedPage(count: 24)
+        Task { await ensureRelatedHeadroom(minRemaining: 24) }
     }
 
-    private func appendRelatedPage(count: Int = 12) {
-        guard !related.isEmpty else { return }
-        var next: [RelatedShelfItem] = []
-        next.reserveCapacity(count)
-        for i in 0..<count {
-            let index = (relatedCursor + i) % related.count
-            let post = related[index]
-            let cycle = (relatedCursor + i) / related.count
-            // Stable unique row id even when the catalog cycles.
-            next.append(RelatedShelfItem(id: "\(post.id)#\(cycle)-\(relatedCursor + i)", post: post))
+    /// Seed from parent related + cached For you / slug shelves — never a tiny looping list.
+    private func buildInitialRelatedPool() -> [CountryPost] {
+        var seen = Set<String>([currentPost.id])
+        var pool: [CountryPost] = []
+        func take(_ items: [CountryPost]) {
+            for post in items {
+                guard post.id != currentPost.id else { continue }
+                guard PlayPlatformBridge.isHubsForYouLongForm(post)
+                    || (post.hasVideo && !post.isReel)
+                else { continue }
+                guard seen.insert(post.id).inserted else { continue }
+                pool.append(post)
+            }
         }
-        relatedCursor += count
+        take(related)
+        let slug = YouTubeCatalogService.parentHubSlug(for: currentPost)
+        take(SlugShelfStore.shared.cachedPosts(for: slug))
+        take(SlugShelfStore.shared.cachedPosts(for: SlugShelfStore.forYouKey))
+        return pool
+    }
+
+    private var relatedRemainingCount: Int {
+        relatedPool.reduce(0) { partial, post in
+            partial + (relatedShownIDs.contains(post.id) ? 0 : 1)
+        }
+    }
+
+    /// Append the next unique page. Never modulo-recycles the same videos.
+    private func appendRelatedPage(count: Int = 24) {
+        let remaining = relatedPool.filter { !relatedShownIDs.contains($0.id) }
+        if remaining.isEmpty {
+            Task { await fetchMoreRelatedThenAppend(count: count) }
+            return
+        }
+        let batch = Array(remaining.prefix(count))
+        var next: [RelatedShelfItem] = []
+        next.reserveCapacity(batch.count)
+        for (i, post) in batch.enumerated() {
+            relatedShownIDs.insert(post.id)
+            next.append(RelatedShelfItem(id: "\(post.id)-\(relatedCursor + i)", post: post))
+        }
+        relatedCursor += batch.count
         relatedWindow.append(contentsOf: next)
-        // Prefetch thumbs for the new page; resolve Archive only for the first couple.
-        warmRelatedMedia(prefix: min(4, next.count), from: next, resolveArchive: relatedWindow.count <= 16)
+        warmRelatedMedia(prefix: min(3, next.count), from: next, resolveArchive: relatedWindow.count <= 24)
+        if relatedRemainingCount < 16 {
+            Task { await ensureRelatedHeadroom(minRemaining: 24) }
+        }
+    }
+
+    @MainActor
+    private func fetchMoreRelatedThenAppend(count: Int) async {
+        await ensureRelatedHeadroom(minRemaining: max(count, 24))
+        let remaining = relatedPool.filter { !relatedShownIDs.contains($0.id) }
+        guard !remaining.isEmpty else { return }
+        appendRelatedPage(count: count)
+    }
+
+    /// Pull more unique long-form from slug + For you shelves until headroom is filled.
+    @MainActor
+    private func ensureRelatedHeadroom(minRemaining: Int) async {
+        guard !isFetchingMoreRelated else { return }
+        guard relatedRemainingCount < minRemaining else { return }
+        guard !relatedNetworkExhausted else { return }
+        isFetchingMoreRelated = true
+        defer { isFetchingMoreRelated = false }
+
+        let slug = YouTubeCatalogService.parentHubSlug(for: currentPost)
+        let watchID = currentPost.id
+        var pages = 0
+        var sawFresh = false
+
+        while relatedRemainingCount < minRemaining, pages < 2 {
+            if Task.isCancelled { return }
+            pages += 1
+
+            let page: SlugShelfStore.Page
+            if SlugShelfStore.shared.hasMore(for: slug) {
+                // Ensure first page exists before load-more.
+                if SlugShelfStore.shared.cachedPosts(for: slug).isEmpty {
+                    page = await SlugShelfStore.shared.loadShelf(slug, force: false)
+                } else {
+                    page = await SlugShelfStore.shared.loadMoreShelf(slug)
+                }
+            } else if SlugShelfStore.shared.hasMore(for: SlugShelfStore.forYouKey) {
+                if SlugShelfStore.shared.cachedPosts(for: SlugShelfStore.forYouKey).isEmpty {
+                    page = await SlugShelfStore.shared.loadForYou(force: false)
+                } else {
+                    page = await SlugShelfStore.shared.loadMoreForYou()
+                }
+            } else if pages == 1 {
+                // Cold shelves — force a For you page once.
+                page = await SlugShelfStore.shared.loadForYou(force: false)
+            } else {
+                relatedNetworkExhausted = true
+                break
+            }
+
+            let existing = Set(relatedPool.map(\.id)).union(relatedShownIDs)
+            let fresh = page.items.filter { post in
+                guard !existing.contains(post.id), post.id != watchID else { return false }
+                return PlayPlatformBridge.isHubsForYouLongForm(post)
+                    || (post.hasVideo && !post.isReel)
+            }
+            if !fresh.isEmpty {
+                sawFresh = true
+                relatedPool.append(contentsOf: fresh)
+            }
+            if page.nextCursor == nil, fresh.isEmpty {
+                // This shelf is dry — loop will try For you / stop.
+                if !SlugShelfStore.shared.hasMore(for: slug),
+                   !SlugShelfStore.shared.hasMore(for: SlugShelfStore.forYouKey) {
+                    relatedNetworkExhausted = true
+                    break
+                }
+            }
+        }
+
+        if !sawFresh,
+           !SlugShelfStore.shared.hasMore(for: slug),
+           !SlugShelfStore.shared.hasMore(for: SlugShelfStore.forYouKey) {
+            relatedNetworkExhausted = true
+        }
     }
 
     private func warmRelatedAround(_ item: RelatedShelfItem) {

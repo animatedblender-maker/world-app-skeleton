@@ -1,6 +1,7 @@
 import { ChangeDetectorRef, Component, ElementRef, NgZone, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { DomSanitizer, type SafeHtml } from '@angular/platform-browser';
 import { ActivatedRoute, Router } from '@angular/router';
 import { Subscription } from 'rxjs';
 
@@ -16,6 +17,7 @@ import { PostAuthor } from '../core/models/post.model';
 import { VideoPlayerComponent } from '../components/video-player.component';
 import { environment } from '../../envirnoments/envirnoment';
 import { BottomTabsComponent } from '../components/bottom-tabs.component';
+import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitize';
 
 @Component({
   selector: 'app-messages-page',
@@ -195,8 +197,8 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
                             ></app-video-player>
                           </div>
 
-                          <div class="bubble" *ngIf="messageText(message) as text">
-                            <div class="body">{{ text }}</div>
+                          <div class="bubble" *ngIf="messageHtml(message) as html">
+                            <div class="body" [innerHTML]="html"></div>
                           </div>
 
                           <div class="reaction-strip" *ngIf="messageLikeCount(message) > 0">
@@ -713,6 +715,20 @@ import { BottomTabsComponent } from '../components/bottom-tabs.component';
     .body{
       white-space:pre-wrap;
       word-break:break-word;
+    }
+    .body strong{
+      font-weight:700;
+      color:inherit;
+    }
+    .body strong.md-h{
+      display:inline;
+      font-size:1.2em;
+      font-weight:700;
+      color:inherit;
+    }
+    .body em{
+      font-style:italic;
+      color:inherit;
     }
     .call-log-row{
       display:flex;
@@ -1386,7 +1402,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     private push: PushService,
     private callService: CallService,
     private zone: NgZone,
-    private cdr: ChangeDetectorRef
+    private cdr: ChangeDetectorRef,
+    private sanitizer: DomSanitizer
   ) {}
 
   async ngOnInit(): Promise<void> {
@@ -2680,6 +2697,18 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     return body;
   }
 
+  /** Bubble body with `**bold**` rendered (HTML-escaped first). */
+  messageHtml(message: Message): SafeHtml | null {
+    const text = this.messageText(message);
+    if (!text) return null;
+    return this.sanitizer.bypassSecurityTrustHtml(formatInlineBold(text));
+  }
+
+  /** Inbox list preview — bold content without `**` markers. */
+  messagePreviewPlain(message: Message): string {
+    return stripInlineBold(this.messageText(message));
+  }
+
   startReply(message: Message): void {
     if (!message) return;
     this.replyingTo = message;
@@ -2925,10 +2954,10 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     const reply = this.parseReply(body);
     if (reply) {
       const cleaned = reply.body.trim();
-      if (cleaned) return cleaned;
+      if (cleaned) return stripInlineBold(cleaned);
     }
     if (body && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body)) {
-      return body;
+      return stripInlineBold(body);
     }
     if (last.media_type === 'video') return 'Video';
     if (last.media_type === 'image') return 'Photo';

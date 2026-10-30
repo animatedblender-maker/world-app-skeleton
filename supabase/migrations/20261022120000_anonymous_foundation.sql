@@ -484,7 +484,9 @@ begin
 end $$;
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- Seed starter adult_public free Spaces (idempotent by normalized_slug)
+-- Seed adult_public free Spaces (idempotent by normalized_slug)
+-- Primary: secrets (confessions) + HighlyStrange (paranormal).
+-- Legacy general/advice/… seeds live in 20261024120000 (archived if present).
 -- ═══════════════════════════════════════════════════════════════════════════
 
 insert into anonymous.spaces (
@@ -493,51 +495,15 @@ insert into anonymous.spaces (
 )
 values
   (
-    'general', 'general', 'General',
-    'Open adult discussion for anything that fits Matterya Anonymous rules.',
-    'general', array['general', 'chat'],
+    'secrets', 'secrets', 'secrets',
+    'Anonymous confessions and things you needed to say out loud. Leave your identity outside.',
+    'confessions', array['secrets', 'confessions', 'offmychest'],
     'adult_public', 'free', 'free', 'active', 'en'
   ),
   (
-    'advice', 'advice', 'Advice',
-    'Ask for perspective and share experiences. Not professional medical or legal advice.',
-    'advice', array['advice', 'support'],
-    'adult_public', 'free', 'free', 'active', 'en'
-  ),
-  (
-    'creative', 'creative', 'Creative',
-    'Writing, art ideas, worldbuilding, and creative collaboration (text-only for now).',
-    'creative', array['creative', 'writing', 'art'],
-    'adult_public', 'free', 'free', 'active', 'en'
-  ),
-  (
-    'tech', 'tech', 'Tech',
-    'Software, hardware, AI, and builder talk without linking to your public Matterya profile.',
-    'tech', array['tech', 'dev', 'ai'],
-    'adult_public', 'free', 'free', 'active', 'en'
-  ),
-  (
-    'wellness', 'wellness', 'Wellness',
-    'Mental and physical wellness discussion among adults. Crisis help belongs with real services.',
-    'wellness', array['wellness', 'health'],
-    'adult_public', 'free', 'free', 'active', 'en'
-  ),
-  (
-    'offbeat', 'offbeat', 'Offbeat',
-    'Weird, niche, and delightfully strange topics — still within platform policy.',
-    'offbeat', array['offbeat', 'niche'],
-    'adult_public', 'free', 'free', 'active', 'en'
-  ),
-  (
-    'careers', 'careers', 'Careers',
-    'Work, interviews, and career pivots discussed under your Anonymous handle.',
-    'careers', array['careers', 'work'],
-    'adult_public', 'free', 'free', 'active', 'en'
-  ),
-  (
-    'books', 'books', 'Books',
-    'What you are reading, recommending, or arguing about — spoilers tagged in-text please.',
-    'books', array['books', 'reading'],
+    'HighlyStrange', 'highlystrange', 'HighlyStrange',
+    'Paranormal encounters, unexplained events, and highly strange stories — told under a mask.',
+    'paranormal', array['paranormal', 'strange', 'unexplained'],
     'adult_public', 'free', 'free', 'active', 'en'
   )
 on conflict (normalized_slug) do nothing;
@@ -551,14 +517,25 @@ cross join (
     (0, 'Be 18+. This entire section is adult-only.'),
     (1, 'No doxxing, threats, scams, or illegal content.'),
     (2, 'Do not share real names, contact info, or your ordinary Matterya identity.'),
-    (3, 'Report abuse. Blocking and reporting are available to everyone.')
+    (3, 'Report abuse. Blocking and reporting are available to everyone.'),
+    (4, 'Keep it real for this Space — confessions stay kind to bystanders; strange stories stay sincere.')
 ) as r(position, text)
-where s.normalized_slug in (
-  'general', 'advice', 'creative', 'tech', 'wellness', 'offbeat', 'careers', 'books'
-)
+where s.normalized_slug in ('secrets', 'highlystrange')
   and not exists (
     select 1 from anonymous.space_rules sr where sr.space_id = s.id
   );
+
+insert into anonymous.profiles (
+  username, normalized_username, avatar_seed, state, age_attested_at
+)
+values (
+  'archive_whisper',
+  'archive_whisper',
+  'seed-archive-whisper-v1',
+  'active',
+  now()
+)
+on conflict (normalized_username) do nothing;
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Audit + outbox (spec §11.2) — append-only, restricted

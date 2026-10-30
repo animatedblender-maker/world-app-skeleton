@@ -142,6 +142,10 @@ struct VideoThumbnailView: View {
             liveFrame0URL = cached
             return
         }
+        // Missing frame0_*.webp is common — do not re-GET after a known miss.
+        if Frame0PosterCache.isKnownMiss(post.id) {
+            return
+        }
         // Skip Frame0 fetch when a non-R2 usable poster already paints (e.g. IA services/img).
         if let existing = MediaURLResolver.hubsListPosterURL(for: post),
            MediaURLResolver.isUsablePosterURL(existing),
@@ -278,6 +282,8 @@ final class VideoFrameCache {
     static let shared = VideoFrameCache()
 
     private var memory: [String: UIImage] = [:]
+    private var memoryOrder: [String] = []
+    private let memoryLimit = 40
     /// In-flight extractors — waiters join instead of returning nil (nil = black poster).
     private var inflight: [String: Task<UIImage?, Never>] = [:]
     private var activeCount = 0
@@ -292,11 +298,22 @@ final class VideoFrameCache {
         try? FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
     }
 
-    func image(for postID: String, videoURL: URL) async -> UIImage? {
-        let key = cacheKey(postID: postID, videoURL: videoURL)
+    private func remember(_ image: UIImage, key: String) {
+        if memory[key] == nil {
+            memoryOrder.append(key)
+        }
+        memory[key] = image
+        while memoryOrder.count > memoryLimit {
+            let evict = memoryOrder.removeFirst()
+            memory.removeValue(forKey: evict)
+        }
+    }
+
+    func image(for postID: String, videoURL: URL, atFirstFrame: Bool = false) async -> UIImage? {
+        let key = cacheKey(postID: postID, videoURL: videoURL, atFirstFrame: atFirstFrame)
         if let cached = memory[key] { return cached }
         if let disk = loadFromDisk(key: key) {
-            memory[key] = disk
+            remember(disk, key: key)
             return disk
         }
 
@@ -323,7 +340,9 @@ final class VideoFrameCache {
             let playURL = playback.url
             let headers = playback.headers
             // Stable "random" mid-clip time per post — avoids black first frames / title cards.
+            // Masquerade feed posters pass atFirstFrame=true (literal t≈0).
             let sampleSeed = postID.utf8.reduce(0) { ($0 &* 31 &+ Int($1)) & 0x7fffffff }
+            let preferFirstFrame = atFirstFrame
 
             // Never block MainActor with AVAssetImageGenerator (Hubs freeze root cause).
             let image: UIImage? = await Task.detached(priority: .utility) {
@@ -336,6 +355,25 @@ final class VideoFrameCache {
                 } else {
                     asset = AVURLAsset(url: playURL)
                 }
+                let generator = AVAssetImageGenerator(asset: asset)
+                generator.appliesPreferredTrackTransform = true
+                generator.maximumSize = CGSize(width: 480, height: 480)
+
+                if preferFirstFrame {
+                    // Literal first displayed frame — Masquerade outside thumbnail.
+                    generator.requestedTimeToleranceBefore = .zero
+                    generator.requestedTimeToleranceAfter = CMTime(seconds: 0.15, preferredTimescale: 600)
+                    if let cgImage = try? generator.copyCGImage(at: .zero, actualTime: nil) {
+                        return UIImage(cgImage: cgImage)
+                    }
+                    // Tiny nudge if t=0 is an empty keyframe.
+                    let nudge = CMTime(seconds: 0.04, preferredTimescale: 600)
+                    if let cgImage = try? generator.copyCGImage(at: nudge, actualTime: nil) {
+                        return UIImage(cgImage: cgImage)
+                    }
+                    return nil
+                }
+
                 let duration = (try? await asset.load(.duration)) ?? .zero
                 let seconds = CMTimeGetSeconds(duration)
                 let targetSeconds: Double
@@ -349,9 +387,6 @@ final class VideoFrameCache {
                     targetSeconds = 1.0
                 }
                 let time = CMTime(seconds: targetSeconds, preferredTimescale: 600)
-                let generator = AVAssetImageGenerator(asset: asset)
-                generator.appliesPreferredTrackTransform = true
-                generator.maximumSize = CGSize(width: 720, height: 720)
                 generator.requestedTimeToleranceBefore = CMTime(seconds: 0.5, preferredTimescale: 600)
                 generator.requestedTimeToleranceAfter = CMTime(seconds: 1.0, preferredTimescale: 600)
                 if let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) {
@@ -365,7 +400,7 @@ final class VideoFrameCache {
             }.value
 
             guard let image else { return nil }
-            memory[key] = image
+            remember(image, key: key)
             saveToDisk(image: image, key: key)
             return image
         }
@@ -392,8 +427,8 @@ final class VideoFrameCache {
         }
     }
 
-    private func cacheKey(postID: String, videoURL: URL) -> String {
-        let raw = "\(postID)|\(videoURL.absoluteString)"
+    private func cacheKey(postID: String, videoURL: URL, atFirstFrame: Bool = false) -> String {
+        let raw = "\(postID)|\(videoURL.absoluteString)|\(atFirstFrame ? "f0" : "mid")"
         let digest = SHA256.hash(data: Data(raw.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }

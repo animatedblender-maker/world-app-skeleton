@@ -83,52 +83,63 @@ enum MediaURLResolver {
     }
 
     static func imageURL(for post: CountryPost) -> URL? {
+        imageURLs(for: post).first
+    }
+
+    /// All usable photo URLs for a gallery card (preserves media_url.urls order).
+    static func imageURLs(for post: CountryPost) -> [URL] {
         let mt = (post.mediaType ?? "").lowercased()
         // Demoted meme packs keep a `.mp4` key with JPEG bytes + types:["image"].
         let declaredImage = mt == "image" || mt == "photo" || mt == "gif"
+        var out: [URL] = []
+        var seen = Set<String>()
+
+        func append(_ raw: String?) {
+            guard let resolved = resolve(raw) else { return }
+            if !declaredImage && isVideoURL(resolved) { return }
+            let key = resolved.absoluteString
+            guard seen.insert(key).inserted else { return }
+            guard isUsablePosterURL(resolved) || declaredImage else { return }
+            out.append(resolved)
+        }
+
         if let payload = post.mediaPayload {
             let pairs = zip(payload.urls, payload.types)
+            var typedHit = false
             for (url, type) in pairs where type.lowercased() == "image" {
-                if let resolved = resolve(url) {
-                    if declaredImage || !isVideoURL(resolved) { return resolved }
-                }
+                typedHit = true
+                append(url)
             }
-            if declaredImage {
+            if !typedHit || declaredImage {
                 for url in payload.urls {
-                    if let resolved = resolve(url) { return resolved }
-                }
-            } else {
-                for url in payload.urls {
-                    if let resolved = resolve(url), !isVideoURL(resolved) { return resolved }
+                    append(url)
                 }
             }
         }
 
-        if let media = resolve(post.mediaURL) {
-            if declaredImage || !isVideoURL(media) { return media }
+        if out.isEmpty {
+            append(post.mediaURL)
+            append(post.thumbURL)
         }
-        if let thumb = resolve(post.thumbURL), !isVideoURL(thumb) { return thumb }
-        return nil
+        return out
     }
 
     static func posterURL(for post: CountryPost) -> URL? {
         // Internet Archive: always prefer services/img — nested `.thumbs/` paths are
         // slower and flakier on mobile (often 1–2s+). services/img is the snappy poster.
         if let ia = archiveServicesImgURL(for: post), isUsablePosterURL(ia) { return ia }
-        // Server Frame 0 (first displayed video frame) — prefer over any CDN fallback.
+        // Proven Frame 0 only (cache / embedded ladder) — never raw ghost frame0 thumbs.
         if let frame0 = frame0PosterURL(for: post) { return frame0 }
-        if let thumb = resolve(post.thumbURL), !isVideoURL(thumb), isUsablePosterURL(thumb) {
+        // LongForm: YouTube hqdefault before dead R2 frame0_* thumbs (NoSuchKey → black tiles).
+        if let yt = r2LongformYouTubePosterURL(for: post) { return yt }
+        if let thumb = resolve(post.thumbURL), !isVideoURL(thumb), !looksLikeFrame0Poster(thumb),
+           isUsablePosterURL(thumb) {
             return thumb
         }
-        // Matterya R2: Frame 0 first, then any usable image, then LongForm YouTube
-        // hqdefault — never return nil for LongForm or Hubs tiles stay black forever.
         if hasMatteryaR2VideoKey(post) {
             if let img = imageURL(for: post), isUsablePosterURL(img) { return img }
-            if let yt = r2LongformYouTubePosterURL(for: post) { return yt }
             return nil
         }
-        // Non-R2 legacy.
-        if let yt = r2LongformYouTubePosterURL(for: post) { return yt }
         if let img = imageURL(for: post), isUsablePosterURL(img) { return img }
         return nil
     }
@@ -155,10 +166,8 @@ enum MediaURLResolver {
         if let embedded = embeddedFrame0PosterURL(from: post.mediaURL), isUsablePosterURL(embedded) {
             return embedded
         }
-        if let thumb = resolve(post.thumbURL), !isVideoURL(thumb), looksLikeFrame0Poster(thumb),
-           isUsablePosterURL(thumb) {
-            return thumb
-        }
+        // Do NOT trust raw `thumb_url` frame0_* — API often re-signs missing R2 keys
+        // (GET → NoSuchKey / 404) and list tiles stay black forever.
         return nil
     }
 
@@ -188,9 +197,11 @@ enum MediaURLResolver {
         return nil
     }
 
-    /// Best poster for Hubs lists / prefetch (same URL as posterURL; kept explicit for call sites).
+    /// Hubs rails: LongForm YouTube hqdefault first (instant photos). Most packs lack
+    /// `frame0_*.webp` in R2 (`poster_unavailable`) — Frame0-first left every tile black.
     static func hubsListPosterURL(for post: CountryPost) -> URL? {
-        posterURL(for: post)
+        if let yt = r2LongformYouTubePosterURL(for: post) { return yt }
+        return posterURL(for: post)
     }
 
     /// `…/LongForm/<Country>/<youtubeId>/video.mp4` (in media JSON or path) → `i.ytimg.com` poster.
@@ -477,18 +488,17 @@ extension CountryPost {
     }
     /// Never fall through to expired / banned r2.dev thumbs after posterURL rejects them.
     var feedImageURL: URL? {
+        feedImageURLs.first
+    }
+
+    /// Gallery pages for multi-photo feed cards (Matterya design carousel).
+    var feedImageURLs: [URL] {
         let mt = (mediaType ?? "").lowercased()
-        // Image posts: prefer the photo URL (even demoted `.mp4` JPEG keys) over Frame0 video posters.
         if mt == "image" || mt == "photo" || mt == "gif" {
-            if let img = MediaURLResolver.imageURL(for: self),
-               MediaURLResolver.isUsablePosterURL(img) {
-                return img
-            }
+            let imgs = MediaURLResolver.imageURLs(for: self)
+            if !imgs.isEmpty { return imgs }
         }
-        if let poster = MediaURLResolver.posterURL(for: self) { return poster }
-        guard let img = MediaURLResolver.imageURL(for: self),
-              MediaURLResolver.isUsablePosterURL(img)
-        else { return nil }
-        return img
+        if let poster = MediaURLResolver.posterURL(for: self) { return [poster] }
+        return MediaURLResolver.imageURLs(for: self)
     }
 }

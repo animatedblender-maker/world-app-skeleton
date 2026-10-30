@@ -52,7 +52,7 @@ enum YouTubeMediaLayout {
 
     /// Single max-pixel size for Hubs For you / related / shelf thumbs.
     /// Prefetch + display MUST match or ImageCache keys miss and every row re-downloads.
-    /// Shelf posters — 320 keeps Hubs light; 480 stampeded decode + /v1/poster.
+    /// 320 keeps Netflix-wide shelves light at 2×/3× without the 420 decode stampede.
     static let hubsListThumbMaxPixel: CGFloat = 320
 
     /// Hubs watch stage height for a given **video aspect** (width ÷ height).
@@ -299,7 +299,7 @@ struct YouTubeVideoMetadataRow: View {
     var showsMenu = false
     @State private var showReportConfirm = false
 
-    private let reportReasons = ["Spam", "Harassment", "Misinformation", "Other"]
+
 
     /// Channel for Hubs / re-shares — never the person who saved or shared the clip.
     private var creator: (name: String, avatarURL: String?, seed: String, authorID: String, username: String?) {
@@ -338,17 +338,8 @@ struct YouTubeVideoMetadataRow: View {
                 hubsMenu
             }
         }
-        .confirmationDialog(
-            "Report this video",
-            isPresented: $showReportConfirm,
-            titleVisibility: .visible
-        ) {
-            ForEach(reportReasons, id: \.self) { reason in
-                Button(reason, role: .destructive) {
-                    Task { await reportVideo(reason: reason) }
-                }
-            }
-            Button("Cancel", role: .cancel) {}
+        .matteryaReportDialog("Report this video", isPresented: $showReportConfirm) { reason in
+            Task { await reportVideo(reason: reason) }
         }
     }
 
@@ -729,10 +720,15 @@ struct YouTubeWatchPlayer<Content: View>: View {
 /// Netflix-style endless horizontal rail — UIKit `contentOffset` wrap on **both**
 /// edges (SwiftUI `scrollTo` still hit hard stops left/right). Three cycles of
 /// the ranked set; start in the middle; jump ±cycleWidth with no animation.
+///
+/// `rowHeight` is required for looping rails: UIScrollView has no intrinsic height,
+/// and without a fixed row the LazyVStack collapsed rails so cards overlapped.
 struct HubsLoopingHorizontalRail<Content: View>: View {
     let posts: [CountryPost]
     var spacing: CGFloat = 14
     var horizontalPadding: CGFloat = Theme.pagePadding
+    /// Total cell height (thumb + title + meta). Required when `posts.count >= 3`.
+    var rowHeight: CGFloat = HubsShelfThumbCard.rowHeight(width: 268, showsMetadata: true)
     /// Fired when the logical (mod N) index nears the end of the ranked set.
     var onNearEnd: (() -> Void)? = nil
     @ViewBuilder var content: (_ post: CountryPost, _ logicalIndex: Int) -> Content
@@ -745,9 +741,11 @@ struct HubsLoopingHorizontalRail<Content: View>: View {
                 posts: posts,
                 spacing: spacing,
                 horizontalPadding: horizontalPadding,
+                rowHeight: rowHeight,
                 onNearEnd: onNearEnd,
                 content: content
             )
+            .frame(height: rowHeight)
         } else {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: spacing) {
@@ -757,7 +755,22 @@ struct HubsLoopingHorizontalRail<Content: View>: View {
                 }
                 .padding(.horizontal, horizontalPadding)
             }
+            .frame(height: rowHeight)
         }
+    }
+}
+
+/// UIScrollView with a fixed intrinsic height so SwiftUI LazyVStack reserves space.
+private final class HubsRailScrollView: UIScrollView {
+    var fixedHeight: CGFloat = 160 {
+        didSet {
+            guard abs(fixedHeight - oldValue) > 0.5 else { return }
+            invalidateIntrinsicContentSize()
+        }
+    }
+
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: max(1, fixedHeight))
     }
 }
 
@@ -766,6 +779,7 @@ private struct HubsInfiniteHScrollRail<ItemContent: View>: UIViewRepresentable {
     let posts: [CountryPost]
     var spacing: CGFloat
     var horizontalPadding: CGFloat
+    var rowHeight: CGFloat
     var onNearEnd: (() -> Void)?
     @ViewBuilder var content: (_ post: CountryPost, _ logicalIndex: Int) -> ItemContent
 
@@ -773,40 +787,58 @@ private struct HubsInfiniteHScrollRail<ItemContent: View>: UIViewRepresentable {
         Coordinator(onNearEnd: onNearEnd)
     }
 
-    func makeUIView(context: Context) -> UIScrollView {
-        let scroll = UIScrollView()
+    func makeUIView(context: Context) -> HubsRailScrollView {
+        let scroll = HubsRailScrollView()
+        scroll.fixedHeight = rowHeight
         scroll.showsHorizontalScrollIndicator = false
         scroll.showsVerticalScrollIndicator = false
         scroll.alwaysBounceHorizontal = true
         scroll.alwaysBounceVertical = false
         scroll.bounces = true
         scroll.decelerationRate = .fast
+        scroll.isDirectionalLockEnabled = true
+        scroll.delaysContentTouches = false
+        scroll.canCancelContentTouches = true
         scroll.delegate = context.coordinator
-        scroll.clipsToBounds = false
+        // Must clip — false let cards paint into neighboring rails (smashed home).
+        scroll.clipsToBounds = true
         context.coordinator.scrollView = scroll
         context.coordinator.rebuild(
             posts: posts,
             spacing: spacing,
             horizontalPadding: horizontalPadding,
+            rowHeight: rowHeight,
             content: content
         )
         return scroll
     }
 
-    func updateUIView(_ uiView: UIScrollView, context: Context) {
+    func updateUIView(_ uiView: HubsRailScrollView, context: Context) {
+        uiView.fixedHeight = rowHeight
         context.coordinator.onNearEnd = onNearEnd
         context.coordinator.rebuild(
             posts: posts,
             spacing: spacing,
             horizontalPadding: horizontalPadding,
+            rowHeight: rowHeight,
             content: content
         )
     }
 
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        uiView: HubsRailScrollView,
+        context: Context
+    ) -> CGSize? {
+        let width = proposal.width ?? UIScreen.main.bounds.width
+        return CGSize(width: width, height: rowHeight)
+    }
+
     final class Coordinator: NSObject, UIScrollViewDelegate {
         var onNearEnd: (() -> Void)?
-        weak var scrollView: UIScrollView?
+        weak var scrollView: HubsRailScrollView?
         private var host: UIHostingController<AnyView>?
+        private var heightConstraint: NSLayoutConstraint?
         private var signature = ""
         private var cycleWidth: CGFloat = 0
         private var isJumping = false
@@ -822,10 +854,14 @@ private struct HubsInfiniteHScrollRail<ItemContent: View>: UIViewRepresentable {
             posts: [CountryPost],
             spacing: CGFloat,
             horizontalPadding: CGFloat,
+            rowHeight: CGFloat,
             content: @escaping (_ post: CountryPost, _ logicalIndex: Int) -> ItemContent
         ) {
             guard let scroll = scrollView else { return }
-            let sig = posts.map(\.id).joined(separator: ",")
+            scroll.fixedHeight = rowHeight
+            heightConstraint?.constant = rowHeight
+
+            let sig = posts.map(\.id).joined(separator: ",") + "|\(Int(rowHeight))"
             let n = posts.count
             postCount = n
             guard n > 0 else { return }
@@ -839,7 +875,7 @@ private struct HubsInfiniteHScrollRail<ItemContent: View>: UIViewRepresentable {
             // Three identical cycles: [A][A][A] — start on middle A.
             // Leading pad only on the first cycle so the first card is in-frame;
             // cycleWidth is measured from a bare cycle (no pad) so wrap math stays exact.
-            let copies = 3
+            let copies = 2
             let root = AnyView(
                 HStack(alignment: .top, spacing: 0) {
                     ForEach(0..<copies, id: \.self) { copy in
@@ -861,6 +897,7 @@ private struct HubsInfiniteHScrollRail<ItemContent: View>: UIViewRepresentable {
                         )
                     }
                 }
+                .frame(height: rowHeight, alignment: .top)
                 .onPreferenceChange(HubsRailContentWidthKey.self) { width in
                     guard width > 1 else { return }
                     if abs(width - self.cycleWidth) > 0.5 {
@@ -876,13 +913,19 @@ private struct HubsInfiniteHScrollRail<ItemContent: View>: UIViewRepresentable {
                 let created = UIHostingController(rootView: root)
                 created.view.backgroundColor = .clear
                 created.view.translatesAutoresizingMaskIntoConstraints = false
+                // Avoid safe-area layout passes inside the horizontal rail (scroll jank).
+                if #available(iOS 16.4, *) {
+                    created.safeAreaRegions = []
+                }
                 scroll.addSubview(created.view)
+                let height = created.view.heightAnchor.constraint(equalToConstant: rowHeight)
+                heightConstraint = height
                 NSLayoutConstraint.activate([
                     created.view.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
                     created.view.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
                     created.view.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
                     created.view.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
-                    created.view.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
+                    height,
                 ])
                 host = created
             }
@@ -942,19 +985,28 @@ private enum HubsRailContentWidthKey: PreferenceKey {
 /// Light posters only — never mint `/v1/poster` Frame0 from the shelf (that froze Hubs).
 struct HubsShelfThumbCard: View {
     let post: CountryPost
-    var width: CGFloat = 168
+    var width: CGFloat = 268
     /// When true, show a one-line meta row under the title (channel · views).
     var showsMetadata: Bool = false
-    var titleFont: Font = .caption.weight(.semibold)
+    var titleFont: Font = .subheadline.weight(.semibold)
     /// Mid-clip extract — keep off for Hubs rails.
     var extractFrameIfNeeded: Bool = false
     var onTap: () -> Void
 
     private var thumbHeight: CGFloat { (width / YouTubeMediaLayout.aspect).rounded() }
-    private var corner: CGFloat { 12 }
+    private var corner: CGFloat { 14 }
     /// Reserve space for exactly two caption lines so missing/short titles don't shift neighbors.
-    private var titleBlockHeight: CGFloat { 34 }
+    private var titleBlockHeight: CGFloat { 40 }
     private var metaBlockHeight: CGFloat { showsMetadata ? 16 : 0 }
+
+    /// Total locked cell height — pass into `HubsLoopingHorizontalRail.rowHeight`.
+    static func rowHeight(width: CGFloat, showsMetadata: Bool) -> CGFloat {
+        let thumb = (width / YouTubeMediaLayout.aspect).rounded()
+        let title: CGFloat = 40
+        let meta: CGFloat = showsMetadata ? 16 : 0
+        let metaPad: CGFloat = showsMetadata ? 2 : 0
+        return thumb + 8 + title + metaPad + meta
+    }
 
     var body: some View {
         Button(action: onTap) {
@@ -984,7 +1036,7 @@ struct HubsShelfThumbCard: View {
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .frame(width: width, height: titleBlockHeight, alignment: .topLeading)
-                    .padding(.top, 6)
+                    .padding(.top, 8)
 
                 if showsMetadata {
                     Text(metadataLine)
@@ -1001,7 +1053,7 @@ struct HubsShelfThumbCard: View {
         // Lock total cell height so HStack top-aligns every card identically.
         .frame(
             width: width,
-            height: thumbHeight + 6 + titleBlockHeight + (showsMetadata ? 2 + metaBlockHeight : 0),
+            height: Self.rowHeight(width: width, showsMetadata: showsMetadata),
             alignment: .top
         )
     }
@@ -1016,7 +1068,7 @@ struct HubsShelfThumbCard: View {
 /// Vertical Matterya card for related / shelf thumbnails — not a side-by-side YT row.
 struct MatteryaHubVideoCard: View {
     let post: CountryPost
-    var width: CGFloat = 168
+    var width: CGFloat = 268
     let onTap: () -> Void
 
     var body: some View {

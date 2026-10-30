@@ -91,7 +91,8 @@ enum RecommendationSurface: String, Codable, CaseIterable, Sendable {
                 maxSameCreatorInWindow: 2,
                 creatorWindow: 10,
                 preferUnviewed: true,
-                allowRecycleWhenExhausted: true,
+                // Match Home/Sparks: never silently re-serve watched TikTok/hub cards.
+                allowRecycleWhenExhausted: false,
                 latencyBudgetMs: 400
             )
         case .hubsFollowing:

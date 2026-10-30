@@ -616,7 +616,7 @@ struct ReelsPagerCard: View {
                 if let poster = sparkPosterURL {
                     CachedAsyncImage(
                         url: poster,
-                        maxPixelSize: 900,
+                        maxPixelSize: 720,
                         contentMode: useFill ? .fill : .fit,
                         placeholder: AnyView(Color.black)
                     )
@@ -777,15 +777,19 @@ struct ReelsPagerCard: View {
             authorRow
 
             if let text = post.sparkDisplayCaption, !text.isEmpty {
+                // Collapse to 2 lines; See more grows the frosted dock (cap ~10 lines).
                 TranslatableCaption(
                     text: text,
+                    collapsedLineLimit: 2,
                     font: .system(.subheadline, design: .serif),
                     color: Theme.paper.opacity(0.94),
                     lineSpacing: 2,
-                    plainLineLimit: 2,
-                    buttonTint: Theme.paper.opacity(0.88),
-                    expandable: false
+                    uiTextStyle: .subheadline,
+                    buttonTint: Theme.paper.opacity(0.92),
+                    expandable: true,
+                    expandedLineLimit: 10
                 )
+                .id("spark-caption-\(post.id)")
                 .shadow(color: Theme.ink.opacity(0.45), radius: 6, y: 1)
             }
 
@@ -1054,12 +1058,17 @@ struct ReelsPagerCard: View {
                     AvatarView(url: post.author?.avatarURL, seed: post.authorID, size: 34)
                         .overlay(Circle().stroke(Theme.paper.opacity(0.35), lineWidth: 0.5))
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(post.author?.displayName ?? "Member")
-                            .font(.system(.subheadline, design: .serif).weight(.semibold))
-                            .foregroundStyle(Theme.paper)
-                            .shadow(color: Theme.ink.opacity(0.4), radius: 4, y: 1)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                        HStack(spacing: 5) {
+                            Text(post.author?.displayName ?? "Member")
+                                .font(.system(.subheadline, design: .serif).weight(.semibold))
+                                .foregroundStyle(Theme.paper)
+                                .shadow(color: Theme.ink.opacity(0.4), radius: 4, y: 1)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            if post.author?.showsVerifiedBadge == true {
+                                MatteryaVerifiedBadge(size: 13)
+                            }
+                        }
                         HStack(spacing: 6) {
                             if let handle = post.author?.username, !handle.isEmpty {
                                 Text("@\(handle)")
@@ -1324,7 +1333,7 @@ private struct SparksTopChrome: View {
     @State private var actionBusy = false
 
     private let word = MatteryaCopy.sparks.uppercased()
-    private let reportReasons = ["Spam", "Harassment", "Misinformation", "Other"]
+
 
     private var isOwnPost: Bool {
         guard let post, let me = appState.currentProfile?.userID else { return false }
@@ -1413,17 +1422,11 @@ private struct SparksTopChrome: View {
         // Height = notch + bar only — never expand to full screen (that blocked first swipe).
         .allowsHitTesting(true)
         .ignoresSafeArea(edges: .top)
-        .confirmationDialog(
+        .matteryaReportDialog(
             "Report this \(MatteryaCopy.spark.lowercased())",
-            isPresented: $showReportConfirm,
-            titleVisibility: .visible
-        ) {
-            ForEach(reportReasons, id: \.self) { reason in
-                Button(reason, role: .destructive) {
-                    Task { await reportCurrent(reason: reason) }
-                }
-            }
-            Button("Cancel", role: .cancel) {}
+            isPresented: $showReportConfirm
+        ) { reason in
+            Task { await reportCurrent(reason: reason) }
         }
     }
 

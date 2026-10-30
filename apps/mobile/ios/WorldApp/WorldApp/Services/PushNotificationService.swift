@@ -11,11 +11,16 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.matterya.worldapp", category: "Push")
     private let alertTokenDefaultsKey = "push.alert.token"
     private let voipTokenDefaultsKey = "push.voip.token"
+    private let alertRegisteredDefaultsKey = "push.alert.registeredToken"
+    private let voipRegisteredDefaultsKey = "push.voip.registeredToken"
 
     private var deviceToken: String?
     private var voipToken: String?
     private var lastRegisteredToken: String?
     private var lastRegisteredVoIPToken: String?
+    /// Prevents parallel register POSTs when Apple redelivers the same token many times.
+    private var alertRegisterInFlight = false
+    private var voipRegisterInFlight = false
 
     private(set) var lastRegistrationError: String?
     private(set) var lastVoIPRegistrationError: String?
@@ -192,16 +197,21 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
 
     func updateDeviceToken(_ tokenData: Data) {
         let token = tokenData.map { String(format: "%02x", $0) }.joined()
+        let sameToken = (deviceToken == token)
         deviceToken = token
         UserDefaults.standard.set(token, forKey: alertTokenDefaultsKey)
-        logger.info("Received APNs device token (\(self.apnsEnvironment, privacy: .public))")
+        // Apple may redeliver the same sandbox token many times per launch — log once.
+        if !sameToken {
+            logger.info("Received APNs device token (\(self.apnsEnvironment, privacy: .public))")
+        }
         Task { @MainActor in
             // Do not tear down PushKit here — refreshRegistry() was preventing VoIP tokens from arriving.
             VoIPPushService.shared.bootstrap()
-            await registerTokenIfNeeded(token, kind: "alert", force: true)
+            // force:false — skip server round-trip when this token is already registered.
+            await registerTokenIfNeeded(token, kind: "alert", force: false)
             await VoIPPushService.shared.ensureToken()
             if let voipToken = self.voipToken ?? UserDefaults.standard.string(forKey: voipTokenDefaultsKey) {
-                await registerTokenIfNeeded(voipToken, kind: "voip", force: true)
+                await registerTokenIfNeeded(voipToken, kind: "voip", force: false)
             }
         }
     }
@@ -209,7 +219,7 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
     func registerVoIPToken(_ token: String) async {
         voipToken = token
         UserDefaults.standard.set(token, forKey: voipTokenDefaultsKey)
-        await registerTokenIfNeeded(token, kind: "voip", force: true)
+        await registerTokenIfNeeded(token, kind: "voip", force: false)
     }
 
     func handleRegistrationFailure() {
@@ -464,13 +474,46 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
     private func loadPersistedTokens() {
         deviceToken = deviceToken ?? UserDefaults.standard.string(forKey: alertTokenDefaultsKey)
         voipToken = voipToken ?? UserDefaults.standard.string(forKey: voipTokenDefaultsKey)
+        if lastRegisteredToken == nil {
+            lastRegisteredToken = UserDefaults.standard.string(forKey: alertRegisteredDefaultsKey)
+            if let lastRegisteredToken, lastRegisteredToken == deviceToken {
+                serverRegistrationSucceeded = true
+            }
+        }
+        if lastRegisteredVoIPToken == nil {
+            lastRegisteredVoIPToken = UserDefaults.standard.string(forKey: voipRegisteredDefaultsKey)
+            if let lastRegisteredVoIPToken, lastRegisteredVoIPToken == voipToken {
+                voipServerRegistrationSucceeded = true
+            }
+        }
     }
 
     private func registerTokenIfNeeded(_ token: String, kind: String, force: Bool = false) async {
         let isVoIP = kind == "voip"
+        loadPersistedTokens()
         let last = isVoIP ? lastRegisteredVoIPToken : lastRegisteredToken
         let alreadyRegistered = isVoIP ? voipServerRegistrationSucceeded : serverRegistrationSucceeded
         if !force, token == last, alreadyRegistered { return }
+        // Same token already posting — Apple sandbox redelivers dozens of times per launch.
+        if isVoIP {
+            if voipRegisterInFlight { return }
+            voipRegisterInFlight = true
+        } else {
+            if alertRegisterInFlight { return }
+            alertRegisterInFlight = true
+        }
+        defer {
+            if isVoIP {
+                voipRegisterInFlight = false
+            } else {
+                alertRegisterInFlight = false
+            }
+        }
+        // Re-check after claiming the lock — a sibling task may have finished.
+        let lastAfter = isVoIP ? lastRegisteredVoIPToken : lastRegisteredToken
+        let okAfter = isVoIP ? voipServerRegistrationSucceeded : serverRegistrationSucceeded
+        if !force, token == lastAfter, okAfter { return }
+
         guard AuthService.shared.isAuthenticated else {
             let message = "Sign in so Matterya can register this device for push."
             if isVoIP {
@@ -545,11 +588,14 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
                 lastRegisteredVoIPToken = token
                 lastVoIPRegistrationError = nil
                 voipServerRegistrationSucceeded = true
+                UserDefaults.standard.set(token, forKey: voipRegisteredDefaultsKey)
             } else {
                 lastRegisteredToken = token
                 lastRegistrationError = nil
                 serverRegistrationSucceeded = true
+                UserDefaults.standard.set(token, forKey: alertRegisteredDefaultsKey)
             }
+            // One log per kind per successful new registration — not per Apple redelivery.
             logger.info("Registered \(kind, privacy: .public) token with server")
         } catch {
             if isVoIP {

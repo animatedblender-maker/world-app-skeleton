@@ -1,5 +1,6 @@
 import { CommonModule } from '@angular/common';
 import { Component, OnInit } from '@angular/core';
+import { DomSanitizer, type SafeHtml } from '@angular/platform-browser';
 import { ActivatedRoute, Router } from '@angular/router';
 
 import { PostsService } from '../core/services/posts.service';
@@ -8,6 +9,7 @@ import { NotificationsUiService } from '../core/services/notifications-ui.servic
 import { VideoPlayerComponent } from '../components/video-player.component';
 import { BottomTabsComponent } from '../components/bottom-tabs.component';
 import type { CountryPost } from '../core/models/post.model';
+import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitize';
 
 @Component({
   selector: 'app-post-page',
@@ -47,9 +49,11 @@ import type { CountryPost } from '../core/models/post.model';
         </div>
 
         <div class="post-title" *ngIf="post.title">{{ post.title }}</div>
-        <div class="post-body" *ngIf="post.body && !postHasVideo(post)">
-          {{ post.body }}
-        </div>
+        <div
+          class="post-body"
+          *ngIf="postBodyHtml as html"
+          [innerHTML]="html"
+        ></div>
         <div class="post-shared" *ngIf="post.shared_post as shared">
           <div class="shared-label">Shared post</div>
           <div
@@ -297,6 +301,17 @@ import type { CountryPost } from '../core/models/post.model';
       }
       .post-body {
         line-height: 1.6;
+        white-space: pre-wrap;
+      }
+      .post-body strong {
+        font-weight: 700;
+        color: inherit;
+      }
+      .post-body strong.md-h {
+        display: inline;
+        font-size: 1.2em;
+        font-weight: 700;
+        color: inherit;
       }
       .post-shared {
         margin-top: 14px;
@@ -565,7 +580,8 @@ export class PostPageComponent implements OnInit {
     private router: Router,
     private posts: PostsService,
     private notifications: NotificationsService,
-    private notificationsUi: NotificationsUiService
+    private notificationsUi: NotificationsUiService,
+    private sanitizer: DomSanitizer
   ) {}
 
   postHasVideo(post: CountryPost | null): boolean {
@@ -583,8 +599,16 @@ export class PostPageComponent implements OnInit {
     return '';
   }
 
+  get postBodyHtml(): SafeHtml | null {
+    const post = this.post;
+    if (!post?.body || this.postHasVideo(post)) return null;
+    return this.sanitizer.bypassSecurityTrustHtml(formatInlineBold(post.body));
+  }
+
   postPreview(text: string | null | undefined): string {
-    const value = String(text || '').replace(/\s+/g, ' ').trim();
+    const value = stripInlineBold(String(text || ''))
+      .replace(/\s+/g, ' ')
+      .trim();
     if (!value) return '';
     const limit = 140;
     if (value.length <= limit) return value;

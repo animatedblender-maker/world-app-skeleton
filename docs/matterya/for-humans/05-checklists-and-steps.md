@@ -59,6 +59,7 @@ Ask your engineer if you don’t have it locally.
 1. Open https://api.matterya.com/mind  
 2. Log in with the Ops password (same as Pipeline / Reports)  
 3. Check Overview + Live system + Gap matrix  
+4. **People** tab → search a real user (name / @username / email / uuid) → open their interest dossier (hubs, countries, creators, engagement, deliveries, neighbors)
 
 Local API (if running on the Mac): http://127.0.0.1:3000/mind  
 

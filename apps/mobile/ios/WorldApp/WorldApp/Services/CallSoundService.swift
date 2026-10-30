@@ -77,9 +77,21 @@ final class CallSoundService {
     }
 
     private func configureSession() {
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothHFP])
-        try? session.setActive(true)
+        // setActive on main freezes UI — arm call audio off the main thread.
+        Task(priority: .userInitiated) {
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let session = AVAudioSession.sharedInstance()
+                    try? session.setCategory(
+                        .playAndRecord,
+                        mode: .voiceChat,
+                        options: [.defaultToSpeaker, .allowBluetoothHFP]
+                    )
+                    try? session.setActive(true)
+                    cont.resume()
+                }
+            }
+        }
     }
 
     private func pauseDuration(for pattern: Pattern) -> TimeInterval {

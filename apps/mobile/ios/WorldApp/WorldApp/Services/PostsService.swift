@@ -2661,6 +2661,16 @@ final class PostsService {
         return result.reportPost
     }
 
+    func reportComment(_ commentID: String, reason: String) async throws -> Bool {
+        struct Response: Decodable { let reportComment: Bool }
+        let mutation = "mutation($commentId: ID!, $reason: String!) { reportComment(comment_id: $commentId, reason: $reason) }"
+        let result: Response = try await gql.authenticatedRequest(
+            query: mutation,
+            variables: ["commentId": commentID, "reason": reason]
+        )
+        return result.reportComment
+    }
+
     func likeComment(_ commentID: String) async throws -> PostComment {
         if AppConfig.useDemoDataset, let comment = await demo.likeComment(commentID) {
             return comment

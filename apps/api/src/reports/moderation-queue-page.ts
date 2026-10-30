@@ -97,10 +97,12 @@ async function ensureClaimedTicket(
   const prefer = opts?.preferTicketId?.trim() || null;
   if (prefer && /^[0-9a-f-]{36}$/i.test(prefer)) {
     const result = await claimTicketById(prefer, actor);
-    if (result.ok && result.ticket) return result.ticket;
+    if (result.ok && result.ticket && (result.ticket.queue || 'content') !== 'account') {
+      return result.ticket;
+    }
   }
 
-  const existing = await getClaimedTicketForActor(actor);
+  const existing = await getClaimedTicketForActor(actor, { queue: 'content' });
   if (existing) {
     if (opts?.excludeTicketId && existing.id === opts.excludeTicketId) {
       // fall through
@@ -108,7 +110,10 @@ async function ensureClaimedTicket(
       return existing;
     }
   }
-  return claimNextTicket(actor, { excludeTicketId: opts?.excludeTicketId });
+  return claimNextTicket(actor, {
+    excludeTicketId: opts?.excludeTicketId,
+    queue: 'content',
+  });
 }
 
 function renderShell(opts: {
@@ -315,6 +320,7 @@ function renderShell(opts: {
   <span class="pill ok">${opts.openCount} open</span>
   <span class="muted">Answer the questions · policy applies the rest</span>
   <span style="flex:1"></span>
+  <a class="nav" href="/reports/accounts">Accounts</a>
   <a class="nav" href="/reports/analytics">Insights</a>
   <a class="nav" href="/reports/masquerade">Masquerade (legacy)</a>
   <a class="nav" href="/reports/logout">Log out</a>
@@ -745,7 +751,7 @@ export async function handleModerationQueueGet(req: Request, res: Response): Pro
     flash = flash || 'Could not open that ticket (claimed, resolved, or missing)';
   }
 
-  const openCount = await openTicketCount();
+  const openCount = await openTicketCount({ queue: 'content' });
   const waitingForOther = String(req.query.waiting || '') === '1';
   let body: string;
   let treeJson: string | undefined;
@@ -786,7 +792,10 @@ export async function handleModerationTicketAction(req: Request, res: Response):
       passToOther: true,
     });
     // Passed ticket is marked for another moderator; claim a different one.
-    const next = await claimNextTicket(actor, { excludeTicketId: ticketId });
+    const next = await claimNextTicket(actor, {
+      excludeTicketId: ticketId,
+      queue: 'content',
+    });
     if (next && next.id !== ticketId) {
       res.redirect(
         303,
@@ -820,13 +829,14 @@ export async function handleModerationTicketAction(req: Request, res: Response):
       category: resolveAction === 'skip' ? null : leaf.root,
       // Leaf path for audit; outcome is applied by policy (not shown in UI flash).
       note: `policy:${leaf.id}|outcome:${leaf.outcome}|${leaf.label}`,
+      leafId: leaf.id,
     });
     if (!result.ok) {
       res.redirect(303, `/reports?flash=${encodeURIComponent(result.error || 'failed')}`);
       return;
     }
     // Never tell the moderator whether content was removed or marked.
-    const next = await claimNextTicket(actor);
+    const next = await claimNextTicket(actor, { queue: 'content' });
     const flash = 'Decision recorded';
     if (next) {
       res.redirect(

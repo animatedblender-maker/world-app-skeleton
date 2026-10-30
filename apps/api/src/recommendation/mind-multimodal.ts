@@ -171,6 +171,81 @@ async function embedMultimodal(
 
 type ThumbBytes = { dataUrl: string; buf: Buffer; mime: string; ext: string };
 
+/**
+ * Voyage multimodal rejects out-of-range resolutions ("not within the permitted range").
+ * Normalize with sharp: floor tiny thumbs, cap huge / extreme-aspect stills.
+ * Target ~224–1536px on the long edge, JPEG for stable decode.
+ */
+async function normalizeThumbForVoyage(buf: Buffer): Promise<ThumbBytes | null> {
+  try {
+    const sharp = (await import('sharp')).default;
+    const img = sharp(buf, { failOn: 'none', animated: false }).rotate();
+    const meta = await img.metadata();
+    let w = meta.width ?? 0;
+    let h = meta.height ?? 0;
+    if (w < 8 || h < 8) return null;
+
+    const maxEdge = 1536;
+    const minEdge = 224;
+    const maxPixels = 2_000_000;
+    let pipeline = img;
+
+    // Extreme aspect (e.g. 1×2000 strips) — letterbox onto a square canvas.
+    const ratio = Math.max(w, h) / Math.max(1, Math.min(w, h));
+    if (ratio > 12) {
+      const side = Math.min(maxEdge, Math.max(minEdge, Math.max(w, h)));
+      pipeline = pipeline.resize({
+        width: side,
+        height: side,
+        fit: 'contain',
+        background: { r: 0, g: 0, b: 0, alpha: 1 },
+        withoutEnlargement: false,
+      });
+      w = side;
+      h = side;
+    } else {
+      const pixels = w * h;
+      const long = Math.max(w, h);
+      const short = Math.min(w, h);
+      if (long > maxEdge || pixels > maxPixels) {
+        pipeline = pipeline.resize({
+          width: w >= h ? maxEdge : undefined,
+          height: h > w ? maxEdge : undefined,
+          fit: 'inside',
+          withoutEnlargement: true,
+        });
+      } else if (short < minEdge || pixels < minEdge * minEdge) {
+        // Upscale tiny Spark thumbs so Voyage accepts them.
+        const scale = Math.max(minEdge / short, Math.sqrt((minEdge * minEdge) / Math.max(1, pixels)));
+        const nw = Math.min(maxEdge, Math.round(w * scale));
+        const nh = Math.min(maxEdge, Math.round(h * scale));
+        pipeline = pipeline.resize({
+          width: nw,
+          height: nh,
+          fit: 'fill',
+          withoutEnlargement: false,
+        });
+      }
+    }
+
+    const out = await pipeline
+      .jpeg({ quality: 85, mozjpeg: true })
+      .toBuffer({ resolveWithObject: true });
+    if (out.data.length < 64 || out.data.length > 4_000_000) return null;
+    const ow = out.info.width ?? 0;
+    const oh = out.info.height ?? 0;
+    if (ow < 32 || oh < 32) return null;
+    return {
+      dataUrl: `data:image/jpeg;base64,${out.data.toString('base64')}`,
+      buf: out.data,
+      mime: 'image/jpeg',
+      ext: 'jpg',
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Download thumb → data URL so Voyage never hits expired/robots-blocked R2 URLs. */
 async function thumbToBytes(url: string): Promise<ThumbBytes | null> {
   try {
@@ -183,8 +258,12 @@ async function thumbToBytes(url: string): Promise<ThumbBytes | null> {
     clearTimeout(t);
     if (!res.ok) return null;
     const buf = Buffer.from(await res.arrayBuffer());
-    // Cap ~4MB — Voyage rejects oversized images.
-    if (buf.length < 64 || buf.length > 4_000_000) return null;
+    // Cap raw download — normalize may shrink further.
+    if (buf.length < 64 || buf.length > 12_000_000) return null;
+    const normalized = await normalizeThumbForVoyage(buf);
+    if (normalized) return normalized;
+
+    // Fallback: pass through original if sharp fails (legacy path).
     const ctype = (res.headers.get('content-type') || 'image/webp').split(';')[0]!.trim();
     const mime =
       ctype === 'image/png' ||
@@ -204,6 +283,7 @@ async function thumbToBytes(url: string): Promise<ThumbBytes | null> {
           : mime === 'image/webp'
             ? 'webp'
             : 'jpg';
+    if (buf.length > 4_000_000) return null;
     return { dataUrl: `data:${mime};base64,${buf.toString('base64')}`, buf, mime, ext };
   } catch {
     return null;
@@ -294,8 +374,15 @@ async function resolveSparkThumbUrl(row: {
 }
 
 function captionText(title: string | null, body: string | null): string {
+  // Strip lone surrogates / non-UTF8 so Voyage doesn't 400 on "valid UTF-8".
+  const clean = (s: string) =>
+    Buffer.from(String(s ?? ''), 'utf8')
+      .toString('utf8')
+      .replace(/\uFFFD/g, '')
+      .replace(/[\uD800-\uDFFF]/g, '')
+      .trim();
   const t = [title, body]
-    .map((s) => String(s ?? '').trim())
+    .map((s) => clean(String(s ?? '')))
     .filter(Boolean)
     .join(' ')
     .slice(0, 400);

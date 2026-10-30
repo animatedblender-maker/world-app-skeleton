@@ -17,6 +17,8 @@ struct AppMenuOverlay: View {
         }
         .animation(.easeOut(duration: 0.22), value: appState.showAppMenu)
         .allowsHitTesting(appState.showAppMenu)
+        // Dark scheme → white notch clock / battery over the menu scrim.
+        .preferredColorScheme(appState.showAppMenu ? .dark : nil)
         .zIndex(200)
     }
 
@@ -29,130 +31,170 @@ struct AppMenuOverlay: View {
 
 private struct AppMenuPanel: View {
     @Environment(AppState.self) private var appState
+    @State private var hasOwnHubsChannel = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
+            HStack(alignment: .center) {
                 Text("Menu")
-                    .font(.title2.weight(.bold))
+                    .font(.title3.weight(.bold))
                     .foregroundStyle(Theme.ink)
                 Spacer()
                 Button { closeMenu() } label: {
-                    Image(systemName: "xmark")
-                        .font(.body.weight(.semibold))
+                    Text("Close")
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(Theme.inkMuted)
-                        .frame(width: 32, height: 32)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Theme.matte, in: Capsule())
+                        .overlay(Capsule().stroke(Theme.border, lineWidth: 0.5))
                 }
+                .buttonStyle(.plain)
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, Theme.pagePadding)
             .padding(.top, 20)
-            .padding(.bottom, 12)
+            .padding(.bottom, 14)
 
             if let profile = appState.currentProfile {
                 Button {
                     appState.openProfileFromMenu()
                 } label: {
                     HStack(spacing: 12) {
-                        AvatarView(url: profile.avatarURL, seed: profile.userID, size: 56)
-                        VStack(alignment: .leading, spacing: 4) {
+                        AvatarView(url: profile.avatarURL, seed: profile.userID, size: 52)
+                        VStack(alignment: .leading, spacing: 3) {
                             Text(profile.displayName ?? profile.username ?? "You")
-                                .font(.headline)
+                                .font(.headline.weight(.semibold))
                                 .foregroundStyle(Theme.ink)
+                                .lineLimit(1)
                             if let username = profile.username {
                                 Text("@\(username)")
                                     .font(.subheadline)
                                     .foregroundStyle(Theme.inkMuted)
+                                    .lineLimit(1)
                             }
+                            Text("View profile")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Theme.ink)
+                                .underline(true, color: Theme.ink.opacity(0.35))
                         }
+                        Spacer(minLength: 0)
                     }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Theme.surface)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Theme.border.opacity(0.85), lineWidth: 0.5)
+                    )
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 16)
+                .padding(.horizontal, Theme.pagePadding)
+                .padding(.bottom, 18)
             }
 
-            Theme.divider.frame(height: 0.5)
-
-            VStack(spacing: 0) {
-                menuRow(MatteryaCopy.matteryaHubs, icon: "square.grid.2x2") {
-                    appState.openPlayFromMenu()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    menuRow(hubsMenuTitle) {
+                        appState.openPlayFromMenu()
+                    }
+                    menuRow("Discover people") {
+                        appState.openFromMenu(.people)
+                    }
+                    menuRow("Ads Manager") {
+                        appState.openFromMenu(.ads)
+                    }
+                    menuRow("Invite friends") {
+                        appState.inviteFriendsFromMenu()
+                    }
+                    menuRow("Saved") {
+                        appState.openSavedFromMenu()
+                    }
+                    menuRow("Settings") {
+                        appState.openFromMenu(.settings)
+                    }
                 }
-                menuRow("Discover People", icon: "person.2") {
-                    appState.openFromMenu(.people)
-                }
-                menuRow("Ads Manager", icon: "megaphone") {
-                    appState.openFromMenu(.ads)
-                }
-                menuRow("Invite friends", icon: "person.badge.plus") {
-                    appState.inviteFriendsFromMenu()
-                }
-                menuRow("Saved", icon: "bookmark") {
-                    appState.openSavedFromMenu()
-                }
-                menuRow("Settings", icon: "gearshape") {
-                    appState.openFromMenu(.settings)
-                }
+                .padding(.horizontal, Theme.pagePadding)
+                .padding(.bottom, 12)
             }
-            .padding(.vertical, 8)
 
-            Spacer()
-
-            Theme.divider.frame(height: 0.5)
+            Spacer(minLength: 0)
 
             Button {
                 closeMenu()
                 appState.logout()
             } label: {
-                HStack(spacing: 14) {
-                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                        .font(.system(size: 20))
-                        .frame(width: 24)
-                    Text("Log Out")
-                        .font(.body.weight(.medium))
-                    Spacer()
-                }
-                .foregroundStyle(Theme.danger)
-                .contentShape(Rectangle())
-                .padding(.horizontal, 20)
-                .padding(.vertical, 16)
+                Text("Log out")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(MatteryaSettingsRowButtonStyle(destructive: true))
+            .padding(.horizontal, Theme.pagePadding)
+            .padding(.bottom, 20)
+            .padding(.top, 8)
         }
         .frame(maxHeight: .infinity)
-        .background(Theme.surface)
+        .background(Theme.canvas)
         .shadow(color: .black.opacity(0.12), radius: 24, x: 8)
+        .onAppear {
+            refreshChannelFlag()
+        }
         .onChange(of: appState.showAppMenu) { _, isOpen in
             if isOpen {
+                refreshChannelFlag()
                 Task { await appState.refreshUnreadCounts() }
             }
         }
+        .onChange(of: appState.currentProfile?.bio) { _, _ in
+            refreshChannelFlag()
+        }
     }
 
-    private func menuRow(
-        _ title: String,
-        icon: String,
-        showsUnreadDot: Bool = false,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                Image(systemName: icon)
-                    .font(.system(size: 20))
-                    .frame(width: 24)
-                Text(title)
-                    .font(.body.weight(.regular))
-                Spacer()
-                if showsUnreadDot {
-                    UnreadDot(size: 9)
-                }
+    /// Channel name when you own a Hubs channel; otherwise Matterya Hubs browse entry.
+    private var hubsMenuTitle: String {
+        let profile = appState.currentProfile
+        if hasOwnHubsChannel || LivingChannelMarker.hasChannel(profile: profile) {
+            if let channelName = LivingChannelMarker.parse(from: profile?.bio)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !channelName.isEmpty {
+                return channelName
             }
-            .foregroundStyle(Theme.ink)
-            .contentShape(Rectangle())
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
+            return MatteryaCopy.personsHubTitle(
+                displayName: profile?.displayName,
+                username: profile?.username
+            )
         }
-        .buttonStyle(.plain)
+        return MatteryaCopy.matteryaHubs
+    }
+
+    private func menuRow(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Text(title)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.inkMuted)
+            }
+        }
+        .buttonStyle(MatteryaSettingsRowButtonStyle())
+    }
+
+    private func refreshChannelFlag() {
+        hasOwnHubsChannel = LivingChannelMarker.hasChannel(profile: appState.currentProfile)
+        guard let userID = appState.currentProfile?.userID, !userID.isEmpty else { return }
+        Task { @MainActor in
+            if LivingChannelMarker.hasChannel(profile: appState.currentProfile) {
+                hasOwnHubsChannel = true
+                return
+            }
+            if let channel = try? await ChannelsService.shared.channelByOwner(userID: userID),
+               !channel.id.isEmpty {
+                hasOwnHubsChannel = true
+            }
+        }
     }
 
     private func closeMenu() {

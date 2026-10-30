@@ -501,22 +501,32 @@ final class CallSessionManager: NSObject {
     }
 
     func applySpeakerRoute() {
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(
-                .playAndRecord,
-                mode: .voiceChat,
-                options: isSpeakerOn ? [.defaultToSpeaker, .allowBluetoothHFP] : [.allowBluetoothHFP]
-            )
-            try session.setActive(true, options: [])
-            if isSpeakerOn {
-                try session.overrideOutputAudioPort(.speaker)
-            } else {
-                try session.overrideOutputAudioPort(.none)
+        let speakerOn = isSpeakerOn
+        // setActive on main freezes UI — configure + activate off main, then route.
+        Task(priority: .userInitiated) {
+            let errorMessage: String? = await withCheckedContinuation { cont in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let session = AVAudioSession.sharedInstance()
+                    do {
+                        try session.setCategory(
+                            .playAndRecord,
+                            mode: .voiceChat,
+                            options: speakerOn
+                                ? [.defaultToSpeaker, .allowBluetoothHFP]
+                                : [.allowBluetoothHFP]
+                        )
+                        try session.setActive(true, options: [])
+                        try session.overrideOutputAudioPort(speakerOn ? .speaker : .none)
+                        cont.resume(returning: nil)
+                    } catch {
+                        cont.resume(returning: error.localizedDescription)
+                    }
+                }
             }
-        } catch {
             #if DEBUG
-            print("[Call] speaker route failed: \(error.localizedDescription)")
+            if let errorMessage {
+                print("[Call] speaker route failed: \(errorMessage)")
+            }
             #endif
         }
     }
@@ -672,18 +682,24 @@ final class CallSessionManager: NSObject {
             await CallKitManager.shared.waitForAudioSessionActivation()
             activateLiveKitAudio()
         } else {
-            prepareInAppCallAudio()
+            await prepareInAppCallAudio()
         }
     }
 
-    private func prepareInAppCallAudio() {
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(
-            .playAndRecord,
-            mode: .voiceChat,
-            options: [.defaultToSpeaker, .allowBluetoothHFP]
-        )
-        try? session.setActive(true)
+    private func prepareInAppCallAudio() async {
+        // setActive on main freezes UI — arm playAndRecord off the main thread.
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let session = AVAudioSession.sharedInstance()
+                try? session.setCategory(
+                    .playAndRecord,
+                    mode: .voiceChat,
+                    options: [.defaultToSpeaker, .allowBluetoothHFP]
+                )
+                try? session.setActive(true)
+                cont.resume()
+            }
+        }
         activateLiveKitAudio()
     }
 

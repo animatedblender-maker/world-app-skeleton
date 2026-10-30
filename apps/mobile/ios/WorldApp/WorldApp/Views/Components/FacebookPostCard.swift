@@ -551,13 +551,8 @@ struct FacebookPostCard: View {
             }
             Button("Cancel", role: .cancel) {}
         }
-        .confirmationDialog("Report this post", isPresented: $showReportConfirm, titleVisibility: .visible) {
-            ForEach(reportReasons, id: \.self) { reason in
-                Button(reason, role: .destructive) {
-                    Task { await reportPost(reason: reason) }
-                }
-            }
-            Button("Cancel", role: .cancel) {}
+        .matteryaReportDialog("Report this post", isPresented: $showReportConfirm) { reason in
+            Task { await reportPost(reason: reason) }
         }
     }
 
@@ -900,13 +895,12 @@ struct FacebookPostCard: View {
                     }
                 } else if !post.feedImageURLs.isEmpty {
                     // Multi-photo gallery (amiuglytruth etc.) or single pinch photo.
-                    // 540 decode + scroll-simultaneous pinch — image cards were freezing
-                    // Home while Sparks/Hubs (no pinch overlay) stayed smooth.
+                    // 540 decode + scroll-simultaneous pinch — 720 was thrashing Home RAM.
                     let urls = post.feedImageURLs
                     if urls.count > 1 {
                         MatteryaImageGallery(
                             urls: urls,
-                            maxPixelSize: 720,
+                            maxPixelSize: 540,
                             onZoomingChanged: { zooming in
                                 isPhotoPinching = zooming
                             },
@@ -915,7 +909,7 @@ struct FacebookPostCard: View {
                     } else if let url = urls.first {
                         FeedPinchZoomPhoto(
                             url: url,
-                            maxPixelSize: 720,
+                            maxPixelSize: 540,
                             contentMode: .fit,
                             placeholder: AnyView(mediaPlaceholder),
                             onZoomingChanged: { zooming in
@@ -1161,10 +1155,6 @@ struct FacebookPostCard: View {
                 )
             }
         }
-    }
-
-    private var reportReasons: [String] {
-        ["Spam", "Harassment", "Misinformation", "Other"]
     }
 
     private func openPrimaryDestination() {

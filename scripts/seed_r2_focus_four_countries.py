@@ -64,6 +64,8 @@ FOCUS = [
     ("Germany", "DE", "Germany"),
     ("Egypt", "EG", "Egypt"),
     ("Albania", "AL", "Albania"),
+    # Uploader maps Kosovo → Albania market; include so R2 LongForm/Kosovo/* seeds into AL hubs.
+    ("Kosovo", "AL", "Albania"),
 ]
 
 REQUIRED_FILES = frozenset({"video.mp4", "meta.json", "comments.json"})
@@ -353,8 +355,9 @@ def clean_text(value: Any, max_len: int) -> str:
     text = str(value)
     text = text.replace("\x00", " ").strip()
     text = re.sub(r"\s+", " ", text)
-    # Never surface the source platform name in captions / hashtags / comments.
-    text = re.sub(r"tiktok", "matterya", text, flags=re.IGNORECASE)
+    # Never surface source platform names — longer tokens first (subreddit before reddit).
+    for token in ("subreddit", "reddit", "tiktok"):
+        text = re.sub(token, "matterya", text, flags=re.IGNORECASE)
     if len(text) > max_len:
         text = text[: max_len - 1].rstrip() + "…"
     return text
@@ -619,6 +622,35 @@ def seed_one(
     likes = like_count_from_meta(meta, pack.kind)
     comments = extract_comments(comments_raw)
 
+    # Prefer explicit meta.hub_slug (film hubs campaign); else genre/category map.
+    hub_slug = str(meta.get("hub_slug") or "").strip().lower()
+    if hub_slug not in (
+        "comedy",
+        "music",
+        "travel",
+        "nature",
+        "food",
+        "sports",
+        "tech",
+        "fitness",
+        "film",
+        "culture",
+        "history",
+        "education",
+        "animals",
+        "cars",
+        "news",
+        "fashion",
+        "gaming",
+        "kids",
+        "social",
+        "daily",
+    ):
+        hub_slug = None
+        g = str(meta.get("genre") or meta.get("category") or "").strip().lower()
+        if g in ("film", "culture"):
+            hub_slug = g
+
     post_row = {
         "author_id": author.user_id,
         "category_id": category_id,
@@ -637,6 +669,8 @@ def seed_one(
         "updated_at": created_at,
         "moderation_status": "active",
     }
+    if hub_slug:
+        post_row["hub_slug"] = hub_slug
 
     if dry_run:
         return {
@@ -647,15 +681,28 @@ def seed_one(
             "title": title[:80],
             "comments": len(comments),
             "author": author.user_id[:8],
+            "hub_slug": hub_slug,
         }
 
-    # Insert post
-    _, created = db.request(
-        "POST",
-        "/rest/v1/posts",
-        body=post_row,
-        prefer="return=representation",
-    )
+    # Insert post (hub_slug column may lag migration — retry without it)
+    try:
+        _, created = db.request(
+            "POST",
+            "/rest/v1/posts",
+            body=post_row,
+            prefer="return=representation",
+        )
+    except Exception as e:
+        if hub_slug and "hub_slug" in str(e).lower():
+            post_row.pop("hub_slug", None)
+            _, created = db.request(
+                "POST",
+                "/rest/v1/posts",
+                body=post_row,
+                prefer="return=representation",
+            )
+        else:
+            raise
     if not created:
         return {"status": "error", "reason": "empty_create", "pack": pack.media_path}
     post = created[0] if isinstance(created, list) else created

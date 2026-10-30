@@ -118,6 +118,8 @@ export class SurfacePageService {
       link_published_at: null,
       link_image_url: null,
       link_snippet: null,
+      is_adult: row?.is_adult === true,
+      moderation_status: row?.moderation_status ?? null,
     };
   }
 }

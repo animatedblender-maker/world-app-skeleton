@@ -211,14 +211,15 @@ def main():
 
     for post in longforms:
         path = post.get("media_path") or ""
-        # LongForm/<Country>/id/video.mp4
-        m = re.search(r"LongForm/(United_States|Germany|Egypt|Albania)/", path)
+        # LongForm/<Country>/id/video.mp4 (Kosovo packs are Albania market)
+        m = re.search(r"LongForm/(United_States|Germany|Egypt|Albania|Kosovo)/", path)
         folder = m.group(1) if m else None
         cc_map = {
             "United_States": "US",
             "Germany": "DE",
             "Egypt": "EG",
             "Albania": "AL",
+            "Kosovo": "AL",
         }
         cc = cc_map.get(folder) or (post.get("country_code") or "US").upper()
         ch = lf_channel.get(cc)
@@ -266,7 +267,13 @@ def main():
             continue
         sharer = rng.choice(pool)
         owner_prof = owners.get(owner) or {}
-        an = ch.get("name") or owner_prof.get("display_name") or "Channel"
+        # Prefer channel name for Hubs “Shared from …”; never country / User# / bare "Channel".
+        an = (
+            ch.get("name")
+            or owner_prof.get("display_name")
+            or owner_prof.get("username")
+            or ""
+        )
         au = ch.get("handle") or owner_prof.get("username") or ""
         share_body = hub_origin_body(
             sid=post["id"],

@@ -266,6 +266,7 @@ struct GraphQLProfile: Decodable {
     let deletedAt: String?
     let createdAt: String?
     let updatedAt: String?
+    let isVerified: Bool?
 
     enum CodingKeys: String, CodingKey {
         case userID = "user_id"
@@ -284,6 +285,7 @@ struct GraphQLProfile: Decodable {
         case deletedAt = "deleted_at"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case isVerified = "is_verified"
     }
 
     var toModel: Profile {
@@ -294,7 +296,8 @@ struct GraphQLProfile: Decodable {
             followersCount: nil, followingCount: nil,
             messagePrivacy: messagePrivacy ?? "everyone",
             accountStatus: accountStatus, deactivatedAt: deactivatedAt, deletedAt: deletedAt,
-            createdAt: createdAt ?? "", updatedAt: updatedAt ?? ""
+            createdAt: createdAt ?? "", updatedAt: updatedAt ?? "",
+            isVerified: isVerified
         )
     }
 }

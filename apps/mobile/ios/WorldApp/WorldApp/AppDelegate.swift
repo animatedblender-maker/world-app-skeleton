@@ -45,13 +45,24 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         Task { @MainActor in
             // Yield so RootView / splash can paint before CallKit + PushKit work.
             await Task.yield()
-            if AuthService.shared.isAuthenticated || isIncomingCallWake {
+            guard AuthService.shared.isAuthenticated || isIncomingCallWake else { return }
+            // Incoming call: register immediately. Normal cold open: wait so Feed isn't
+            // fighting PushKit + triple token sync (AppState also bootstraps ~1.5s later).
+            if isIncomingCallWake {
                 VoIPPushService.shared.bootstrap()
                 _ = CallKitManager.shared
                 CallSessionManager.shared.bootstrap()
                 UIApplication.shared.registerForRemoteNotifications()
                 await PushNotificationService.shared.syncWithServer(force: true)
+                return
             }
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard AuthService.shared.isAuthenticated else { return }
+            VoIPPushService.shared.bootstrap()
+            _ = CallKitManager.shared
+            // AppState.bootstrap already schedules VoIP + sync — only register APNs here.
+            UIApplication.shared.registerForRemoteNotifications()
+            await PushNotificationService.shared.syncWithServer(force: false)
         }
         return true
     }

@@ -89,6 +89,10 @@ import {
   handleModerationTicketAction,
 } from './reports/moderation-queue-page.js';
 import {
+  handleAccountQueueGet,
+  handleAccountQueueAction,
+} from './reports/account-queue-page.js';
+import {
   authMailStatus,
   confirmEmailWithToken,
   resendConfirmation,
@@ -271,7 +275,8 @@ app.use(
 app.use('/v1/anonymous', anonymousRouter);
 
 // ── Matterya moderation + Insights (password gate) ───────────────────
-// https://api.matterya.com/reports           · Claim-next moderation
+// https://api.matterya.com/reports           · Claim-next content moderation
+// https://api.matterya.com/reports/accounts  · Account strike / review queue
 // https://api.matterya.com/reports/analytics · Insights (activity/uploads)
 app.get('/reports', (req, res) => {
   void handleModerationQueueGet(req, res).catch((err) => {
@@ -302,6 +307,19 @@ app.post('/reports/ticket/action', (req, res) => {
   void handleModerationTicketAction(req, res).catch((err) => {
     console.error('[reports/ticket/action]', err?.message ?? err);
     res.status(500).send('action failed');
+  });
+});
+/** Account strike / review queue (severe or 3 mild strikes) */
+app.get('/reports/accounts', (req, res) => {
+  void handleAccountQueueGet(req, res).catch((err) => {
+    console.error('[reports/accounts]', err?.message ?? err);
+    res.status(500).send('accounts queue failed');
+  });
+});
+app.post('/reports/accounts/action', (req, res) => {
+  void handleAccountQueueAction(req, res).catch((err) => {
+    console.error('[reports/accounts/action]', err?.message ?? err);
+    res.status(500).send('accounts action failed');
   });
 });
 /** Masquerade review queue — legacy Remove / Flag / Skip (still available) */

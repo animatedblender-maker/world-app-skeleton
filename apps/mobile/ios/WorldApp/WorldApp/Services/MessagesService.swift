@@ -714,6 +714,22 @@ final class MessagesService {
         return result.deleteMessage
     }
 
+    func reportMessage(_ messageID: String, reason: String) async throws -> Bool {
+        struct Response: Decodable {
+            let reportMessage: Bool
+        }
+        let mutation = """
+        mutation ReportMessage($messageId: ID!, $reason: String!) {
+          reportMessage(message_id: $messageId, reason: $reason)
+        }
+        """
+        let result: Response = try await gql.authenticatedRequest(
+            query: mutation,
+            variables: ["messageId": messageID, "reason": reason]
+        )
+        return result.reportMessage
+    }
+
     func sendMessage(
         conversationID: String,
         body: String,

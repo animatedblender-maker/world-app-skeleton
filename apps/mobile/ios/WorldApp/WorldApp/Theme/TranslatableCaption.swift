@@ -15,11 +15,13 @@ struct TranslatableCaption: View {
     var moreTitle: String = "See more"
     var lessTitle: String = "See less"
     var uiTextStyle: UIFont.TextStyle = .body
-    /// When set, renders a plain `Text` with this line limit (Sparks / Reels dock).
+    /// When set **and** `expandable` is false, renders a plain `Text` with this line limit.
     var plainLineLimit: Int? = nil
     var buttonTint: Color = Theme.accentBright
     /// Skip expand/collapse chrome (always plain Text).
     var expandable: Bool = true
+    /// Expanded line cap for Sparks dock (grows the frosted box; nil = unlimited).
+    var expandedLineLimit: Int? = nil
     /// Ignored while Translate is disabled — kept for call-site compatibility.
     var showsTranslateControl: Bool = true
 
@@ -31,14 +33,15 @@ struct TranslatableCaption: View {
         Group {
             if trimmed.isEmpty {
                 EmptyView()
-            } else if let plainLineLimit {
-                Text(trimmed)
-                    .font(font)
-                    .foregroundStyle(color)
-                    .lineSpacing(lineSpacing)
-                    .lineLimit(plainLineLimit)
-                    .multilineTextAlignment(.leading)
-                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            } else if !expandable, let plainLineLimit {
+                MatteryaRichText(
+                    text: trimmed,
+                    font: font,
+                    color: color,
+                    lineSpacing: lineSpacing,
+                    lineLimit: plainLineLimit
+                )
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             } else if expandable {
                 ExpandableBodyText(
                     text: trimmed,
@@ -48,15 +51,18 @@ struct TranslatableCaption: View {
                     lineSpacing: lineSpacing,
                     moreTitle: moreTitle,
                     lessTitle: lessTitle,
-                    uiTextStyle: uiTextStyle
+                    uiTextStyle: uiTextStyle,
+                    buttonTint: buttonTint,
+                    expandedLineLimit: expandedLineLimit
                 )
             } else {
-                Text(trimmed)
-                    .font(font)
-                    .foregroundStyle(color)
-                    .lineSpacing(lineSpacing)
-                    .multilineTextAlignment(.leading)
-                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                MatteryaRichText(
+                    text: trimmed,
+                    font: font,
+                    color: color,
+                    lineSpacing: lineSpacing
+                )
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             }
         }
     }

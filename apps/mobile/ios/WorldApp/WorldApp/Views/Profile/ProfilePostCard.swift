@@ -31,10 +31,7 @@ struct ProfilePostCard: View {
                         .tracking(1.6)
                         .foregroundStyle(Theme.accent)
                 }
-                if let headline = post.displayHeadline {
-                    Text(headline)
-                        .postHeadlineStyle(lineLimit: 3)
-                }
+                // Caption lives in `content` via displayExcerpt (body, or headline-only).
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .layoutPriority(1)

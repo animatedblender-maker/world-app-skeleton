@@ -144,7 +144,10 @@ struct PostCommentsView: View {
                         isLiking: likingCommentIDs.contains(item.comment.id),
                         onReply: { startReply(to: item.comment, depth: item.depth) },
                         onToggleLike: { Task { await toggleLike(item.comment) } },
-                        onOpenProfile: { openCommentAuthor(item.comment) }
+                        onOpenProfile: { openCommentAuthor(item.comment) },
+                        onReport: { reason in
+                            Task { await reportComment(item.comment, reason: reason) }
+                        }
                     )
 
                     // Reply composer sits directly under the comment being answered.
@@ -442,6 +445,22 @@ struct PostCommentsView: View {
             // Keep optimistic state — never surface GraphQL "Unexpected error".
         }
     }
+
+    private func reportComment(_ comment: PostComment, reason: String) async {
+        do {
+            let ok = try await PostsService.shared.reportComment(comment.id, reason: reason)
+            await MainActor.run {
+                appState.showToast(
+                    ok ? "Comment reported. Thank you." : "Could not report comment.",
+                    style: ok ? .info : .error
+                )
+            }
+        } catch {
+            await MainActor.run {
+                appState.showToast(error.localizedDescription, style: .error)
+            }
+        }
+    }
 }
 
 struct FacebookCommentRow: View {
@@ -451,6 +470,9 @@ struct FacebookCommentRow: View {
     let onReply: () -> Void
     let onToggleLike: () -> Void
     var onOpenProfile: (() -> Void)? = nil
+    var onReport: ((String) -> Void)? = nil
+
+    @State private var showReportConfirm = false
 
     private var isReply: Bool { depth > 0 }
     private var avatarSize: CGFloat { isReply ? 26 : 32 }
@@ -534,6 +556,18 @@ struct FacebookCommentRow: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+        }
+        .contextMenu {
+            if onReport != nil {
+                Button(role: .destructive) {
+                    showReportConfirm = true
+                } label: {
+                    Label("Report", systemImage: "flag")
+                }
+            }
+        }
+        .matteryaReportDialog("Report comment", isPresented: $showReportConfirm) { reason in
+            onReport?(reason)
         }
     }
 

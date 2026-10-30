@@ -31,10 +31,17 @@ struct AnonymousMeView: View {
                                         Text(space.title)
                                             .font(.body.weight(.medium))
                                             .foregroundStyle(Theme.ink)
-                                        if let count = space.memberCount {
-                                            Text("\(count.formatted()) members")
-                                                .font(.caption)
-                                                .foregroundStyle(Theme.inkMuted)
+                                        HStack(spacing: 8) {
+                                            if let count = space.memberCount {
+                                                Text("\(count.formatted()) members")
+                                                    .font(.caption)
+                                                    .foregroundStyle(Theme.inkMuted)
+                                            }
+                                            if let posts = space.postCount {
+                                                Text("\(posts.formatted()) posts")
+                                                    .font(.caption)
+                                                    .foregroundStyle(Theme.inkMuted)
+                                            }
                                         }
                                     }
                                     Spacer()
@@ -108,9 +115,15 @@ struct AnonymousMeView: View {
                 .foregroundStyle(Theme.inkMuted)
                 .textCase(.uppercase)
 
-            Text("@\(store.displayUsername)")
-                .font(.system(size: 28, weight: .regular, design: .serif))
-                .foregroundStyle(Theme.ink)
+            Button {
+                store.pushProfile(username: store.displayUsername)
+            } label: {
+                Text("@\(store.displayUsername)")
+                    .font(.system(size: 28, weight: .regular, design: .serif))
+                    .foregroundStyle(Theme.ink)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open your Masquerade profile")
 
             Text(MatteryaCopy.anonymousMeHint)
                 .font(.subheadline)

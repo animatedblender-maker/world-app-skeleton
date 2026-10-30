@@ -302,6 +302,17 @@ export async function getOrCreateProfile(
         username: pub.username,
       });
     });
+    // Masquerade Inbox welcome from @matterya (separate from the normal-account welcome).
+    void import('../matterya-official.js')
+      .then(({ sendMatteryaMasqueradeWelcomeMessage }) =>
+        sendMatteryaMasqueradeWelcomeMessage(accountId)
+      )
+      .catch((err) => {
+        console.warn(
+          '[anonymous] masquerade welcome failed',
+          err instanceof Error ? err.message : err
+        );
+      });
     return { ok: true, profile: pub, created: true };
   } catch (err) {
     try {

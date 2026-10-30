@@ -118,7 +118,8 @@ enum FacebookMediaLayout {
             return feedVideoAspect
         }
         if post.hasMedia {
-            return photoPortraitAspect
+            // Photos: square box + `.fit` so memes aren't 4:5-cropped / soft-stretched.
+            return photoSquareAspect
         }
         return nil
     }

@@ -22,6 +22,8 @@ export type Conversation = {
   created_at: string;
   updated_at: string;
   last_message_at?: string | null;
+  /** primary = Messages; masquerade = Masquerade Inbox only */
+  surface?: string | null;
   members: PostAuthor[];
   last_message?: Message | null;
 };

@@ -63,11 +63,11 @@ struct AnonymousSpacesOnboardingView: View {
     }
 
     private func onboardingCard(_ space: AnonymousSpace) -> some View {
-        let joined = space.isJoined == true
-        let busy = joiningIds.contains(space.id)
+        let joined = store.isJoined(space)
+        let busy = joiningIds.contains(space.id) || store.isMembershipBusy(space.id)
 
         return VStack(alignment: .leading, spacing: 10) {
-            AnonymousSpaceCard(space: space)
+            AnonymousSpaceCard(space: space, isJoined: joined)
 
             Button {
                 guard !joined, !busy else { return }
