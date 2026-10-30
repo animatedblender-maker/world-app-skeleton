@@ -5,7 +5,7 @@
  * 1) Score text + video frames on-box (nothing leaves Matterya).
  * 2) On hit → FLAG on the platform (post stays visible) + open a report
  *    for /reports/masquerade (Remove / Flag / Skip).
- * 3) Spam / scam text still goes to held (not shown) — separate from NSFW flag.
+ * 3) Spam / scam text still goes to held (not shown) — separate from Mature flag.
  */
 import { pool } from '../db.js';
 import { runLocalSpamRules } from './local-rules.js';
@@ -99,21 +99,54 @@ export async function flagPostForReview(opts: {
     `,
     [opts.postId]
   );
-  if (existing.rows[0]?.id) {
-    await recordSystemAction('post', opts.postId, 'auto_flag', detail);
-    return { reportId: existing.rows[0].id };
+  let reportId = existing.rows[0]?.id ?? null;
+  if (!reportId) {
+    const { rows } = await pool.query<{ id: string }>(
+      `
+      insert into anonymous.reports (reporter_profile_id, target_type, target_id, reason, state)
+      values (null, 'post', $1::uuid, $2, 'open')
+      returning id
+      `,
+      [opts.postId, `auto:${detail}`.slice(0, 1000)]
+    );
+    reportId = rows[0]?.id ?? null;
+  }
+  await recordSystemAction('post', opts.postId, 'auto_flag', detail);
+
+  // Unified Claim-next queue — Mature content (never "NSFW" in product copy).
+  try {
+    const { upsertTicketFromReport } = await import('./tickets.js');
+    const { normalizeCategory } = await import('./categories.js');
+    const { rows: posts } = await pool.query<{
+      title: string | null;
+      body: string | null;
+      media_url: string | null;
+      thumb_url: string | null;
+    }>(
+      `select title, body, media_url, thumb_url from anonymous.posts where id = $1::uuid limit 1`,
+      [opts.postId]
+    );
+    const p = posts[0];
+    const category = normalizeCategory(
+      /nsfw|adult|sexual|video:nsfw|mature/i.test(reason) ? 'mature' : reason,
+      'mature'
+    );
+    await upsertTicketFromReport({
+      platform: 'masquerade',
+      targetKind: 'post',
+      targetId: opts.postId,
+      category,
+      source: 'auto',
+      previewTitle: p?.title ?? null,
+      previewBody: p?.body ?? null,
+      previewMediaUrl: p?.thumb_url || p?.media_url || null,
+      actor: 'auto-mod',
+    });
+  } catch (err: any) {
+    console.warn('[moderation/anon] ticket upsert failed', err?.message ?? err);
   }
 
-  const { rows } = await pool.query<{ id: string }>(
-    `
-    insert into anonymous.reports (reporter_profile_id, target_type, target_id, reason, state)
-    values (null, 'post', $1::uuid, $2, 'open')
-    returning id
-    `,
-    [opts.postId, `auto:${detail}`.slice(0, 1000)]
-  );
-  await recordSystemAction('post', opts.postId, 'auto_flag', detail);
-  return { reportId: rows[0]?.id ?? null };
+  return { reportId };
 }
 
 async function holdPost(postId: string, reason: string): Promise<void> {

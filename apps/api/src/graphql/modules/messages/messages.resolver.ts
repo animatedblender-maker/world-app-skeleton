@@ -104,6 +104,16 @@ export const messagesResolvers = {
       if (!args?.message_id) throw new Error('message_id is required.');
       return await svc().deleteMessage(args.message_id, user.id);
     },
+    reportMessage: async (
+      _: any,
+      args: { message_id: string; reason: string },
+      ctx: Context
+    ) => {
+      const user = requireAuth(ctx);
+      if (!args?.message_id) throw new Error('message_id is required.');
+      if (!args?.reason) throw new Error('reason is required.');
+      return await svc().reportMessage(args.message_id, user.id, args.reason);
+    },
     archiveConversation: async (_: any, args: { conversation_id: string }, ctx: Context) => {
       const user = requireAuth(ctx);
       if (!args?.conversation_id) throw new Error('conversation_id is required.');

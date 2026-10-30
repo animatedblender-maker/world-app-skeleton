@@ -12,6 +12,20 @@ export {
   isVideoModerationEnabled,
   videoNsfwThreshold,
 } from './video-local.js';
+export {
+  MODERATION_CATEGORIES,
+  normalizeCategory,
+  labelForCategory,
+  isModerationCategory,
+} from './categories.js';
+export {
+  upsertTicketFromReport,
+  claimNextTicket,
+  releaseTicket,
+  resolveTicket,
+  getClaimedTicketForActor,
+  openTicketCount,
+} from './tickets.js';
 export type {
   ModerateTextInput,
   ModerateTextResult,
@@ -21,3 +35,5 @@ export type {
 export type { ModerationQueueItem } from './queue.js';
 export type { AnonymousModInput, AnonymousModResult } from './anonymous-auto.js';
 export type { VideoNsfwResult } from './video-local.js';
+export type { ModerationCategorySlug, ModerationPlatform, ModerationTargetKind } from './categories.js';
+export type { TicketRow, UpsertTicketInput, ResolveAction } from './tickets.js';

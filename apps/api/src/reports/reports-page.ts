@@ -111,13 +111,22 @@ export function renderReportsLoginHtml(opts?: { error?: string; next?: string })
   const err = opts?.error
     ? `<p class="err">${escapeHtml(opts.error)}</p>`
     : '';
-  const next = escapeHtml(opts?.next || '/reports');
+  const nextRaw = String(opts?.next || '/reports');
+  const next = escapeHtml(nextRaw);
+  const isAnalytics =
+    nextRaw.includes('tab=analytics') || nextRaw.includes('/analytics') || nextRaw.includes('/insights');
+  const pageTitle = isAnalytics ? 'Matterya · Insights' : 'Matterya · Moderation';
+  const heading = isAnalytics ? 'Platform insights' : 'Moderation';
+  const sub = isAnalytics
+    ? 'Activity, uploads, and live stats. Enter the password to continue.'
+    : 'Claim-next review queue — one ticket at a time. Enter the password to continue.';
+  const cta = isAnalytics ? 'Open insights' : 'Open moderation';
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Matterya · Reports</title>
+  <title>${pageTitle}</title>
   <style>
     :root {
       --paper: #f8f6f2;
@@ -169,14 +178,14 @@ export function renderReportsLoginHtml(opts?: { error?: string; next?: string })
 <body>
   <form class="card" method="post" action="/reports/login" autocomplete="current-password">
     <div class="mark">Matterya</div>
-    <h1>Platform reports</h1>
-    <p class="sub">Activity, uploads, and live stats. Enter the reports password to continue.</p>
+    <h1>${heading}</h1>
+    <p class="sub">${sub}</p>
     ${err}
     <label for="password">Password</label>
     <input id="password" name="password" type="password" required autofocus placeholder="••••••••"/>
     <input type="hidden" name="next" value="${next}"/>
-    <button type="submit">Open reports</button>
-    <p class="foot">matterya.com · private statistics</p>
+    <button type="submit">${cta}</button>
+    <p class="foot">matterya.com · private ops</p>
   </form>
 </body>
 </html>`;
@@ -247,9 +256,11 @@ export function handleReportsLogin(req: Request, res: Response): void {
     return;
   }
   setAuthCookie(res);
-  const next = String(body.next || '/reports').startsWith('/reports')
-    ? String(body.next || '/reports')
-    : '/reports';
+  const rawNext = String(body.next || '/reports');
+  const next =
+    rawNext.startsWith('/reports') || rawNext.startsWith('/insights')
+      ? rawNext
+      : '/reports';
   res.redirect(303, next);
 }
 

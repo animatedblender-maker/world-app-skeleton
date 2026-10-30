@@ -39,19 +39,19 @@ Runs **in-process** on **`matterya-api`** via **`ffmpeg-static`**. No Background
 
 Optional Docker worker (`Dockerfile.media-worker`) is only if you later want a separate paid dyno.
 
-## Platform reports (password page)
+## Moderation + Insights (password pages)
 
 | | |
 |--|--|
-| **URL** | https://api.matterya.com/reports |
-| **Password** | env `REPORTS_PAGE_PASSWORD` (default set in code for this project) |
-| **Tabs** | Activity · Uploads |
+| **Moderation (Claim next)** | https://api.matterya.com/reports |
+| **Insights (activity/uploads)** | https://api.matterya.com/reports/analytics · also `/insights` |
+| **Password** | env `REPORTS_PAGE_PASSWORD` (same cookie for both) |
 
 Optional env:
 
 | Key | Purpose |
 |-----|---------|
-| `REPORTS_PAGE_PASSWORD` | Login password for `/reports` |
+| `REPORTS_PAGE_PASSWORD` | Login password for `/reports` and Insights |
 | `REPORTS_COOKIE_SECRET` | Signs the session cookie (defaults to admin key) |
 
 ## Critical: Dashboard overrides Blueprint

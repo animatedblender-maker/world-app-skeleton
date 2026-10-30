@@ -715,6 +715,7 @@ export const typeDefs = `#graphql
     ): Message!
     updateMessage(message_id: ID!, body: String!): Message!
     deleteMessage(message_id: ID!): Boolean!
+    reportMessage(message_id: ID!, reason: String!): Boolean!
     archiveConversation(conversation_id: ID!): Boolean!
     deleteConversation(conversation_id: ID!): Boolean!
     acceptMessageRequest(conversation_id: ID!): Conversation!

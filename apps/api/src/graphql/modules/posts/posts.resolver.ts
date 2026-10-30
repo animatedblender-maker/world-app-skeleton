@@ -145,6 +145,12 @@ export const postsResolvers = {
       if (!args?.reason) throw new Error('reason is required.');
       return await svc().reportPost(args.post_id, user.id, args.reason);
     },
+    reportComment: async (_: any, args: { comment_id: string; reason: string }, ctx: any) => {
+      const user = requireAuth(ctx);
+      if (!args?.comment_id) throw new Error('comment_id is required.');
+      if (!args?.reason) throw new Error('reason is required.');
+      return await svc().reportComment(args.comment_id, user.id, args.reason);
+    },
     likeComment: async (_: any, args: any, ctx: any) => {
       const user = requireAuth(ctx);
       if (!args?.comment_id) throw new Error('comment_id is required.');

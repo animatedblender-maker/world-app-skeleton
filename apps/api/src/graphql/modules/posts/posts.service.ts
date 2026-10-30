@@ -2045,6 +2045,47 @@ export class PostsService {
     return updated;
   }
 
+  async reportComment(commentId: string, userId: string, reason: string): Promise<boolean> {
+    const trimmed = String(reason ?? '').trim();
+    if (!trimmed) throw new Error('Report reason is required.');
+    const { rows } = await pool.query<{ id: string; post_id: string; body: string }>(
+      `
+      select id::text, post_id::text, body
+      from public.post_comments
+      where id = $1::uuid
+      limit 1
+      `,
+      [commentId]
+    );
+    if (!rows[0]) throw new Error('Comment not found.');
+    await this.ensurePostAccess(rows[0].post_id, userId);
+    await pool.query(
+      `
+      insert into public.post_comment_reports (comment_id, reporter_id, reason)
+      values ($1::uuid, $2::uuid, $3)
+      `,
+      [commentId, userId, trimmed]
+    );
+    try {
+      const { upsertTicketFromReport } = await import('../../../moderation/tickets.js');
+      const { normalizeCategory } = await import('../../../moderation/categories.js');
+      await upsertTicketFromReport({
+        platform: 'feed',
+        targetKind: 'comment',
+        targetId: commentId,
+        category: normalizeCategory(trimmed),
+        source: 'user',
+        reporterUserId: userId,
+        previewTitle: null,
+        previewBody: rows[0].body,
+        actor: userId,
+      });
+    } catch (err: any) {
+      console.warn('[reportComment] ticket upsert failed', err?.message ?? err);
+    }
+    return true;
+  }
+
   async reportPost(postId: string, userId: string, reason: string): Promise<boolean> {
     const trimmed = String(reason ?? '').trim();
     if (!trimmed) throw new Error('Report reason is required.');
@@ -2056,6 +2097,46 @@ export class PostsService {
       `,
       [postId, userId, trimmed]
     );
+
+    // Unified moderation ticket (Claim-next queue).
+    try {
+      const { upsertTicketFromReport } = await import('../../../moderation/tickets.js');
+      const { normalizeCategory } = await import('../../../moderation/categories.js');
+      const { rows } = await pool.query<{
+        title: string | null;
+        body: string | null;
+        media_url: string | null;
+        thumb_url: string | null;
+        media_type: string | null;
+      }>(
+        `
+        select title, body, media_url, thumb_url, media_type
+        from public.posts where id = $1::uuid limit 1
+        `,
+        [postId]
+      );
+      const p = rows[0];
+      const body = String(p?.body || '');
+      const platform = /__spark__|__spark_share__|__reel__/i.test(body)
+        ? 'sparks'
+        : String(p?.media_type || '').toLowerCase() === 'video'
+          ? 'hubs'
+          : 'feed';
+      await upsertTicketFromReport({
+        platform,
+        targetKind: 'post',
+        targetId: postId,
+        category: normalizeCategory(trimmed),
+        source: 'user',
+        reporterUserId: userId,
+        previewTitle: p?.title ?? null,
+        previewBody: p?.body ?? null,
+        previewMediaUrl: p?.thumb_url || p?.media_url || null,
+        actor: userId,
+      });
+    } catch (err: any) {
+      console.warn('[reportPost] ticket upsert failed', err?.message ?? err);
+    }
     return true;
   }
 

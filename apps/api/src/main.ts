@@ -84,6 +84,11 @@ import {
   handleMasqueradeModGet,
 } from './reports/masquerade-mod-page.js';
 import {
+  handleModerationClaim,
+  handleModerationQueueGet,
+  handleModerationTicketAction,
+} from './reports/moderation-queue-page.js';
+import {
   authMailStatus,
   confirmEmailWithToken,
   resendConfirmation,
@@ -265,18 +270,41 @@ app.use(
 // Matterya Anonymous (adult-only pseudonymous Spaces) — JWT via getUserFromRequest
 app.use('/v1/anonymous', anonymousRouter);
 
-// ── Matterya reports page (password gate) ─────────────────────────────
-// https://api.matterya.com/reports  ·  password via REPORTS_PAGE_PASSWORD
+// ── Matterya moderation + Insights (password gate) ───────────────────
+// https://api.matterya.com/reports           · Claim-next moderation
+// https://api.matterya.com/reports/analytics · Insights (activity/uploads)
 app.get('/reports', (req, res) => {
-  void handleReportsGet(req, res);
+  void handleModerationQueueGet(req, res).catch((err) => {
+    console.error('[reports]', err?.message ?? err);
+    res.status(500).send('reports failed');
+  });
 });
+app.get('/reports/analytics', (req, res) => {
+  void handleReportsGet(req, res).catch((err: any) => {
+    console.error('[reports/analytics]', err?.message ?? err);
+    res.status(500).send('analytics failed');
+  });
+});
+app.get('/insights', (_req, res) => res.redirect(302, '/reports/analytics'));
 /** Snappy Insights JSON (cookie auth) — used by time-range filters without full reload */
 app.get('/reports/data', (req, res) => {
   void handleReportsDataGet(req, res);
 });
 app.post('/reports/login', handleReportsLogin);
 app.get('/reports/logout', handleReportsLogout);
-/** Masquerade review queue — Remove / Flag / Skip */
+app.post('/reports/claim', (req, res) => {
+  void handleModerationClaim(req, res).catch((err) => {
+    console.error('[reports/claim]', err?.message ?? err);
+    res.status(500).send('claim failed');
+  });
+});
+app.post('/reports/ticket/action', (req, res) => {
+  void handleModerationTicketAction(req, res).catch((err) => {
+    console.error('[reports/ticket/action]', err?.message ?? err);
+    res.status(500).send('action failed');
+  });
+});
+/** Masquerade review queue — legacy Remove / Flag / Skip (still available) */
 app.get('/reports/masquerade', (req, res) => {
   void handleMasqueradeModGet(req, res);
 });

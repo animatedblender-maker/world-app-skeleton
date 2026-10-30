@@ -821,6 +821,57 @@ export class MessagesService {
     return await this.conversationById(conversationId, userId);
   }
 
+  async reportMessage(messageId: string, userId: string, reason: string): Promise<boolean> {
+    const trimmed = String(reason ?? '').trim();
+    if (!trimmed) throw new Error('Report reason is required.');
+    const { rows } = await pool.query<{
+      id: string;
+      conversation_id: string;
+      sender_id: string;
+      body: string | null;
+    }>(
+      `
+      select m.id::text, m.conversation_id::text, m.sender_id::text, m.body
+      from public.messages m
+      join public.conversation_members cm
+        on cm.conversation_id = m.conversation_id and cm.user_id = $2::uuid
+      where m.id = $1::uuid
+      limit 1
+      `,
+      [messageId, userId]
+    );
+    if (!rows[0]) throw new Error('Message not found.');
+    await pool.query(
+      `
+      insert into public.message_reports (message_id, reporter_id, category, reason)
+      values ($1::uuid, $2::uuid, $3, $4)
+      `,
+      [
+        messageId,
+        userId,
+        (await import('../../../moderation/categories.js')).normalizeCategory(trimmed),
+        trimmed,
+      ]
+    );
+    try {
+      const { upsertTicketFromReport } = await import('../../../moderation/tickets.js');
+      const { normalizeCategory } = await import('../../../moderation/categories.js');
+      await upsertTicketFromReport({
+        platform: 'messages',
+        targetKind: 'message',
+        targetId: messageId,
+        category: normalizeCategory(trimmed),
+        source: 'user',
+        reporterUserId: userId,
+        previewBody: rows[0].body,
+        actor: userId,
+      });
+    } catch (err: any) {
+      console.warn('[reportMessage] ticket upsert failed', err?.message ?? err);
+    }
+    return true;
+  }
+
   async archiveConversation(conversationId: string, userId: string): Promise<boolean> {
     await this.ensureMember(conversationId, userId);
     if (!(await supportsInboxColumns())) return true;
