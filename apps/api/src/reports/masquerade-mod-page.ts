@@ -5,7 +5,7 @@
  * Same cookie gate as /reports. Actions:
  *   remove — take post down (state=removed)
  *   flag   — keep platform Flagged badge; close report
- *   skip   — dismiss report + clear flag (allowed by policy / false positive)
+ *   ignore — dismiss report + clear flag (allowed by policy / false positive)
  */
 import type { Request, Response } from 'express';
 import { pool } from '../db.js';
@@ -102,7 +102,7 @@ function renderQueueHtml(items: QueueRow[]): string {
           <input type="hidden" name="post_id" value="${escapeHtml(it.post_id)}"/>
           <button name="decision" value="remove" class="danger">Remove</button>
           <button name="decision" value="flag" class="accent">Flag</button>
-          <button name="decision" value="skip" class="ghost">Skip</button>
+          <button name="decision" value="ignore" class="ghost">Ignore</button>
         </form>
       </article>`;
     })
@@ -176,7 +176,7 @@ function renderQueueHtml(items: QueueRow[]): string {
     <div>
       <div class="mark">Matterya</div>
       <h1>Masquerade moderation</h1>
-      <p class="sub">Open auto + user reports · Remove / Flag / Skip</p>
+      <p class="sub">Open auto + user reports · Remove / Flag / Ignore</p>
     </div>
     <div class="links">
       <a href="/reports">Moderation</a>
@@ -213,7 +213,8 @@ export async function handleMasqueradeModAction(req: Request, res: Response): Pr
   const body = (req.body || {}) as Record<string, unknown>;
   const reportId = String(body.report_id || '').trim();
   const postId = String(body.post_id || '').trim();
-  const decision = String(body.decision || '').trim().toLowerCase();
+  let decision = String(body.decision || '').trim().toLowerCase();
+  if (decision === 'ignore') decision = 'skip';
   if (!reportId || !postId || !['remove', 'flag', 'skip'].includes(decision)) {
     res.status(400).send('bad request');
     return;

@@ -152,7 +152,11 @@ export async function upsertTicketFromReport(input: UpsertTicketInput): Promise<
 }
 
 /** Claim the next open unassigned ticket (one-at-a-time). */
-export async function claimNextTicket(actor: string): Promise<TicketRow | null> {
+export async function claimNextTicket(
+  actor: string,
+  opts?: { excludeTicketId?: string | null }
+): Promise<TicketRow | null> {
+  const excludeId = opts?.excludeTicketId?.trim() || null;
   const client = await pool.connect();
   try {
     await client.query('begin');
@@ -163,6 +167,7 @@ export async function claimNextTicket(actor: string): Promise<TicketRow | null> 
         from public.moderation_tickets
         where status = 'open'
           and assigned_to is null
+          and ($2::uuid is null or id <> $2::uuid)
         order by
           case when source = 'auto' then 0 else 1 end,
           last_report_at asc
@@ -182,7 +187,7 @@ export async function claimNextTicket(actor: string): Promise<TicketRow | null> 
         t.preview_media_url, t.assigned_to, t.claimed_at::text, t.mod_action, t.mod_category,
         t.created_at::text
       `,
-      [actor]
+      [actor, excludeId]
     );
     const ticket = rows[0] ?? null;
     if (ticket) {

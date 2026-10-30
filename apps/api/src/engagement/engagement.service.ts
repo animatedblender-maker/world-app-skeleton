@@ -1389,18 +1389,18 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
   <title>${esc(report.title)}</title>
   <style>
     :root {
-      --bg: #0f0f10;
-      --bg2: #18181b;
-      --panel: #1f1f23;
-      --panel2: #27272a;
-      --border: #3f3f46;
-      --text: #fafafa;
-      --muted: #a1a1aa;
-      --accent: #1877f2;
-      --accent2: #e4a853;
-      --good: #22c55e;
+      --bg: #f8f6f2;
+      --bg2: #f3efe8;
+      --panel: #fffcf8;
+      --panel2: #f3efe8;
+      --border: #ddd6cc;
+      --text: #2c2825;
+      --muted: #7a736c;
+      --accent: #7b6347;
+      --accent2: #a78b66;
+      --good: #166534;
       --warn: #f59e0b;
-      --bad: #ef4444;
+      --bad: #991b1b;
       --radius: 14px;
       --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
@@ -1421,8 +1421,8 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
     }
     .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px; }
     .brand-mark {
-      width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg,#1877f2,#e4a853);
-      display: grid; place-items: center; font-weight: 800; font-size: 14px;
+      width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg,#7b6347,#a78b66);
+      display: grid; place-items: center; font-weight: 800; font-size: 14px; color: #fff;
     }
     .brand h1 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: -0.02em; }
     .brand p { margin: 2px 0 0; color: var(--muted); font-size: 11px; }
@@ -1432,14 +1432,14 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
       text-align: left; padding: 10px 12px; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 13px;
     }
     .nav button:hover { background: var(--panel); color: var(--text); }
-    .nav button.active { background: rgba(24,119,242,0.18); color: #fff; }
+    .nav button.active { background: #f3e8d8; color: #7b6347; }
     .side-actions { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
     .btn {
       display: inline-flex; align-items: center; justify-content: center; gap: 8px;
       border-radius: 999px; border: 1px solid var(--border); background: var(--panel);
       color: var(--text); padding: 10px 14px; font-weight: 650; font-size: 13px; cursor: pointer;
     }
-    .btn:hover { border-color: #71717a; }
+    .btn:hover { border-color: var(--accent2); }
     .btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
     .btn.ghost { background: transparent; }
     .main { padding: 18px 18px 40px; max-width: 1400px; }
@@ -1456,8 +1456,8 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
       background: var(--panel); color: var(--muted); font-size: 12px; font-weight: 700;
       transition: background .12s ease, color .12s ease, transform .08s ease, opacity .12s ease;
     }
-    .range-btn:hover { background: #2a2a2e; color: #fff; }
-    .range-btn.active { background: #fff; color: #111; border-color: #fff; }
+    .range-btn:hover { background: #efe8dc; color: var(--text); }
+    .range-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
     .range-btn:active { transform: scale(0.96); }
     .range-btn:disabled { opacity: 0.45; cursor: wait; }
     .main.is-loading { opacity: 0.55; pointer-events: none; transition: opacity .12s ease; }
@@ -1476,7 +1476,7 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
     }
     .kpi-v { font-size: 1.45rem; font-weight: 750; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
     .kpi-l { margin-top: 4px; color: var(--muted); font-size: 12px; font-weight: 600; }
-    .kpi-h { margin-top: 2px; color: #71717a; font-size: 11px; }
+    .kpi-h { margin-top: 2px; color: var(--muted); font-size: 11px; }
     .grid-2 { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; }
     @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
     .card {
@@ -1485,7 +1485,7 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
     .card h3 { margin: 0 0 8px; font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
     .chart-caption { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.45; max-width: 40rem; }
     .chart-tip {
-      min-height: 1.35em; margin: 0 0 8px; font-size: 12px; font-weight: 600; color: #e4e4e7;
+      min-height: 1.35em; margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--text);
       font-variant-numeric: tabular-nums;
     }
     .chart-tip:empty::before { content: 'Hover a bar to see when and how many signals.'; color: var(--muted); font-weight: 500; }
@@ -1499,10 +1499,10 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
       cursor: default;
     }
     .bar {
-      width: 70%; max-width: 28px; background: linear-gradient(180deg, #4dabff, #1877f2);
+      width: 70%; max-width: 28px; background: linear-gradient(180deg,#a78b66,#7b6347);
       border-radius: 5px 5px 2px 2px; min-height: 3px; transition: filter .12s ease, opacity .12s ease;
     }
-    .bar-col:hover .bar { filter: brightness(1.15); }
+    .bar-col:hover .bar { filter: brightness(1.08); }
     .bar-label {
       height: 28px; font-size: 10px; line-height: 1.15; color: var(--muted); text-align: center;
       white-space: pre-line; max-width: 100%; overflow: hidden;
@@ -1519,27 +1519,27 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
       flex: 1 1 220px; min-width: 180px; background: var(--bg); border: 1px solid var(--border);
       border-radius: 999px; padding: 10px 14px; color: var(--text);
     }
-    .search:focus { outline: 2px solid rgba(24,119,242,0.35); border-color: var(--accent); }
-    .table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg2); max-height: min(70vh, 820px); }
+    .search:focus { outline: 2px solid rgba(123,99,71,0.35); border-color: var(--accent); }
+    .table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); max-height: min(70vh, 820px); }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #2a2a2e; vertical-align: top; }
-    th { position: sticky; top: 0; background: #232327; z-index: 1; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
-    tr:hover td { background: rgba(255,255,255,0.03); }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { position: sticky; top: 0; background: #f3efe8; z-index: 1; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+    tr:hover td { background: rgba(123,99,71,0.04); }
     .num { text-align: right; font-variant-numeric: tabular-nums; }
     .nowrap { white-space: nowrap; font-variant-numeric: tabular-nums; }
     .clip { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .muted { color: var(--muted); }
     .small { font-size: 11px; }
     .pill {
-      display: inline-block; padding: 3px 8px; border-radius: 999px; background: rgba(24,119,242,0.15);
-      color: #93c5fd; font-size: 11px; font-weight: 700;
+      display: inline-block; padding: 3px 8px; border-radius: 999px; background: rgba(123,99,71,0.12);
+      color: #7b6347; font-size: 11px; font-weight: 700;
     }
     .person { display: flex; align-items: center; gap: 10px; }
     .avatar {
-      width: 32px; height: 32px; border-radius: 50%; background: #3f3f46; display: grid; place-items: center;
+      width: 32px; height: 32px; border-radius: 50%; background: #efe8dc; color: var(--accent); display: grid; place-items: center;
       font-weight: 800; font-size: 12px; flex: 0 0 auto;
     }
-    .foot { margin-top: 20px; color: #71717a; font-size: 11px; }
+    .foot { margin-top: 20px; color: var(--muted); font-size: 11px; }
     .empty { padding: 28px; text-align: center; color: var(--muted); }
   </style>
 </head>
@@ -1564,6 +1564,7 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
       <div class="side-actions">
         <button type="button" class="btn primary" id="btn-refresh">Refresh data</button>
         <button type="button" class="btn" id="btn-export">Export JSON</button>
+        <a class="btn ghost" href="/reports">Moderation queue</a>
         <a class="btn ghost" href="/reports/logout">Log out</a>
       </div>
     </aside>

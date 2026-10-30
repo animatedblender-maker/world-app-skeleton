@@ -1,10 +1,10 @@
 /**
- * Unified Matterya moderation queue — one ticket at a time (Claim next).
+ * Unified Matterya moderation queue — one ticket at a time (auto-claim).
  * https://api.matterya.com/reports
  *
  * Remove as <category> → archive + delete live
  * Mark as <category>   → stay live + tagged
- * Skip                 → dismiss
+ * Ignore               → dismiss (false positive)
  */
 import type { Request, Response } from 'express';
 import {
@@ -23,6 +23,7 @@ import {
   releaseTicket,
   resolveTicket,
   type TicketDisplay,
+  type TicketRow,
 } from '../moderation/tickets.js';
 import { handleReportsGet } from './reports-page.js';
 
@@ -42,7 +43,7 @@ function actorFromReq(req: Request): string {
   return `mod:${Buffer.from(ua).toString('base64url').slice(0, 24)}`;
 }
 
-function categoryOptionsHtml(name: string): string {
+function categoryOptionsHtml(): string {
   return MODERATION_CATEGORIES.map(
     (c) => `<option value="${escapeHtml(c.slug)}">${escapeHtml(c.label)}</option>`
   ).join('\n');
@@ -56,6 +57,27 @@ function avatarUrlFor(ticket: TicketDisplay): string {
     (ticket.author_avatar_seed || ticket.author_username || 'anonymous').trim() ||
     'anonymous';
   return `https://api.dicebear.com/7.x/shapes/svg?seed=${encodeURIComponent(s)}`;
+}
+
+async function ensureClaimedTicket(
+  actor: string,
+  opts?: { excludeTicketId?: string | null; preferTicketId?: string | null }
+): Promise<TicketRow | null> {
+  const prefer = opts?.preferTicketId?.trim() || null;
+  if (prefer && /^[0-9a-f-]{36}$/i.test(prefer)) {
+    const result = await claimTicketById(prefer, actor);
+    if (result.ok && result.ticket) return result.ticket;
+  }
+
+  const existing = await getClaimedTicketForActor(actor);
+  if (existing) {
+    if (opts?.excludeTicketId && existing.id === opts.excludeTicketId) {
+      // fall through to claim another
+    } else {
+      return existing;
+    }
+  }
+  return claimNextTicket(actor, { excludeTicketId: opts?.excludeTicketId });
 }
 
 function renderShell(opts: {
@@ -75,42 +97,51 @@ function renderShell(opts: {
 <title>Matterya · Moderation</title>
 <style>
   :root {
-    --bg: #070b10; --card: #121a24; --line: #243041; --text: #e8eef7;
-    --muted: #8fa3b8; --accent: #5eead4; --danger: #f87171; --ok: #34d399;
+    --paper: #f8f6f2; --ink: #2c2825; --muted: #7a736c; --accent: #7b6347;
+    --border: #ddd6cc; --surface: #fffcf8; --danger: #b91c1c; --ok: #166534;
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
-    background: radial-gradient(900px 500px at 10% -10%, #132033 0%, var(--bg) 55%);
-    color: var(--text); min-height: 100vh;
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+    background: radial-gradient(1200px 600px at 20% 0%, #efe8dc 0%, var(--paper) 55%);
+    color: var(--ink); min-height: 100vh;
   }
   header {
     position: sticky; top: 0; z-index: 5;
-    backdrop-filter: blur(12px); background: rgba(7,11,16,.88);
-    border-bottom: 1px solid var(--line);
-    padding: 12px 18px; display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: center;
+    background: rgba(255,252,248,.92); backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 20px; display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: center;
   }
-  h1 { font-size: 1.05rem; margin: 0; font-weight: 650; }
+  .mark {
+    font-size: 11px; font-weight: 700; letter-spacing: .2em;
+    text-transform: uppercase; color: var(--accent);
+  }
+  h1 {
+    margin: 0; font-size: 1.35rem; font-weight: 500;
+    font-family: ui-serif, Georgia, serif;
+  }
+  .header-copy { display: grid; gap: 2px; }
   .muted { color: var(--muted); font-size: .85rem; }
   .pill {
     display: inline-flex; align-items: center; gap: 6px;
-    padding: .2rem .65rem; border-radius: 999px; font-size: .75rem; font-weight: 600;
-    background: #1a2433; color: var(--muted); border: 1px solid var(--line);
+    padding: .2rem .65rem; border-radius: 999px; font-size: .75rem; font-weight: 700;
+    background: #f3e8d8; color: var(--accent); border: 1px solid #e8dcc8;
   }
-  .pill.ok { color: var(--ok); border-color: #14532d; background: #052e1a; }
-  .pill.auto { color: #fbbf24; border-color: #78350f; background: #1c1408; }
-  a.nav { color: var(--accent); text-decoration: none; font-size: .85rem; }
+  .pill.ok { color: var(--ok); border-color: #bbf7d0; background: #dcfce7; }
+  .pill.auto { color: #92400e; border-color: #fde68a; background: #fff7ed; }
+  a.nav { color: var(--accent); text-decoration: none; font-size: .85rem; margin-left: 10px; }
+  a.nav:hover { text-decoration: underline; }
   main { max-width: 720px; margin: 0 auto; padding: 24px 16px 64px; }
   .card {
-    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
     padding: 18px; display: grid; gap: 14px;
+    box-shadow: 0 10px 28px rgba(44,40,37,.06);
   }
-  .author {
-    display: flex; align-items: center; gap: 12px;
-  }
+  .author { display: flex; align-items: center; gap: 12px; }
   .author img {
     width: 44px; height: 44px; border-radius: 50%;
-    background: #0a1018; border: 1px solid var(--line); object-fit: cover;
+    background: #efe8dc; border: 1px solid var(--border); object-fit: cover;
   }
   .author .who { display: grid; gap: 2px; min-width: 0; }
   .author .name {
@@ -119,31 +150,35 @@ function renderShell(opts: {
   }
   .author .sub { color: var(--muted); font-size: .78rem; }
   .meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  h2 { margin: 0; font-size: 1.15rem; line-height: 1.35; }
-  .body { margin: 0; color: var(--muted); white-space: pre-wrap; }
+  h2 { margin: 0; font-size: 1.15rem; line-height: 1.35; font-weight: 600; }
+  .body { margin: 0; color: var(--muted); white-space: pre-wrap; line-height: 1.45; }
   .media {
     width: 100%; max-height: 480px; border-radius: 12px;
-    background: #0a1018; object-fit: contain; display: block;
+    background: #111; object-fit: contain; display: block;
   }
-  video.media { max-height: 520px; background: #000; }
-  .media.empty { height: 120px; display: grid; place-items: center; color: var(--muted); }
+  video.media { max-height: 520px; }
+  .media.empty {
+    height: 120px; display: grid; place-items: center; color: var(--muted);
+    background: #f3efe8;
+  }
   .actions { display: grid; gap: 10px; margin-top: 4px; }
   .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   select, button {
-    font: inherit; border-radius: 10px; border: 1px solid var(--line);
-    padding: .55rem .85rem; background: #0e1620; color: var(--text);
+    font: inherit; border-radius: 999px; border: 1px solid var(--border);
+    padding: .55rem .95rem; background: #fff; color: var(--ink);
   }
-  button { cursor: pointer; font-weight: 600; }
-  button.primary { background: var(--accent); color: #042f2e; border-color: transparent; }
-  button.danger { background: #3f1d1d; color: var(--danger); border-color: #7f1d1d; }
-  button.ghost { background: transparent; }
-  .flash { background: #052e1a; border: 1px solid #14532d; color: var(--ok);
-    padding: 10px 12px; border-radius: 10px; }
+  button { cursor: pointer; font-weight: 650; }
+  button.primary { background: var(--accent); color: #fff; border-color: transparent; }
+  button.danger { background: var(--danger); color: #fff; border-color: transparent; }
+  button.ghost { background: #efe8dc; color: var(--ink); }
+  .flash {
+    background: #dcfce7; border: 1px solid #bbf7d0; color: var(--ok);
+    padding: 10px 12px; border-radius: 10px;
+  }
   .empty { text-align: center; padding: 48px 16px; }
-  .empty button { margin-top: 16px; }
   .ids {
     display: grid; gap: 6px; padding: 10px 12px; border-radius: 10px;
-    background: #0a1018; border: 1px solid var(--line); font-size: .78rem;
+    background: #f3efe8; border: 1px solid var(--border); font-size: .78rem;
   }
   .ids .row-id {
     display: grid; grid-template-columns: 88px 1fr; gap: 8px; align-items: start;
@@ -158,9 +193,12 @@ function renderShell(opts: {
 </head>
 <body>
 <header>
-  <h1>Matterya moderation</h1>
+  <div class="header-copy">
+    <div class="mark">Matterya</div>
+    <h1>Moderation</h1>
+  </div>
   <span class="pill ok">${opts.openCount} open</span>
-  <span class="muted">One ticket at a time · Claim next</span>
+  <span class="muted">Auto queue · one ticket at a time</span>
   <span style="flex:1"></span>
   <a class="nav" href="/reports/analytics">Insights</a>
   <a class="nav" href="/reports/masquerade">Masquerade (legacy)</a>
@@ -178,7 +216,6 @@ function renderShell(opts: {
 function renderMedia(ticket: TicketDisplay): string {
   const mediaType = String(ticket.media_type || '').toLowerCase();
   const videoUrl = ticket.media_url;
-  // Poster must be an image — never reuse the video URL.
   const thumb = ticket.thumb_url || '';
 
   if (mediaType === 'video' && videoUrl) {
@@ -188,7 +225,10 @@ function renderMedia(ticket: TicketDisplay): string {
   if (mediaType === 'video' && thumb) {
     return `<img class="media" src="${escapeHtml(thumb)}" alt="Video poster"/>`;
   }
-  const img = ticket.thumb_url || (mediaType === 'video' ? null : ticket.media_url) || ticket.preview_media_url;
+  const img =
+    ticket.thumb_url ||
+    (mediaType === 'video' ? null : ticket.media_url) ||
+    ticket.preview_media_url;
   if (img) {
     return `<img class="media" src="${escapeHtml(img)}" alt=""/>`;
   }
@@ -205,7 +245,7 @@ function renderTicketCard(ticket: TicketDisplay): string {
     ticket.source === 'auto'
       ? `<span class="pill auto">auto-detected</span>`
       : `<span class="pill">${escapeHtml(ticket.source)}</span>`;
-  const opts = categoryOptionsHtml('category');
+  const opts = categoryOptionsHtml();
   const media = renderMedia(ticket);
   const queuePath = `/reports?ticket=${encodeURIComponent(ticket.id)}`;
   const queueAbs = `https://api.matterya.com${queuePath}`;
@@ -257,7 +297,7 @@ function renderTicketCard(ticket: TicketDisplay): string {
       <div class="row">
         <button class="danger" name="action" value="remove" type="submit">Remove as…</button>
         <button class="primary" name="action" value="mark" type="submit">Mark as…</button>
-        <button class="ghost" name="action" value="skip" type="submit">Skip</button>
+        <button class="ghost" name="action" value="ignore" type="submit">Ignore</button>
         <button class="ghost" name="action" value="release" type="submit">Release</button>
       </div>
     </form>
@@ -267,11 +307,12 @@ function renderTicketCard(ticket: TicketDisplay): string {
 function renderEmpty(openCount: number): string {
   return `
   <div class="card empty">
-    <h2>No ticket claimed</h2>
-    <p class="muted">${openCount} open in the pool. Claim one to review.</p>
-    <form method="post" action="/reports/claim">
-      <button class="primary" type="submit">Claim next</button>
-    </form>
+    <h2>Queue clear</h2>
+    <p class="muted">${
+      openCount > 0
+        ? `${openCount} open, but none could be claimed right now. Refresh shortly.`
+        : 'No open tickets. Auto-detected and user reports will appear here.'
+    }</p>
   </div>`;
 }
 
@@ -284,33 +325,21 @@ export async function handleModerationQueueGet(req: Request, res: Response): Pro
     return handleReportsGet(req, res);
   }
 
-  // Heal historical flagged posts that never got Claim-next tickets.
   await ensureAutoTicketsFromFlaggedPosts();
 
   const actor = actorFromReq(req);
   const ticketParam = String(req.query.ticket || '').trim();
   let flash = String(req.query.flash || '') || null;
 
-  // Deep-link: /reports?ticket=<uuid> claims that ticket into this session.
-  if (ticketParam && /^[0-9a-f-]{36}$/i.test(ticketParam)) {
-    const result = await claimTicketById(ticketParam, actor);
-    if (!result.ok) {
-      const msg =
-        result.error === 'claimed_by_other'
-          ? 'Ticket already claimed by someone else'
-          : result.error === 'already_resolved'
-            ? 'Ticket already resolved'
-            : result.error === 'not_found'
-              ? 'Ticket not found'
-              : 'Could not open ticket';
-      flash = flash || msg;
-    }
+  const claimed = await ensureClaimedTicket(actor, {
+    preferTicketId: ticketParam || null,
+  });
+
+  if (ticketParam && /^[0-9a-f-]{36}$/i.test(ticketParam) && (!claimed || claimed.id !== ticketParam)) {
+    flash = flash || 'Could not open that ticket (claimed, resolved, or missing)';
   }
 
-  const [claimed, openCount] = await Promise.all([
-    getClaimedTicketForActor(actor),
-    openTicketCount(),
-  ]);
+  const openCount = await openTicketCount();
   let body: string;
   if (claimed) {
     const display = await hydrateTicketDisplay(claimed);
@@ -326,16 +355,7 @@ export async function handleModerationClaim(req: Request, res: Response): Promis
     res.status(401).send(renderReportsLoginHtml({ next: '/reports' }));
     return;
   }
-  await ensureAutoTicketsFromFlaggedPosts();
-  const actor = actorFromReq(req);
-  let ticket = await getClaimedTicketForActor(actor);
-  if (!ticket) {
-    ticket = await claimNextTicket(actor);
-  }
-  if (ticket) {
-    res.redirect(303, `/reports?ticket=${encodeURIComponent(ticket.id)}`);
-    return;
-  }
+  // Claim-next is automatic on GET /reports — keep POST as a redirect for old forms.
   res.redirect(303, '/reports');
 }
 
@@ -346,14 +366,23 @@ export async function handleModerationTicketAction(req: Request, res: Response):
   }
   const actor = actorFromReq(req);
   const ticketId = String(req.body?.ticket_id || '').trim();
-  const action = String(req.body?.action || '').trim();
+  let action = String(req.body?.action || '').trim();
   const category = String(req.body?.category || '').trim();
+  if (action === 'ignore') action = 'skip';
   if (!ticketId) {
     res.redirect(303, '/reports?flash=Missing+ticket');
     return;
   }
   if (action === 'release') {
     await releaseTicket(ticketId, actor);
+    const next = await claimNextTicket(actor, { excludeTicketId: ticketId });
+    if (next) {
+      res.redirect(
+        303,
+        `/reports?ticket=${encodeURIComponent(next.id)}&flash=${encodeURIComponent('Released · next ticket loaded')}`
+      );
+      return;
+    }
     res.redirect(303, '/reports?flash=Released');
     return;
   }
@@ -373,10 +402,19 @@ export async function handleModerationTicketAction(req: Request, res: Response):
   }
   const label =
     action === 'skip'
-      ? 'Skipped'
+      ? 'Ignored'
       : action === 'remove'
         ? `Removed as ${labelForCategory(category)}`
         : `Marked as ${labelForCategory(category)}`;
+  // Auto-load the next ticket.
+  const next = await claimNextTicket(actor);
+  if (next) {
+    res.redirect(
+      303,
+      `/reports?ticket=${encodeURIComponent(next.id)}&flash=${encodeURIComponent(label)}`
+    );
+    return;
+  }
   res.redirect(303, `/reports?flash=${encodeURIComponent(label)}`);
 }
 
