@@ -46,6 +46,23 @@ export type UpsertTicketInput = {
   actor?: string;
 };
 
+let ticketsSchemaEnsured = false;
+
+/** Ensure Pass can hand a ticket to another moderator (per-actor skip list). */
+export async function ensureTicketsSchema(): Promise<void> {
+  if (ticketsSchemaEnsured) return;
+  await pool.query(`
+    alter table public.moderation_tickets
+      add column if not exists passed_by text[] not null default '{}'::text[]
+  `);
+  await pool.query(`
+    create index if not exists moderation_tickets_open_fifo_idx
+      on public.moderation_tickets (last_report_at asc, created_at asc)
+      where status = 'open'
+  `);
+  ticketsSchemaEnsured = true;
+}
+
 async function logAction(
   client: PoolClient,
   opts: {
@@ -156,6 +173,7 @@ export async function claimNextTicket(
   actor: string,
   opts?: { excludeTicketId?: string | null; excludeTicketIds?: string[] | null }
 ): Promise<TicketRow | null> {
+  await ensureTicketsSchema();
   const excludeIds = [
     ...(opts?.excludeTicketIds ?? []),
     opts?.excludeTicketId ?? null,
@@ -165,6 +183,7 @@ export async function claimNextTicket(
   const client = await pool.connect();
   try {
     await client.query('begin');
+    // Skip tickets this actor already Passed — those wait for another moderator.
     const { rows } = await client.query<TicketRow>(
       `
       with next as (
@@ -173,6 +192,7 @@ export async function claimNextTicket(
         where status = 'open'
           and assigned_to is null
           and not (id = any($2::uuid[]))
+          and not ($1 = any(coalesce(passed_by, '{}'::text[])))
         -- Mix auto + user reports for now; priority ordering comes later.
         order by last_report_at asc nulls last, created_at asc
         for update skip locked
@@ -182,6 +202,8 @@ export async function claimNextTicket(
       set status = 'claimed',
           assigned_to = $1,
           claimed_at = now(),
+          -- New claimant clears pass list so handoff can cycle later.
+          passed_by = '{}'::text[],
           updated_at = now()
       from next
       where t.id = next.id
@@ -218,12 +240,14 @@ export async function claimNextTicket(
 export async function releaseTicket(
   ticketId: string,
   actor: string,
-  opts?: { force?: boolean }
+  opts?: { force?: boolean; passToOther?: boolean }
 ): Promise<boolean> {
+  await ensureTicketsSchema();
+  const passToOther = opts?.passToOther !== false;
   const client = await pool.connect();
   try {
     await client.query('begin');
-    // Push to the back of the FIFO so Pass does not immediately reclaim the same ticket.
+    // Pass: mark this actor on passed_by so only another moderator can claim it.
     const { rows } = await client.query<{
       id: string;
       target_kind: string;
@@ -237,13 +261,23 @@ export async function releaseTicket(
           assigned_to = null,
           claimed_at = null,
           last_report_at = greatest(now(), coalesce(last_report_at, now())) + interval '1 second',
+          passed_by = case
+            when $4::boolean then (
+              select array_agg(distinct x)
+              from unnest(
+                array_append(coalesce(passed_by, '{}'::text[]), $2::text)
+              ) as x
+              where x is not null and length(x) > 0
+            )
+            else coalesce(passed_by, '{}'::text[])
+          end,
           updated_at = now()
       where id = $1::uuid
         and status = 'claimed'
         and ($3::boolean or assigned_to = $2)
       returning id, target_kind, target_id, platform, category
       `,
-      [ticketId, actor, !!opts?.force]
+      [ticketId, actor, !!opts?.force, passToOther]
     );
     if (!rows[0]) {
       await client.query('rollback');
@@ -274,7 +308,7 @@ export async function releaseTicket(
       targetKind: rows[0].target_kind,
       targetId: rows[0].target_id,
       platform: rows[0].platform,
-      detail: { force: !!opts?.force, via: 'pass' },
+      detail: { force: !!opts?.force, via: 'pass', pass_to_other: passToOther },
     });
     await client.query('commit');
     return true;
@@ -691,12 +725,13 @@ export async function claimTicketById(
   ticketId: string,
   actor: string
 ): Promise<{ ok: boolean; ticket?: TicketRow; error?: string }> {
+  await ensureTicketsSchema();
   const client = await pool.connect();
   try {
     await client.query('begin');
-    const { rows: existing } = await client.query<TicketRow>(
+    const { rows: existing } = await client.query<TicketRow & { passed_by: string[] | null }>(
       `
-      select ${TICKET_SELECT}
+      select ${TICKET_SELECT}, coalesce(passed_by, '{}'::text[]) as passed_by
       from public.moderation_tickets
       where id = $1::uuid
       for update
@@ -720,6 +755,11 @@ export async function claimTicketById(
       await client.query('rollback');
       return { ok: false, error: 'already_resolved' };
     }
+    const passedBy = Array.isArray(row.passed_by) ? row.passed_by : [];
+    if (passedBy.includes(actor)) {
+      await client.query('rollback');
+      return { ok: false, error: 'passed_to_other' };
+    }
 
     // Drop any other claim this actor holds so one-at-a-time stays true.
     await client.query(
@@ -737,9 +777,11 @@ export async function claimTicketById(
       set status = 'claimed',
           assigned_to = $2,
           claimed_at = now(),
+          passed_by = '{}'::text[],
           updated_at = now()
       where id = $1::uuid
         and status = 'open'
+        and not ($2 = any(coalesce(passed_by, '{}'::text[])))
       returning ${TICKET_SELECT}
       `,
       [ticketId, actor]

@@ -31,6 +31,7 @@ export {
   backfillAutoTicketsFromFlaggedPosts,
   backfillUserReportTickets,
   ensureAutoTicketsFromFlaggedPosts,
+  ensureTicketsSchema,
 } from './tickets.js';
 export type {
   ModerateTextInput,

@@ -489,13 +489,21 @@ function renderTicketCard(ticket: TicketDisplay): string {
     <div class="options" id="decision-options"></div>
     <p class="hint">
       Use number / letter keys to choose. <kbd>Backspace</kbd> goes back.
-      <kbd>Enter</kbd> confirms the final answer. <kbd>P</kbd> passes this ticket.
+      <kbd>Enter</kbd> confirms the final answer.
+      <kbd>P</kbd> passes this ticket to another moderator.
       You only answer the questions — Matterya policy decides the enforcement.
     </p>
   </aside>`;
 }
 
-function renderEmpty(openCount: number): string {
+function renderEmpty(openCount: number, opts?: { waitingForOther?: boolean }): string {
+  if (opts?.waitingForOther && openCount > 0) {
+    return `
+  <div class="card empty" style="grid-column:1/-1">
+    <h2>Passed to another moderator</h2>
+    <p class="muted">${openCount} still open for others. Your queue has nothing left you haven’t passed.</p>
+  </div>`;
+  }
   return `
   <div class="card empty" style="grid-column:1/-1">
     <h2>Queue clear</h2>
@@ -522,8 +530,8 @@ export async function handleModerationQueueGet(req: Request, res: Response): Pro
   const ticketParam = String(req.query.ticket || '').trim();
   const excludeParam = String(req.query.exclude || '').trim();
   let flash = String(req.query.flash || '') || null;
-  // Never show pass banners.
-  if (flash && /^passed\b/i.test(flash)) flash = null;
+  // Keep "Passed to another moderator" when the queue has nothing else for this mod.
+  if (flash && /^passed ·/i.test(flash)) flash = null;
 
   // Prefer deep-link only when it is not the ticket we just passed.
   const prefer =
@@ -546,6 +554,7 @@ export async function handleModerationQueueGet(req: Request, res: Response): Pro
   }
 
   const openCount = await openTicketCount();
+  const waitingForOther = String(req.query.waiting || '') === '1';
   let body: string;
   let treeJson: string | undefined;
   if (claimed) {
@@ -553,7 +562,7 @@ export async function handleModerationQueueGet(req: Request, res: Response): Pro
     body = renderTicketCard(display);
     treeJson = JSON.stringify(policyTreeForClient()).replace(/</g, '\\u003c');
   } else {
-    body = renderEmpty(openCount);
+    body = renderEmpty(openCount, { waitingForOther });
   }
   res.type('html').send(renderShell({ actor, openCount, body, flash, treeJson }));
 }
@@ -580,8 +589,11 @@ export async function handleModerationTicketAction(req: Request, res: Response):
   }
 
   if (action === 'release') {
-    const released = await releaseTicket(ticketId, actor, { force: true });
-    // Always exclude the passed ticket; release also bumps it to the back of FIFO.
+    const released = await releaseTicket(ticketId, actor, {
+      force: true,
+      passToOther: true,
+    });
+    // Passed ticket is marked for another moderator; claim a different one.
     const next = await claimNextTicket(actor, { excludeTicketId: ticketId });
     if (next && next.id !== ticketId) {
       res.redirect(
@@ -590,11 +602,11 @@ export async function handleModerationTicketAction(req: Request, res: Response):
       );
       return;
     }
-    // No other ticket available — stay off the passed one.
+    // Nothing else for this moderator (remaining items were passed by them).
     res.redirect(
       303,
       released
-        ? `/reports?exclude=${encodeURIComponent(ticketId)}`
+        ? `/reports?exclude=${encodeURIComponent(ticketId)}&waiting=1`
         : '/reports'
     );
     return;
