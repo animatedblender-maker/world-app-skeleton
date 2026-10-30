@@ -47,13 +47,47 @@ function actorFromReq(req: Request): string {
   return `mod:${Buffer.from(ua).toString('base64url').slice(0, 24)}`;
 }
 
+/** Dicebear fallback avatar. */
+function dicebearAvatar(seed: string): string {
+  const s = seed.trim() || 'anonymous';
+  return `https://api.dicebear.com/7.x/shapes/svg?seed=${encodeURIComponent(s)}`;
+}
+
+/**
+ * Prefer a durable avatar URL. Supabase `/object/sign/...` tokens expire and
+ * 400 in the browser — rewrite to `/object/public/...` when possible.
+ */
+function durableAvatarUrl(
+  direct: string | null | undefined,
+  seed: string
+): string {
+  const raw = String(direct || '').trim();
+  if (!raw.startsWith('http')) return dicebearAvatar(seed);
+  try {
+    const u = new URL(raw);
+    if (
+      u.hostname.includes('supabase') &&
+      u.pathname.includes('/storage/v1/object/sign/')
+    ) {
+      u.pathname = u.pathname.replace(
+        '/storage/v1/object/sign/',
+        '/storage/v1/object/public/'
+      );
+      u.search = '';
+      u.hash = '';
+      return u.toString();
+    }
+    return raw;
+  } catch {
+    return dicebearAvatar(seed);
+  }
+}
+
 function avatarUrlFor(ticket: TicketDisplay): string {
-  const direct = String(ticket.author_avatar_url || '').trim();
-  if (direct.startsWith('http')) return direct;
   const s =
     (ticket.author_avatar_seed || ticket.author_username || 'anonymous').trim() ||
     'anonymous';
-  return `https://api.dicebear.com/7.x/shapes/svg?seed=${encodeURIComponent(s)}`;
+  return durableAvatarUrl(ticket.author_avatar_url, s);
 }
 
 async function ensureClaimedTicket(
