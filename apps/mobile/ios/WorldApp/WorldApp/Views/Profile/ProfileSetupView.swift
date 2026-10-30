@@ -362,7 +362,8 @@ struct ProfileSetupView: View {
                 fileExtension: "jpg",
                 mimeType: "image/jpeg"
             )
-            let updated = try await ProfileService.shared.updateProfile(avatarURL: upload.url)
+            let publicURL = MediaService.normalizedAvatarURL(upload.url) ?? upload.url
+            let updated = try await ProfileService.shared.updateProfile(avatarURL: publicURL)
             appState.currentProfile = updated
             ContentCache.shared.setProfile(updated)
             avatarURL = updated.avatarURL ?? upload.url

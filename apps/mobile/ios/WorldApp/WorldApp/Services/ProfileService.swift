@@ -216,7 +216,9 @@ final class ProfileService {
         if let cityName { input["city_name"] = cityName }
         if let bio { input["bio"] = bio }
         if let birthdate { input["birthdate"] = birthdate }
-        if let avatarURL { input["avatar_url"] = avatarURL }
+        if let avatarURL {
+            input["avatar_url"] = MediaService.normalizedAvatarURL(avatarURL) ?? avatarURL
+        }
         if let messagePrivacy { input["message_privacy"] = messagePrivacy }
 
         // Always send a real input object — empty dict can fail on some GraphQL servers.

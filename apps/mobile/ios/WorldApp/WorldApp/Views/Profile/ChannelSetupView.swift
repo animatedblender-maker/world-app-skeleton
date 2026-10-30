@@ -162,7 +162,8 @@ struct ChannelSetupView: View {
                 fileExtension: "jpg",
                 mimeType: "image/jpeg"
             )
-            let updated = try await ProfileService.shared.updateProfile(avatarURL: upload.url)
+            let publicURL = MediaService.normalizedAvatarURL(upload.url) ?? upload.url
+            let updated = try await ProfileService.shared.updateProfile(avatarURL: publicURL)
             appState.currentProfile = updated
             avatarURL = updated.avatarURL
             profileUserID = updated.userID

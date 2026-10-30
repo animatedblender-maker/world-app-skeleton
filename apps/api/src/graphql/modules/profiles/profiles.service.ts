@@ -86,6 +86,38 @@ function normalizeMessagePrivacy(raw: unknown): MessagePrivacy {
   return 'everyone';
 }
 
+/**
+ * Avatars live forever in the `avatars` bucket. Never persist expiring
+ * `/object/sign/...` links — rewrite to `/object/public/...`.
+ */
+export function durablePublicAvatarUrl(
+  raw: string | null | undefined
+): string | null {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  if (s.startsWith('data:') || s.startsWith('blob:')) return s;
+  try {
+    const u = new URL(s);
+    if (u.pathname.includes('/storage/v1/object/sign/')) {
+      u.pathname = u.pathname.replace(
+        '/storage/v1/object/sign/',
+        '/storage/v1/object/public/'
+      );
+      u.search = '';
+      u.hash = '';
+      return u.toString();
+    }
+    if (u.pathname.includes('/storage/v1/object/public/')) {
+      u.search = '';
+      u.hash = '';
+      return u.toString();
+    }
+    return s;
+  } catch {
+    return s;
+  }
+}
+
 export class ProfilesService {
   /** Owner always sees full data; birthdate is always owner-only. */
   redactForViewer(profile: ProfileRow | null, viewerId: string | null): ProfileRow | null {
@@ -384,6 +416,11 @@ export class ProfilesService {
       setBirthdate = true;
     }
 
+    const avatarUrl =
+      input.avatar_url === undefined
+        ? undefined
+        : durablePublicAvatarUrl(input.avatar_url);
+
     try {
       // Prefer full update including privacy + birthdate columns when they exist.
       const { rows } = await pool.query(
@@ -408,7 +445,7 @@ export class ProfilesService {
           userId,
           input.display_name ?? null,
           input.username ?? null,
-          input.avatar_url ?? null,
+          avatarUrl === undefined ? null : avatarUrl,
           input.country_name ?? null,
           input.country_code ?? null,
           input.city_name ?? null,
@@ -452,7 +489,7 @@ export class ProfilesService {
             userId,
             input.display_name ?? null,
             input.username ?? null,
-            input.avatar_url ?? null,
+            avatarUrl === undefined ? null : avatarUrl,
             input.country_name ?? null,
             input.country_code ?? null,
             input.city_name ?? null,
@@ -551,6 +588,7 @@ export class ProfilesService {
     }
     return {
       ...row,
+      avatar_url: durablePublicAvatarUrl(row.avatar_url),
       birthdate,
       is_private: !!(row as any).is_private,
       message_privacy: normalizeMessagePrivacy((row as any).message_privacy),
