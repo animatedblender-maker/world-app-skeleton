@@ -17,6 +17,8 @@
     "media:frame0-progress": "tsx src/media/frame0-progress-server.ts",
     "moderation:anon-video-backfill": "tsx src/moderation/backfill-anonymous-video.ts",
     "moderation:anon-video-backfill:dry": "tsx src/moderation/backfill-anonymous-video.ts --dry-run",
+    "moderation:auto-tickets-backfill": "tsx src/moderation/backfill-auto-tickets.ts",
+    "moderation:auto-tickets-backfill:dry": "tsx src/moderation/backfill-auto-tickets.ts --dry-run",
     "media:transcribe": "tsx src/media/transcribe-runner.ts",
     "media:transcribe:backfill": "tsx src/media/transcribe-runner.ts --backfill --limit=40",
     "docker:media-worker:build": "docker build -f Dockerfile.media-worker -t matterya-media-worker .",

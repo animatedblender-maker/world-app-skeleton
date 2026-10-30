@@ -163,7 +163,9 @@ export async function claimNextTicket(actor: string): Promise<TicketRow | null> 
         from public.moderation_tickets
         where status = 'open'
           and assigned_to is null
-        order by last_report_at asc
+        order by
+          case when source = 'auto' then 0 else 1 end,
+          last_report_at asc
         for update skip locked
         limit 1
       )
@@ -634,4 +636,211 @@ export async function openTicketCount(): Promise<number> {
     `select count(*)::text as n from public.moderation_tickets where status = 'open'`
   );
   return Number(rows[0]?.n || 0);
+}
+
+/** Display fields hydrated for the Claim-next UI (author + signed media). */
+export type TicketDisplay = TicketRow & {
+  author_username: string | null;
+  author_avatar_seed: string | null;
+  /** Direct avatar image URL when available (Sparks profiles). */
+  author_avatar_url: string | null;
+  media_type: string | null;
+  /** Signed playable media URL (video or image). */
+  media_url: string | null;
+  /** Signed poster / image preview. */
+  thumb_url: string | null;
+};
+
+/**
+ * Load author chrome + signed media for a claimed ticket.
+ * Masquerade posts use anonymous.profiles (username + avatar_seed).
+ */
+export async function hydrateTicketDisplay(
+  ticket: TicketRow
+): Promise<TicketDisplay> {
+  const base: TicketDisplay = {
+    ...ticket,
+    author_username: null,
+    author_avatar_seed: null,
+    author_avatar_url: null,
+    media_type: null,
+    media_url: null,
+    thumb_url: null,
+  };
+
+  try {
+    if (ticket.target_kind === 'post' && ticket.platform === 'masquerade') {
+      const { rows } = await pool.query<{
+        title: string | null;
+        body: string | null;
+        media_type: string | null;
+        media_url: string | null;
+        thumb_url: string | null;
+        username: string | null;
+        avatar_seed: string | null;
+      }>(
+        `
+        select p.title, p.body, p.media_type, p.media_url, p.thumb_url,
+               a.username, a.avatar_seed
+        from anonymous.posts p
+        left join anonymous.profiles a on a.id = p.author_profile_id
+        where p.id = $1::uuid
+        limit 1
+        `,
+        [ticket.target_id]
+      );
+      const row = rows[0];
+      if (!row) return base;
+
+      const { resolveAnonymousMediaUrl } = await import('../anonymous/media.js');
+      const [media_url, thumb_url] = await Promise.all([
+        resolveAnonymousMediaUrl(row.media_url),
+        resolveAnonymousMediaUrl(row.thumb_url),
+      ]);
+
+      return {
+        ...base,
+        preview_title: ticket.preview_title || row.title,
+        preview_body: ticket.preview_body || row.body,
+        preview_media_url: thumb_url || media_url || ticket.preview_media_url,
+        author_username: row.username,
+        author_avatar_seed: row.avatar_seed,
+        author_avatar_url: null,
+        media_type: row.media_type,
+        media_url,
+        thumb_url,
+      };
+    }
+
+    if (ticket.target_kind === 'post') {
+      const { rows } = await pool.query<{
+        title: string | null;
+        body: string | null;
+        media_type: string | null;
+        media_url: string | null;
+        thumb_url: string | null;
+        username: string | null;
+        display_name: string | null;
+        avatar_url: string | null;
+      }>(
+        `
+        select p.title, p.body, p.media_type, p.media_url, p.thumb_url,
+               pr.username, pr.display_name, pr.avatar_url
+        from public.posts p
+        left join public.profiles pr on pr.user_id = p.author_id
+        where p.id = $1::uuid
+        limit 1
+        `,
+        [ticket.target_id]
+      );
+      const row = rows[0];
+      if (!row) return base;
+
+      const { freshenMediaUrlString, freshenThumbUrlString } = await import(
+        '../media/r2-playback.js'
+      );
+      const [media_url, thumb_url] = await Promise.all([
+        freshenMediaUrlString(row.media_url),
+        freshenThumbUrlString(row.thumb_url),
+      ]);
+
+      return {
+        ...base,
+        preview_title: ticket.preview_title || row.title,
+        preview_body: ticket.preview_body || row.body,
+        preview_media_url: thumb_url || media_url || ticket.preview_media_url,
+        author_username: row.username || row.display_name,
+        author_avatar_seed: row.username || row.display_name,
+        author_avatar_url: row.avatar_url,
+        media_type: row.media_type,
+        media_url,
+        thumb_url,
+      };
+    }
+  } catch (err: any) {
+    console.warn('[moderation/tickets] hydrate failed', err?.message ?? err);
+  }
+
+  return base;
+}
+
+/**
+ * Open Claim-next tickets for flagged Masquerade posts that never got one
+ * (e.g. upsert failed while the tickets table was missing).
+ */
+export async function backfillAutoTicketsFromFlaggedPosts(
+  limit = 500
+): Promise<{ created: number; scanned: number }> {
+  const { rows } = await pool.query<{
+    id: string;
+    title: string | null;
+    body: string | null;
+    media_url: string | null;
+    thumb_url: string | null;
+    flag_reason: string | null;
+  }>(
+    `
+    select p.id, p.title, p.body, p.media_url, p.thumb_url, p.flag_reason
+    from anonymous.posts p
+    where p.state = 'active'
+      and p.flagged_at is not null
+      and not exists (
+        select 1 from public.moderation_tickets t
+        where t.target_kind = 'post'
+          and t.target_id = p.id
+          and t.status in ('open', 'claimed')
+      )
+    order by p.flagged_at asc
+    limit $1
+    `,
+    [limit]
+  );
+
+  let created = 0;
+  for (const p of rows) {
+    const reason = p.flag_reason || 'mature';
+    const category = /nsfw|adult|sexual|video:nsfw|mature/i.test(reason)
+      ? 'mature'
+      : normalizeCategory(reason, 'mature');
+    try {
+      await upsertTicketFromReport({
+        platform: 'masquerade',
+        targetKind: 'post',
+        targetId: p.id,
+        category,
+        source: 'auto',
+        previewTitle: p.title,
+        previewBody: p.body,
+        previewMediaUrl: p.thumb_url || p.media_url,
+        actor: 'auto-backfill',
+      });
+      created += 1;
+    } catch (err: any) {
+      console.warn(
+        '[moderation/tickets] backfill upsert failed',
+        p.id,
+        err?.message ?? err
+      );
+    }
+  }
+  return { created, scanned: rows.length };
+}
+
+let lastEnsureAt = 0;
+
+/** Cheap heal: backfill missing auto tickets at most once per 60s per process. */
+export async function ensureAutoTicketsFromFlaggedPosts(): Promise<void> {
+  const now = Date.now();
+  if (now - lastEnsureAt < 60_000) return;
+  lastEnsureAt = now;
+  try {
+    const r = await backfillAutoTicketsFromFlaggedPosts(200);
+    if (r.created > 0) {
+      console.log(
+        `[moderation/tickets] ensured ${r.created}/${r.scanned} auto tickets from flagged posts`
+      );
+    }
+  } catch (err: any) {
+    console.warn('[moderation/tickets] ensure auto tickets', err?.message ?? err);
+  }
 }

@@ -25,6 +25,9 @@ export {
   resolveTicket,
   getClaimedTicketForActor,
   openTicketCount,
+  hydrateTicketDisplay,
+  backfillAutoTicketsFromFlaggedPosts,
+  ensureAutoTicketsFromFlaggedPosts,
 } from './tickets.js';
 export type {
   ModerateTextInput,
@@ -36,4 +39,4 @@ export type { ModerationQueueItem } from './queue.js';
 export type { AnonymousModInput, AnonymousModResult } from './anonymous-auto.js';
 export type { VideoNsfwResult } from './video-local.js';
 export type { ModerationCategorySlug, ModerationPlatform, ModerationTargetKind } from './categories.js';
-export type { TicketRow, UpsertTicketInput, ResolveAction } from './tickets.js';
+export type { TicketRow, TicketDisplay, UpsertTicketInput, ResolveAction } from './tickets.js';
