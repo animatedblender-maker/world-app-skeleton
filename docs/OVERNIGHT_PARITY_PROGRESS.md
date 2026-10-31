@@ -16,7 +16,7 @@
 |---------|---------|-----|
 | Auth / profile setup / feed | present | present |
 | Hubs / Sparks / Messages / Globe / Search / People / Profile | present (chrome+) | present (Hubs strong) |
-| Masquerade / Anonymous | **missing** | page exists |
+| Masquerade / Anonymous | **ported** (Compose; AppMenu entry; assembleDebug green) | page exists |
 | Desktop Hubs/Sparks layouts | n/a | partial / needs Facebook-desktop treatment |
 | LiveKit calls | signaling stub | livekit-client present |
 | gh-pages | — | last deploy ~2026-10-16 |
@@ -26,7 +26,8 @@
 - Web partial landed in workspace: feed desktop rail + Sparks desktop phone-stage CSS.
 - Feed rail TS/CSS completed in main session (`feed.page.ts`).
 - 03:20Z+ Restarted agents (shared workspace): Android Masquerade port; Web messages/hubs + gh-pages deploy.
-- Android `android-app/` is currently **untracked** in git (~225MB sources) — will commit with proper `.gitignore` (no `build/`).
+- Android `android-app/` was untracked — Masquerade port + `.gitignore` landing in this commit (no `build/`).
+- **Android Masquerade port:** `AnonymousModels` / `AnonymousService` (`api.matterya.com/v1/anonymous`) / `AnonymousStore` / `ui/anonymous/*` (Root, AgeGate, UsernameClaim, WelcomeLetter, Onboarding, Feed, Spaces, SpaceDetail, PostDetail, Composer, Search, Inbox, Me, PublicProfile, CreateSpace). Entry: AppMenu → `NavRoutes.masquerade`. `./gradlew :app:assembleDebug` **BUILD SUCCESSFUL**.
 - **03:31Z Web wave (this session):**
   - **Feed** desktop right rail (≥1280px): Sparks / People / Explore companion column.
   - **Sparks** desktop phone-stage (≥900px): centered 9:16 stage + side comments pane.
@@ -50,4 +51,4 @@
 - Hubs: remount-free continuous player; autoplay-next related
 - Anonymous: Search / Inbox shell tabs still thinner than iOS
 - Feed: continue-watching strip parity with iOS HomeFeedStore
-- Android Masquerade / Anonymous port still in progress (untracked `android-app/`)
+- Android Masquerade: deeper media/zoom, masquerade DM threads, mod panel polish
