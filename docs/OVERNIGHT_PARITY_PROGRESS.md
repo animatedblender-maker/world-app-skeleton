@@ -90,3 +90,9 @@
   - **Android Masquerade mod panel:** `AnonymousModPanelView` placeholder (iOS `AnonymousModPanelView` parity — report queue / removals / sanctions / rules “Coming soon”); shield entry on Space detail when `isOwner`/`isModerator`.
   - `./gradlew :app:assembleDebug` **BUILD SUCCESSFUL**. `ng build --configuration production` clean.
   - **Deploy SUCCESS:** gh-pages `ced7dd4` → https://matterya.com (CDN may lag). Source `2a7b6c52` on `ios-native`.
+
+
+## Overnight parity wave idle — ready for simulator QA
+- Web: https://matterya.com (gh-pages)
+- Android APK: `apps/mobile/android-app/app/build/outputs/apk/debug/app-debug.apk`
+- Install: `cd apps/mobile/android-app && ./gradlew :app:installDebug`
