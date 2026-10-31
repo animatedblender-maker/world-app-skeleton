@@ -619,23 +619,29 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
           font-size: 16px !important;
         }
         .secondary {
+          display: block;
           width: var(--watch-side);
           min-width: var(--watch-side);
           max-width: var(--watch-side);
-          min-height: 0;
+          min-height: 240px;
           height: auto;
           position: sticky;
           top: var(--watch-sticky-top);
           max-height: calc(100dvh - var(--watch-sticky-top));
           overflow: auto;
-          padding: 0 0 12px;
+          padding: 0 4px 24px 0;
           overscroll-behavior: contain;
           align-self: start;
           border-left: none;
           background: var(--m-paper, #f8f6f2);
+          /* Solid YouTube-desktop related rail — never collapse */
+          flex-shrink: 0;
         }
         .related {
-          display: block !important;
+          display: flex !important;
+          flex-direction: column;
+          gap: 0;
+          min-height: 200px;
         }
         .section-title {
           padding-top: 0;
@@ -713,13 +719,16 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
           margin-bottom: 14px;
         }
         .related-row {
-          padding: 12px;
-          gap: 14px;
+          display: flex;
+          align-items: flex-start;
+          padding: 10px;
+          gap: 12px;
           border-radius: 14px;
           background: var(--m-surface, #fefdfb);
           border: 0.5px solid var(--m-border, #ddd8d1);
           box-shadow: 0 2px 8px rgba(44, 40, 37, 0.04);
           margin-bottom: 10px;
+          width: 100%;
         }
         .related-row:hover {
           background: var(--m-canvas-muted, #f2f0ec);
@@ -727,10 +736,12 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
         }
         .r-thumb {
           width: var(--watch-thumb);
-          max-width: 52%;
+          max-width: 48%;
           aspect-ratio: 16 / 9;
           border-radius: 12px;
           flex-shrink: 0;
+          overflow: hidden;
+          background: #171412;
         }
         .r-title {
           font-size: var(--watch-related-title) !important;
@@ -1706,7 +1717,8 @@ export class HubsWatchPageComponent implements OnInit, OnDestroy {
     this.relatedCycle = 0;
     this.relatedSeq += 1;
     this.appendRelatedPage(post, catalog);
-    // Prefetch a couple pages so the rail feels full immediately
+    // Prefetch so the desktop related rail feels full immediately (YT-style).
+    this.appendRelatedPage(post, catalog);
     this.appendRelatedPage(post, catalog);
   }
 
@@ -1725,7 +1737,11 @@ export class HubsWatchPageComponent implements OnInit, OnDestroy {
     );
     const batch = this.engagement.applyMany(page.items);
     if (batch.length) {
-      this.related = this.related.concat(batch);
+      const seen = new Set(this.related.map((r) => r.id));
+      const fresh = batch.filter((item) => !seen.has(item.id));
+      if (fresh.length) {
+        this.related = this.related.concat(fresh);
+      }
     }
     this.relatedOffset = page.nextOffset;
     this.relatedCycle = page.nextCycle;

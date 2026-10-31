@@ -14,6 +14,8 @@ query Conversations($limit: Int, $inbox: String) {
     updated_at
     last_message_at
     surface
+    is_request
+    request_status
     members {
       user_id
       display_name
@@ -219,6 +221,57 @@ mutation DeleteMessage($messageId: ID!) {
 }
 `;
 
+const ACCEPT_MESSAGE_REQUEST_MUTATION = `
+mutation AcceptMessageRequest($conversationId: ID!) {
+  acceptMessageRequest(conversation_id: $conversationId) {
+    id
+    is_direct
+    created_at
+    updated_at
+    last_message_at
+    surface
+    is_request
+    request_status
+    members {
+      user_id
+      display_name
+      username
+      avatar_url
+      country_name
+      country_code
+      last_read_at
+    }
+    last_message {
+      id
+      conversation_id
+      sender_id
+      body
+      media_type
+      media_path
+      media_name
+      media_mime
+      media_size
+      created_at
+      updated_at
+      sender {
+        user_id
+        display_name
+        username
+        avatar_url
+        country_name
+        country_code
+      }
+    }
+  }
+}
+`;
+
+const DECLINE_MESSAGE_REQUEST_MUTATION = `
+mutation DeclineMessageRequest($conversationId: ID!) {
+  declineMessageRequest(conversation_id: $conversationId)
+}
+`;
+
 @Injectable({ providedIn: 'root' })
 export class MessagesService {
   private pendingStorageKey = 'worldapp.pendingConversation';
@@ -337,6 +390,22 @@ export class MessagesService {
     return !!deleteMessage;
   }
 
+  async acceptMessageRequest(conversationId: string): Promise<Conversation> {
+    const { acceptMessageRequest } = await this.gql.request<{ acceptMessageRequest: any }>(
+      ACCEPT_MESSAGE_REQUEST_MUTATION,
+      { conversationId }
+    );
+    return await this.hydrateConversation(this.mapConversation(acceptMessageRequest));
+  }
+
+  async declineMessageRequest(conversationId: string): Promise<boolean> {
+    const { declineMessageRequest } = await this.gql.request<{ declineMessageRequest: boolean }>(
+      DECLINE_MESSAGE_REQUEST_MUTATION,
+      { conversationId }
+    );
+    return !!declineMessageRequest;
+  }
+
   private mapAuthor(row: any): PostAuthor | null {
     if (!row) return null;
     return {
@@ -376,6 +445,8 @@ export class MessagesService {
       updated_at: row.updated_at ?? row.created_at,
       last_message_at: row.last_message_at ?? null,
       surface: surfaceRaw === 'masquerade' ? 'masquerade' : 'primary',
+      is_request: row.is_request == null ? null : !!row.is_request,
+      request_status: row.request_status ?? null,
       members: Array.isArray(row.members) ? row.members.map((m: any) => this.mapAuthor(m) as PostAuthor) : [],
       last_message: row.last_message ? this.mapMessage(row.last_message) : null,
     };

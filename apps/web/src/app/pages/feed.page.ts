@@ -46,40 +46,97 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
         (notifications)="openNotifications()"
       ></app-matterya-topbar>
 
-      <main class="feed-body" #feedBody>
-        <!-- iOS FeedView: Sparks for you horizontal strip -->
-        <app-sparks-strip
-          *ngIf="sparksRail.length"
-          title="Sparks for you"
-          subtitle="Swipe the world on Matterya"
-          [posts]="sparksRail"
-          [showsBrand]="false"
-          (open)="openSpark($event)"
-          (brandTap)="openSparks()"
-        ></app-sparks-strip>
+      <div class="feed-layout">
+        <main class="feed-body" #feedBody>
+          <!-- iOS FeedView: Sparks for you horizontal strip -->
+          <app-sparks-strip
+            *ngIf="sparksRail.length"
+            title="Sparks for you"
+            subtitle="Swipe the world on Matterya"
+            [posts]="sparksRail"
+            [showsBrand]="false"
+            (open)="openSpark($event)"
+            (brandTap)="openSparks()"
+          ></app-sparks-strip>
 
-        <div class="feed-state" *ngIf="loading">Loading feed…</div>
-        <div class="feed-state error" *ngIf="!loading && error">{{ error }}</div>
-        <div class="feed-state" *ngIf="!loading && !error && !posts.length">
-          Your feed is quiet. Posts from everywhere will show up here as people share.
-        </div>
+          <div class="feed-state" *ngIf="loading">Loading feed…</div>
+          <div class="feed-state error" *ngIf="!loading && error">{{ error }}</div>
+          <div class="feed-state" *ngIf="!loading && !error && !posts.length">
+            Your feed is quiet. Posts from everywhere will show up here as people share.
+          </div>
 
-        <!-- iOS FacebookPostCard parity — Sparks as cards; AV only on focus winner -->
-        <div
-          class="feed-card-slot"
-          *ngFor="let post of posts; trackBy: trackById"
-          [attr.data-post-id]="post.id"
-          [attr.data-has-video]="isVideoPost(post) ? '1' : null"
-        >
-          <app-matterya-post-card
-            [post]="post"
-            [edgeToEdge]="false"
-            [playGate]="focusPostId === post.id && isVideoPost(post)"
-            (changed)="onPostChanged($event)"
-            (requestPlay)="onRequestPlay($event)"
-          ></app-matterya-post-card>
-        </div>
-      </main>
+          <!-- iOS FacebookPostCard parity — Sparks as cards; AV only on focus winner -->
+          <div
+            class="feed-card-slot"
+            *ngFor="let post of posts; trackBy: trackById"
+            [attr.data-post-id]="post.id"
+            [attr.data-has-video]="isVideoPost(post) ? '1' : null"
+          >
+            <app-matterya-post-card
+              [post]="post"
+              [edgeToEdge]="false"
+              [playGate]="focusPostId === post.id && isVideoPost(post)"
+              (changed)="onPostChanged($event)"
+              (requestPlay)="onRequestPlay($event)"
+            ></app-matterya-post-card>
+          </div>
+        </main>
+
+        <!-- Desktop right rail (≥1280px) — Facebook-web style companion column -->
+        <aside class="feed-rail" aria-label="Suggestions">
+          <section class="rail-card" *ngIf="sparksRail.length">
+            <div class="rail-head">
+              <span class="rail-title">Sparks</span>
+              <button type="button" class="rail-link" (click)="openSparks()">Open</button>
+            </div>
+            <button
+              type="button"
+              class="rail-spark"
+              *ngFor="let spark of sparksRail.slice(0, 4); trackBy: trackById"
+              (click)="openSpark(spark)"
+            >
+              <img *ngIf="posterForRail(spark)" [src]="posterForRail(spark)!" alt="" />
+              <span class="rail-spark-copy">
+                <span class="rail-spark-name">{{ displayName(spark) }}</span>
+                <span class="rail-spark-place" *ngIf="spark.country_name || spark.country_code">
+                  {{ spark.country_name || spark.country_code }}
+                </span>
+              </span>
+            </button>
+          </section>
+
+          <section class="rail-card" *ngIf="railPeople.length">
+            <div class="rail-head">
+              <span class="rail-title">People</span>
+              <button type="button" class="rail-link" (click)="openPeople()">Browse</button>
+            </div>
+            <button
+              type="button"
+              class="rail-person"
+              *ngFor="let person of railPeople"
+              (click)="openRailPerson(person)"
+            >
+              <span class="rail-avatar">
+                <img *ngIf="person.avatar" [src]="person.avatar" alt="" />
+                <span *ngIf="!person.avatar">{{ person.initials }}</span>
+              </span>
+              <span class="rail-person-copy">
+                <span class="rail-person-name">{{ person.name }}</span>
+                <span class="rail-person-meta">@{{ person.username }}</span>
+              </span>
+            </button>
+          </section>
+
+          <section class="rail-card">
+            <div class="rail-head">
+              <span class="rail-title">Explore</span>
+            </div>
+            <button type="button" class="rail-nav" (click)="openHubs()">Matterya Hubs</button>
+            <button type="button" class="rail-nav" (click)="openAnonymous()">Anonymous</button>
+            <button type="button" class="rail-nav" (click)="openSearch()">Search</button>
+          </section>
+        </aside>
+      </div>
 
       <app-bottom-tabs></app-bottom-tabs>
     </div>
@@ -99,14 +156,27 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
           radial-gradient(900px 420px at 50% -10%, rgba(255, 255, 255, 0.9), transparent 60%),
           var(--m-paper, #f8f6f2);
       }
+      .feed-layout {
+        width: 100%;
+        max-width: 1280px;
+        margin: 0 auto;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+        align-items: start;
+        box-sizing: border-box;
+      }
       .feed-body {
-        /* ~60% of content pane on desktop; full width on small screens */
         max-width: 100%;
         margin: 0 auto;
         padding: 0 0 24px;
         width: 100%;
         box-sizing: border-box;
         --m-feed-card-gap: 0px;
+        min-width: 0;
+      }
+      .feed-rail {
+        display: none;
       }
       .feed-state {
         padding: 48px 24px;
@@ -122,20 +192,139 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
         content-visibility: auto;
         contain-intrinsic-size: 720px;
       }
-      /* Desktop: posts column = 60% of content pane, centered */
+      .rail-card {
+        background: var(--m-surface, #fffcf8);
+        border: 1px solid var(--m-border, #ddd6cc);
+        border-radius: 16px;
+        padding: 14px;
+        display: grid;
+        gap: 10px;
+        box-shadow: 0 10px 28px rgba(44, 40, 37, 0.05);
+      }
+      .rail-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .rail-title {
+        font-family: ui-serif, Georgia, serif;
+        font-size: 1.05rem;
+        font-weight: 500;
+        color: var(--m-ink, #2c2825);
+      }
+      .rail-link,
+      .rail-nav {
+        border: 0;
+        background: transparent;
+        color: var(--m-accent, #7b6347);
+        font: inherit;
+        font-size: 0.85rem;
+        font-weight: 650;
+        cursor: pointer;
+        text-align: left;
+        padding: 0;
+      }
+      .rail-nav {
+        padding: 8px 10px;
+        border-radius: 10px;
+        background: var(--m-wash, #f3efe8);
+        border: 1px solid var(--m-border, #ddd6cc);
+      }
+      .rail-nav:hover,
+      .rail-link:hover {
+        text-decoration: underline;
+      }
+      .rail-spark,
+      .rail-person {
+        display: grid;
+        grid-template-columns: 48px 1fr;
+        gap: 10px;
+        align-items: center;
+        width: 100%;
+        border: 0;
+        background: transparent;
+        cursor: pointer;
+        text-align: left;
+        padding: 0;
+        color: inherit;
+        font: inherit;
+      }
+      .rail-spark img {
+        width: 48px;
+        height: 64px;
+        object-fit: cover;
+        border-radius: 10px;
+        background: #111;
+      }
+      .rail-spark-copy,
+      .rail-person-copy {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+      }
+      .rail-spark-name,
+      .rail-person-name {
+        font-weight: 650;
+        font-size: 0.9rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .rail-spark-place,
+      .rail-person-meta {
+        color: var(--m-ink-muted, #948b82);
+        font-size: 0.78rem;
+      }
+      .rail-avatar {
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        overflow: hidden;
+        display: grid;
+        place-items: center;
+        background: var(--m-wash, #f3efe8);
+        border: 1px solid var(--m-border, #ddd6cc);
+        font-weight: 700;
+        font-size: 0.85rem;
+      }
+      .rail-avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
       @media (min-width: 900px) {
         .feed-shell {
           padding-bottom: 40px;
           background: var(--m-canvas-muted, #f2f0ec);
           min-height: 100dvh;
         }
+        .feed-layout {
+          padding: 16px 20px 48px;
+        }
         .feed-body {
-          width: 60%;
-          max-width: 60%;
-          min-width: min(100%, 520px);
+          width: 100%;
+          max-width: 680px;
           margin: 0 auto;
-          padding: 16px 0 48px;
+          padding: 0;
           --m-feed-card-gap: 0px;
+        }
+      }
+      @media (min-width: 1280px) {
+        .feed-layout {
+          grid-template-columns: minmax(0, 1fr) 320px;
+          gap: 22px;
+          padding: 20px 28px 56px;
+        }
+        .feed-body {
+          max-width: none;
+          margin: 0;
+        }
+        .feed-rail {
+          display: grid;
+          gap: 14px;
+          position: sticky;
+          top: 72px;
         }
       }
     `,
@@ -146,6 +335,13 @@ export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
 
   posts: CountryPost[] = [];
   sparksRail: CountryPost[] = [];
+  railPeople: Array<{
+    id: string;
+    name: string;
+    username: string;
+    avatar: string | null;
+    initials: string;
+  }> = [];
   loading = true;
   error = '';
   homeCountry: string | null = null;
@@ -423,10 +619,50 @@ export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
     });
   }
 
+  openHubs(): void {
+    void this.router.navigate(['/hubs']);
+  }
 
+  openPeople(): void {
+    void this.router.navigate(['/people']);
+  }
 
+  openAnonymous(): void {
+    void this.router.navigate(['/anonymous']);
+  }
 
+  openRailPerson(person: { username: string; id: string }): void {
+    const slug = person.username?.trim() || person.id;
+    if (!slug) return;
+    void this.router.navigate(['/user', slug]);
+  }
 
+  posterForRail(post: CountryPost): string | null {
+    const raw = post.thumb_url || post.media_url || '';
+    const url = resolveMediaUrl(raw);
+    if (!url || url.trim().startsWith('{')) return null;
+    return url;
+  }
+
+  private rebuildRailPeople(): void {
+    const seen = new Set<string>();
+    const out: FeedPageComponent['railPeople'] = [];
+    for (const post of this.posts) {
+      const id = post.author_id || post.author?.user_id || post.author?.username || '';
+      if (!id || seen.has(id) || id === this.meId) continue;
+      seen.add(id);
+      const name = this.displayName(post);
+      out.push({
+        id,
+        name,
+        username: post.author?.username || id.slice(0, 8),
+        avatar: this.avatarFor(post),
+        initials: name.slice(0, 2).toUpperCase(),
+      });
+      if (out.length >= 6) break;
+    }
+    this.railPeople = out;
+  }
 
   async toggleLike(post: CountryPost): Promise<void> {
     try {
@@ -511,6 +747,7 @@ export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
       this.sparksRail = feed
         .filter((p) => this.postsService.isSpark(p))
         .slice(0, 12);
+      this.rebuildRailPeople();
       this.focusPostId = null;
       this.ratios.clear();
       this.observedIds.clear();

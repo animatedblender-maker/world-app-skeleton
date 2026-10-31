@@ -69,11 +69,23 @@ apps/web/src/app/pages/
 apps/web/public/hub_video_seed/hub_videos.jsonl
 ```
 
+## Overnight desktop layout parity (2026-10-31)
+
+Web-only layout adaptations (iOS contracts unchanged). Branch: `ios-native` → deploy `gh-pages` / matterya.com.
+
+| Surface | Web desktop | Notes |
+|---------|-------------|-------|
+| Home feed | ≥1280px right rail (Sparks / People / Explore) | Mobile single column unchanged |
+| Sparks | ≥900px phone-stage 9:16 + side comments | Full-bleed on narrow |
+| Messages | ≥900px list \| thread; Primary/Requests inbox | &lt;900 stacked like iOS MessagesView |
+| Hubs watch | ≥900px sticky “More on Hubs” related column | Prefetch + dedupe; YouTube-desktop style |
+| Anonymous `/anonymous` | Age gate phases (auth → birthdate → 18+ attest → username) | Globe routes redirect here |
+
 ## Remaining product surfaces (ordered)
 
-1. **Home feed** — Sparks strip, continue watching, post cards, paging (`HomeFeedStore`)
-2. **Messages / calls** — edit/delete media, CallKit-grade UX where web allows
-3. **Globe** — presence, notifications panel, moments composer parity
+1. **Home feed** — continue watching strip, paging fidelity (`HomeFeedStore`)
+2. **Messages / calls** — archive/delete actions, CallKit-grade UX where web allows
+3. **Anonymous** — Search / Inbox shell tabs to match iOS AnonymousRootView
 4. **Profile** — channel setup, hub uploads, owner/public flows
 5. **Search / people / ads** — close remaining contract gaps
 

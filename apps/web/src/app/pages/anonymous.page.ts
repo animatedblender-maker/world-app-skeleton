@@ -17,6 +17,7 @@ import { NotificationsUiService } from '../core/services/notifications-ui.servic
 
 type Phase =
   | 'loading'
+  | 'unauthenticated'
   | 'under18'
   | 'missing_birthdate'
   | 'need_attest'
@@ -91,6 +92,17 @@ const SPACE_FILTERS: Array<{ id: AnonymousSpaceFilter; title: string }> = [
       <!-- Phases -->
       <main class="anon-body" *ngIf="phase === 'loading'">
         <div class="skeleton" *ngFor="let i of skeletonSlots"></div>
+      </main>
+
+      <main class="anon-body gate" *ngIf="phase === 'unauthenticated'">
+        <div class="gate-icon" aria-hidden="true">⛨</div>
+        <h1>Sign in for Anonymous</h1>
+        <p>
+          Anonymous is 18+ and requires a Matterya account so we can confirm age eligibility before
+          showing Spaces or posts.
+        </p>
+        <button type="button" class="btn primary" (click)="goAuth()">Sign in</button>
+        <p class="muted">Return to Matterya from the tab bar anytime.</p>
       </main>
 
       <main class="anon-body gate" *ngIf="phase === 'under18'">
@@ -1034,7 +1046,9 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
     if (!res || (res as AnonymousApiError).ok === false) {
       const err = res as AnonymousApiError;
       this.error = this.anon.errorMessage(err);
-      if (err?.code === 'under_18') {
+      if (err?.code === 'unauthenticated' || err?.status === 401) {
+        this.phase = 'unauthenticated';
+      } else if (err?.code === 'under_18') {
         this.phase = 'under18';
       } else if (err?.code === 'missing_birthdate') {
         this.phase = 'missing_birthdate';
@@ -1485,6 +1499,10 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
 
   goProfileSetup(): void {
     void this.router.navigate(['/settings']);
+  }
+
+  goAuth(): void {
+    void this.router.navigate(['/auth'], { queryParams: { next: '/anonymous' } });
   }
 
   isFreeSpace(space: AnonymousSpace): boolean {

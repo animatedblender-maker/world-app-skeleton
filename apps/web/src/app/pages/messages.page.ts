@@ -43,38 +43,88 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
                 </svg>
               </button>
             </div>
+            <!-- iOS MessagesView inboxPicker -->
+            <div class="inbox-picker" role="tablist" aria-label="Inbox">
+              <button
+                type="button"
+                class="inbox-tab"
+                role="tab"
+                [class.active]="inboxFolder === 'primary'"
+                [attr.aria-selected]="inboxFolder === 'primary'"
+                (click)="setInboxFolder('primary')"
+              >
+                Primary
+              </button>
+              <button
+                type="button"
+                class="inbox-tab"
+                role="tab"
+                [class.active]="inboxFolder === 'requests'"
+                [attr.aria-selected]="inboxFolder === 'requests'"
+                (click)="setInboxFolder('requests')"
+              >
+                Requests
+              </button>
+            </div>
             <div class="status" *ngIf="loadingConversations">Loading conversations…</div>
             <div class="status error" *ngIf="conversationError">{{ conversationError }}</div>
             <div class="status empty" *ngIf="!loadingConversations && !conversations.length">
-              No conversations yet. Start chatting from a profile.
+              <ng-container *ngIf="inboxFolder === 'requests'; else primaryEmpty">
+                No message requests. When someone you don’t follow messages you, it shows up here.
+              </ng-container>
+              <ng-template #primaryEmpty>
+                No conversations yet. Start chatting from a profile.
+              </ng-template>
             </div>
-            <button
-              class="conversation"
-              type="button"
+            <div
+              class="conversation-block"
               *ngFor="let convo of conversations; trackBy: trackConversationById"
-              [class.active]="convo.id === activeConversationId"
-              [class.unread]="isConversationUnread(convo)"
-              (click)="selectConversation(convo, true)"
             >
-              <div class="avatar">
-                <img
-                  *ngIf="otherMember(convo)?.avatar_url"
-                  [src]="otherMember(convo)?.avatar_url"
-                  alt=""
-                />
-                <div class="initials" *ngIf="!otherMember(convo)?.avatar_url">
-                  {{ initialsFor(otherMember(convo)) }}
+              <button
+                class="conversation"
+                type="button"
+                [class.active]="convo.id === activeConversationId"
+                [class.unread]="isConversationUnread(convo)"
+                (click)="selectConversation(convo, true)"
+              >
+                <div class="avatar">
+                  <img
+                    *ngIf="otherMember(convo)?.avatar_url"
+                    [src]="otherMember(convo)?.avatar_url"
+                    alt=""
+                  />
+                  <div class="initials" *ngIf="!otherMember(convo)?.avatar_url">
+                    {{ initialsFor(otherMember(convo)) }}
+                  </div>
                 </div>
-              </div>
-              <div class="meta">
-                <div class="name-row">
-                  <div class="name">{{ displayNameFor(otherMember(convo)) }}</div>
-                  <div class="time">{{ formatTime(convo.last_message_at || convo.updated_at) }}</div>
+                <div class="meta">
+                  <div class="name-row">
+                    <div class="name">{{ displayNameFor(otherMember(convo)) }}</div>
+                    <div class="time">{{ formatTime(convo.last_message_at || convo.updated_at) }}</div>
+                  </div>
+                  <div class="snippet">{{ conversationSnippet(convo) }}</div>
                 </div>
-                <div class="snippet">{{ conversationSnippet(convo) }}</div>
+                <span class="conversation-unread" *ngIf="isConversationUnread(convo)" aria-hidden="true"></span>
+              </button>
+              <div class="request-actions" *ngIf="inboxFolder === 'requests'">
+                <button
+                  type="button"
+                  class="request-btn accept"
+                  [disabled]="requestBusyId === convo.id"
+                  (click)="acceptRequest(convo); $event.stopPropagation()"
+                >
+                  Accept
+                </button>
+                <button
+                  type="button"
+                  class="request-btn decline"
+                  [disabled]="requestBusyId === convo.id"
+                  (click)="declineRequest(convo); $event.stopPropagation()"
+                >
+                  Delete
+                </button>
               </div>
-              <span class="conversation-unread" *ngIf="isConversationUnread(convo)" aria-hidden="true"></span>
-            </button>
+            </div>
           </aside>
 
           <section class="thread" *ngIf="activeConversation || !isNarrow">
@@ -442,8 +492,8 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
     .layout.thread-only .panel{
       display:none;
     }
-    /* Desktop: NEVER hide the conversation list when a chat is open */
-    @media (min-width: 901px){
+    /* Desktop (≥900px): ALWAYS keep list + thread side-by-side */
+    @media (min-width: 900px){
       .layout.thread-only .panel{
         display:flex !important;
       }
@@ -492,6 +542,32 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
       padding:0;
     }
     .panel-icon-btn:hover{ background:rgba(44,40,37,0.05); }
+    .inbox-picker{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:4px;
+      margin:8px 12px 4px;
+      padding:4px;
+      border-radius:12px;
+      background:var(--m-wash, #f3efe8);
+      border:0.5px solid var(--m-border, #ddd8d1);
+    }
+    .inbox-tab{
+      border:0;
+      border-radius:10px;
+      padding:8px 10px;
+      font:inherit;
+      font-size:13px;
+      font-weight:650;
+      color:var(--m-ink-muted, #948b82);
+      background:transparent;
+      cursor:pointer;
+    }
+    .inbox-tab.active{
+      background:var(--m-surface, #fefdfb);
+      color:var(--m-ink, #2c2825);
+      box-shadow:0 1px 3px rgba(44,40,37,0.08);
+    }
     .status{
       font-size:14px;
       color:var(--m-ink-muted, #948b82);
@@ -499,6 +575,35 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
     }
     .status.error{ color:var(--m-danger, #ea000b); }
     .status.empty{ text-align:center; padding:40px 20px; line-height:1.45; }
+    .conversation-block{
+      display:flex;
+      flex-direction:column;
+      gap:0;
+    }
+    .request-actions{
+      display:flex;
+      gap:8px;
+      padding:0 14px 10px 70px;
+    }
+    .request-btn{
+      border:0;
+      border-radius:10px;
+      padding:7px 12px;
+      font:inherit;
+      font-size:12px;
+      font-weight:700;
+      cursor:pointer;
+    }
+    .request-btn:disabled{ opacity:0.5; cursor:default; }
+    .request-btn.accept{
+      background:var(--m-accent, #7b6347);
+      color:#fefdfb;
+    }
+    .request-btn.decline{
+      background:transparent;
+      color:var(--m-danger, #ea000b);
+      border:0.5px solid color-mix(in srgb, var(--m-danger, #ea000b) 35%, transparent);
+    }
     .conversation{
       display:flex;
       align-items:center;
@@ -1216,7 +1321,7 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
       background:#d84c4c;
       color:#fff;
     }
-    @media (min-width: 901px){
+    @media (min-width: 900px){
       :host{ height:100svh; }
       .wrap{
         padding:0;
@@ -1225,7 +1330,7 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
       }
       .card{ height:100%; }
       .layout{
-        grid-template-columns:minmax(300px, 32vw) minmax(0, 1fr);
+        grid-template-columns:minmax(320px, min(380px, 34vw)) minmax(0, 1fr);
         max-width:none;
         width:100%;
         margin:0;
@@ -1238,6 +1343,7 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
         background:var(--m-paper, #f8f6f2);
         padding:0 0 12px;
         gap:2px;
+        min-width:320px;
       }
       .thread{ background:var(--m-paper, #f8f6f2); min-height:0; }
       .thread-header{
@@ -1250,7 +1356,7 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
       .bubble-col{ max-width:min(62%, 420px); }
       .composer{ padding:12px 20px calc(12px + env(safe-area-inset-bottom)); }
     }
-    @media (max-width: 900px){
+    @media (max-width: 899px){
       .wrap{ padding:0; }
       .layout{
         grid-template-columns:1fr;
@@ -1312,6 +1418,9 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   messages: Message[] = [];
   activeConversation: Conversation | null = null;
   activeConversationId: string | null = null;
+  /** iOS MessagesInboxFolder — Primary | Requests */
+  inboxFolder: 'primary' | 'requests' = 'primary';
+  requestBusyId: string | null = null;
   loadingConversations = false;
   loadingMessages = false;
   conversationError = '';
@@ -1508,6 +1617,66 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.forceUi();
   };
 
+  setInboxFolder(folder: 'primary' | 'requests'): void {
+    if (this.inboxFolder === folder) return;
+    this.inboxFolder = folder;
+    this.conversations = [];
+    this.conversationError = '';
+    if (folder === 'requests') {
+      // Requests are list-only until accepted — clear thread selection on mobile.
+      this.activeConversation = null;
+      this.activeConversationId = null;
+      this.messages = [];
+      this.mobileThreadOnly = false;
+    }
+    this.forceUi();
+    void this.loadConversations();
+  }
+
+  async acceptRequest(convo: Conversation): Promise<void> {
+    if (!convo?.id || this.requestBusyId) return;
+    this.requestBusyId = convo.id;
+    this.forceUi();
+    try {
+      const accepted = await this.messagesService.acceptMessageRequest(convo.id);
+      this.conversations = this.conversations.filter((c) => c.id !== convo.id);
+      this.inboxFolder = 'primary';
+      this.upsertConversation(accepted);
+      this.activeConversation = accepted;
+      this.activeConversationId = accepted.id;
+      this.enterThreadView();
+      await this.loadConversations(accepted.id);
+      void this.loadMessages(accepted.id, false);
+    } catch (e: any) {
+      this.conversationError = e?.message ?? String(e);
+    } finally {
+      this.requestBusyId = null;
+      this.forceUi();
+    }
+  }
+
+  async declineRequest(convo: Conversation): Promise<void> {
+    if (!convo?.id || this.requestBusyId) return;
+    this.requestBusyId = convo.id;
+    this.conversations = this.conversations.filter((c) => c.id !== convo.id);
+    this.forceUi();
+    try {
+      await this.messagesService.declineMessageRequest(convo.id);
+      if (this.activeConversationId === convo.id) {
+        this.activeConversation = null;
+        this.activeConversationId = null;
+        this.messages = [];
+        this.mobileThreadOnly = false;
+      }
+    } catch (e: any) {
+      this.conversationError = e?.message ?? String(e);
+      await this.loadConversations();
+    } finally {
+      this.requestBusyId = null;
+      this.forceUi();
+    }
+  }
+
   async loadConversations(selectId?: string | null, silent = false): Promise<void> {
     if (!silent) {
       this.loadingConversations = true;
@@ -1516,7 +1685,8 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     }
 
     try {
-      const serverConvos = await this.messagesService.listConversations();
+      const inbox = this.inboxFolder === 'requests' ? 'requests' : 'primary';
+      const serverConvos = await this.messagesService.listConversations(40, inbox);
       if (this.destroyed) return;
       const pending = this.pendingConversation;
       const serverHasPending =
@@ -1524,14 +1694,17 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       const merged = [...serverConvos];
       const seen = new Set(merged.map((item) => item.id));
 
-      if (pending && !seen.has(pending.id)) {
-        merged.unshift(pending);
-        seen.add(pending.id);
-      }
+      // Only merge pending/active into Primary — Requests is a strict API folder.
+      if (inbox === 'primary') {
+        if (pending && !seen.has(pending.id)) {
+          merged.unshift(pending);
+          seen.add(pending.id);
+        }
 
-      if (this.activeConversation && !seen.has(this.activeConversation.id)) {
-        merged.unshift(this.activeConversation);
-        seen.add(this.activeConversation.id);
+        if (this.activeConversation && !seen.has(this.activeConversation.id)) {
+          merged.unshift(this.activeConversation);
+          seen.add(this.activeConversation.id);
+        }
       }
 
       this.conversations = merged;
@@ -3267,7 +3440,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   private enterThreadView(): void {
     if (typeof window === 'undefined') return;
-    // Only stack list/thread on true phone widths. Desktop keeps both panes.
+    // Only stack list/thread below 900px. Desktop (≥900) keeps both panes.
     this.mobileThreadOnly = window.innerWidth < 900;
     this.updateViewportFlag();
     this.forceUi();
@@ -3283,7 +3456,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     if (typeof window === 'undefined') return;
     const narrow = window.innerWidth < 900;
     this.isNarrow = narrow;
-    // Leaving phone width → always show list again
+    // Leaving phone width → always show list again (side-by-side)
     if (!narrow) {
       this.mobileThreadOnly = false;
     }

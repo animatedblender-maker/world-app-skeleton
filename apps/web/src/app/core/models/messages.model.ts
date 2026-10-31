@@ -24,6 +24,9 @@ export type Conversation = {
   last_message_at?: string | null;
   /** primary = Messages; masquerade = Masquerade Inbox only */
   surface?: string | null;
+  /** Viewer-side pending message request (iOS MessagesView Requests tab) */
+  is_request?: boolean | null;
+  request_status?: string | null;
   members: PostAuthor[];
   last_message?: Message | null;
 };

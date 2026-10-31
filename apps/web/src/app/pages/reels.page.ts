@@ -762,6 +762,101 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
         color: rgba(255, 255, 255, 0.6);
         text-align: center;
       }
+
+      /*
+       * Desktop Sparks: phone-sized 9:16 stage centered (not full-bleed).
+       * Comments open as a dual-pane side column instead of a bottom sheet.
+       */
+      @media (min-width: 900px) {
+        :host {
+          background: #0a0908;
+        }
+        .reels-root {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 20px;
+          padding: 16px 24px;
+          box-sizing: border-box;
+          background:
+            radial-gradient(900px 480px at 50% 20%, rgba(123, 99, 71, 0.14), transparent 55%),
+            #0a0908;
+        }
+        .reels-chrome {
+          /* Chrome sits on the phone stage, not the full viewport */
+          left: 50%;
+          right: auto;
+          width: var(--spark-stage-w, min(420px, 38vw));
+          transform: translateX(-50%);
+          padding-top: 14px;
+          padding-left: 10px;
+          padding-right: 10px;
+          transition: transform 0.2s ease, left 0.2s ease;
+        }
+        .reels-root.comments-open .reels-chrome {
+          left: calc(50% - (min(400px, 32vw) + 10px) / 2);
+          transform: translateX(-50%);
+        }
+        .progress-rail {
+          left: 50%;
+          right: auto;
+          width: calc(var(--spark-stage-w, min(420px, 38vw)) - 28px);
+          transform: translateX(-50%);
+          top: 64px;
+          transition: transform 0.2s ease, left 0.2s ease;
+        }
+        .reels-root.comments-open .progress-rail {
+          left: calc(50% - (min(400px, 32vw) + 10px) / 2);
+          transform: translateX(-50%);
+        }
+        .reels-feed {
+          --spark-stage-w: min(420px, 38vw);
+          width: var(--spark-stage-w);
+          height: min(100dvh - 32px, calc(var(--spark-stage-w) * 16 / 9));
+          max-height: calc(100dvh - 32px);
+          border-radius: 20px;
+          overflow: hidden;
+          box-shadow:
+            0 0 0 1px rgba(255, 255, 255, 0.08),
+            0 24px 64px rgba(0, 0, 0, 0.55);
+          flex: 0 0 auto;
+          z-index: 1;
+        }
+        .reel,
+        .reel-frame {
+          border-radius: 0;
+        }
+        .comments-backdrop {
+          position: relative;
+          inset: auto;
+          flex: 0 0 min(400px, 32vw);
+          width: min(400px, 32vw);
+          height: min(100dvh - 32px, calc(min(420px, 38vw) * 16 / 9));
+          max-height: calc(100dvh - 32px);
+          background: transparent;
+          align-items: stretch;
+          justify-content: stretch;
+          display: flex;
+          z-index: 2;
+        }
+        .comments-panel {
+          width: 100%;
+          max-height: none;
+          height: 100%;
+          border-radius: 20px;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+        }
+      }
+      @media (min-width: 1280px) {
+        .reels-feed {
+          --spark-stage-w: min(440px, 34vw);
+        }
+        .comments-backdrop {
+          flex-basis: min(420px, 30vw);
+          width: min(420px, 30vw);
+        }
+      }
     `,
   ],
 })
