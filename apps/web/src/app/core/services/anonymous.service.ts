@@ -110,6 +110,12 @@ export type AnonymousSearchResults = {
   posts: AnonymousPost[];
 };
 
+export type AnonymousPublicProfilePayload = {
+  profile: AnonymousProfile;
+  post_count?: number | null;
+  space_count?: number | null;
+};
+
 @Injectable({ providedIn: 'root' })
 export class AnonymousService {
   private readonly timeoutMs = 12000;
@@ -316,6 +322,78 @@ export class AnonymousService {
           : [],
       spaces: Array.isArray(data?.spaces) ? data.spaces : [],
       posts: Array.isArray(data?.posts) ? data.posts : [],
+    };
+  }
+
+  /** Public Masquerade profile by username (search → profile deep-link). */
+  async publicProfile(
+    username: string
+  ): Promise<{ ok: true; payload: AnonymousPublicProfilePayload } | AnonymousApiError> {
+    const handle = username.trim().replace(/^@+/, '');
+    if (!handle) {
+      return { ok: false, code: 'not_found', reason: 'Profile not found.', status: 404 };
+    }
+    const res = await this.request<any>(
+      'GET',
+      `/v1/anonymous/profiles/${encodeURIComponent(handle)}`
+    );
+    if ('ok' in res && res.ok === false) return res as AnonymousApiError;
+    const data = res?.data ?? res;
+    const profileRaw = data?.profile ?? data;
+    const usernameOut = String(profileRaw?.username || '').trim();
+    if (!usernameOut) {
+      return { ok: false, code: 'not_found', reason: 'Profile not found.', status: 404 };
+    }
+    const profile: AnonymousProfile = {
+      id: String(profileRaw?.id || ''),
+      username: usernameOut,
+      avatar_seed: String(profileRaw?.avatar_seed || profileRaw?.avatarSeed || usernameOut),
+      state: String(profileRaw?.state || 'active'),
+      age_attested_at: profileRaw?.age_attested_at ?? profileRaw?.ageAttestedAt ?? null,
+      created_at: String(profileRaw?.created_at || profileRaw?.createdAt || ''),
+    };
+    return {
+      ok: true,
+      payload: {
+        profile,
+        post_count: data?.post_count ?? data?.postCount ?? null,
+        space_count: data?.space_count ?? data?.spaceCount ?? null,
+      },
+    };
+  }
+
+  async authorPosts(
+    username: string,
+    opts?: { cursor?: string | null; limit?: number }
+  ): Promise<
+    | { ok: true; posts: AnonymousPost[]; next_cursor: string | null }
+    | AnonymousApiError
+  > {
+    const handle = username.trim().replace(/^@+/, '');
+    if (!handle) {
+      return { ok: true, posts: [], next_cursor: null };
+    }
+    const q: Record<string, string> = {
+      limit: String(Math.min(Math.max(opts?.limit ?? 24, 1), 48)),
+    };
+    if (opts?.cursor) q['cursor'] = opts.cursor;
+    const res = await this.request<any>(
+      'GET',
+      `/v1/anonymous/profiles/${encodeURIComponent(handle)}/posts`,
+      undefined,
+      q
+    );
+    if ('ok' in res && res.ok === false) return res as AnonymousApiError;
+    const data = res?.data ?? res;
+    const posts: AnonymousPost[] = Array.isArray(data?.posts)
+      ? data.posts
+      : Array.isArray(data?.items)
+        ? data.items
+        : [];
+    return {
+      ok: true,
+      posts,
+      next_cursor: data?.next_cursor ?? data?.nextCursor ?? null,
     };
   }
 

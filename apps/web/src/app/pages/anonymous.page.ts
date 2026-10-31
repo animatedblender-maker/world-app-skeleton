@@ -9,13 +9,14 @@ import {
   AnonymousNotification,
   AnonymousPost,
   AnonymousProfile,
+  AnonymousPublicProfilePayload,
   AnonymousService,
   AnonymousSession,
   AnonymousSpace,
   AnonymousSpaceFilter,
   type AnonymousApiError,
 } from '../core/services/anonymous.service';
-import { Conversation } from '../core/models/messages.model';
+import { Conversation, Message } from '../core/models/messages.model';
 import { AuthService } from '../core/services/auth.service';
 import { MessagesService } from '../core/services/messages.service';
 import { NotificationsUiService } from '../core/services/notifications-ui.service';
@@ -36,6 +37,8 @@ type View =
   | { kind: 'shell' }
   | { kind: 'space'; slug: string }
   | { kind: 'post'; id: string; spaceSlug?: string }
+  | { kind: 'profile'; username: string }
+  | { kind: 'dm'; conversationId: string }
   | { kind: 'create_space' };
 
 const SPACE_FILTERS: Array<{ id: AnonymousSpaceFilter; title: string }> = [
@@ -278,7 +281,9 @@ const SPACE_FILTERS: Array<{ id: AnonymousSpaceFilter; title: string }> = [
               a/{{ p.space_slug || 'space' }}
             </button>
             <span>·</span>
-            <span>@{{ p.author.username }}</span>
+            <button type="button" class="linkish" (click)="openAuthorProfile(p.author.username, $event)">
+              @{{ p.author.username }}
+            </button>
             <span>·</span>
             <span>{{ relativeTime(p.created_at) }}</span>
           </div>
@@ -386,6 +391,7 @@ const SPACE_FILTERS: Array<{ id: AnonymousSpaceFilter; title: string }> = [
               type="button"
               class="dm-row"
               *ngFor="let c of dmThreads; trackBy: trackConversation"
+              [class.active]="activeDmId === c.id"
               (click)="openMasqueradeThread(c)"
             >
               <div class="dm-title">{{ dmTitle(c) }}</div>
@@ -439,6 +445,90 @@ const SPACE_FILTERS: Array<{ id: AnonymousSpaceFilter; title: string }> = [
         <button type="button" class="btn ghost" (click)="setSpaceFilter('joined')">
           View joined Spaces
         </button>
+      </main>
+
+      <!-- Public Masquerade profile (search → deep-link) -->
+      <main class="anon-body" *ngIf="phase === 'ready' && view.kind === 'profile'">
+        <div class="state" *ngIf="profileLoading && !publicProfile">Loading profile…</div>
+        <div class="state error" *ngIf="!profileLoading && profileError && !publicProfile">
+          {{ profileError }}
+        </div>
+        <ng-container *ngIf="publicProfile as payload">
+          <div class="me-card">
+            <div class="me-handle">@{{ payload.profile.username }}</div>
+            <p class="muted">
+              {{ payload.post_count ?? profilePosts.length }} posts ·
+              {{ payload.space_count ?? 0 }} spaces
+            </p>
+            <p class="muted">
+              This identity is only for Anonymous. Matterya profile details never appear here.
+            </p>
+          </div>
+          <div class="state" *ngIf="profilePostsLoading && !profilePosts.length">Loading posts…</div>
+          <div class="state" *ngIf="!profilePostsLoading && !profilePosts.length">
+            No public posts yet.
+          </div>
+          <article
+            class="post-card"
+            *ngFor="let p of profilePosts; trackBy: trackPost"
+            (click)="openPost(p)"
+          >
+            <div class="post-meta">
+              <button type="button" class="linkish" (click)="openSpaceSlug(p.space_slug, $event)">
+                a/{{ p.space_slug || 'space' }}
+              </button>
+              <span>·</span>
+              <span>{{ relativeTime(p.created_at) }}</span>
+            </div>
+            <h2 *ngIf="p.title">{{ p.title }}</h2>
+            <p>{{ p.body }}</p>
+            <div class="post-actions" (click)="$event.stopPropagation()">
+              <button type="button" class="vote" (click)="votePost(p, 1)">▲ {{ p.score }}</button>
+              <button type="button" class="vote" (click)="votePost(p, -1)">▼</button>
+              <span class="muted">{{ p.comment_count || 0 }} comments</span>
+            </div>
+          </article>
+        </ng-container>
+      </main>
+
+      <!-- In-shell Masquerade DM thread -->
+      <main class="anon-body dm-thread" *ngIf="phase === 'ready' && view.kind === 'dm'">
+        <div class="state" *ngIf="dmThreadLoading && !dmMessages.length">Loading conversation…</div>
+        <div class="state error" *ngIf="!dmThreadLoading && dmThreadError && !dmMessages.length">
+          {{ dmThreadError }}
+        </div>
+        <div class="dm-thread-list" *ngIf="dmMessages.length || (!dmThreadLoading && !dmThreadError)">
+          <div class="state" *ngIf="!dmThreadLoading && !dmMessages.length">
+            <strong>No messages yet</strong>
+            <p>Official Matterya notes appear here.</p>
+          </div>
+          <div
+            class="dm-bubble"
+            *ngFor="let m of dmMessages; trackBy: trackMessage"
+            [class.me]="m.sender_id === meId"
+          >
+            <div class="dm-bubble-body">{{ m.body || (m.media_url ? '📎 Attachment' : '') }}</div>
+            <div class="dm-bubble-time">{{ relativeTime(m.created_at) }}</div>
+          </div>
+        </div>
+        <form class="dm-composer" (ngSubmit)="sendDmMessage()">
+          <input
+            class="field"
+            [(ngModel)]="dmComposeBody"
+            name="dmComposeBody"
+            placeholder="Message Matterya…"
+            autocomplete="off"
+            maxlength="2000"
+          />
+          <button
+            type="submit"
+            class="btn primary"
+            [disabled]="dmSendBusy || !dmComposeBody.trim()"
+          >
+            {{ dmSendBusy ? '…' : 'Send' }}
+          </button>
+        </form>
+        <p class="error" *ngIf="dmComposeError">{{ dmComposeError }}</p>
       </main>
 
       <!-- Space detail -->
@@ -1125,6 +1215,62 @@ const SPACE_FILTERS: Array<{ id: AnonymousSpaceFilter; title: string }> = [
         font-size: 12px;
         color: var(--m-ink-muted, #8a8278);
       }
+      .dm-row.active {
+        border-color: rgba(123, 99, 71, 0.45);
+        background: rgba(123, 99, 71, 0.08);
+      }
+      .dm-thread {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        min-height: min(60vh, 640px);
+      }
+      .dm-thread-list {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 4px 0 12px;
+      }
+      .dm-bubble {
+        align-self: flex-start;
+        max-width: min(86%, 420px);
+        padding: 10px 12px;
+        border-radius: 14px 14px 14px 4px;
+        background: var(--m-surface, #fffcf8);
+        border: 0.5px solid var(--m-border, #ddd8d1);
+      }
+      .dm-bubble.me {
+        align-self: flex-end;
+        border-radius: 14px 14px 4px 14px;
+        background: rgba(123, 99, 71, 0.12);
+        border-color: rgba(123, 99, 71, 0.28);
+      }
+      .dm-bubble-body {
+        color: var(--m-ink, #2c2825);
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 14px;
+        line-height: 1.4;
+      }
+      .dm-bubble-time {
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--m-ink-muted, #8a8278);
+      }
+      .dm-composer {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        position: sticky;
+        bottom: calc(var(--tabs-safe, 72px) + 8px);
+        padding-top: 8px;
+        background: linear-gradient(180deg, transparent, var(--m-canvas, #f5f2ed) 28%);
+      }
+      .dm-composer .field {
+        flex: 1;
+        margin: 0;
+      }
       .notif-row.unread {
         border-color: rgba(180, 50, 50, 0.35);
         background: rgba(180, 50, 50, 0.06);
@@ -1227,6 +1373,22 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
   dmThreads: Conversation[] = [];
   dmLoading = false;
   dmError = '';
+  activeDmId: string | null = null;
+  activeDmConversation: Conversation | null = null;
+  dmMessages: Message[] = [];
+  dmThreadLoading = false;
+  dmThreadError = '';
+  dmComposeBody = '';
+  dmComposeError = '';
+  dmSendBusy = false;
+  meId: string | null = null;
+
+  publicProfile: AnonymousPublicProfilePayload | null = null;
+  profilePosts: AnonymousPost[] = [];
+  profileLoading = false;
+  profilePostsLoading = false;
+  profileError = '';
+
   notifications: AnonymousNotification[] = [];
   notifLoading = false;
   notifUnread = 0;
@@ -1248,6 +1410,16 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
     if (this.view.kind === 'create_space') return 'New Space';
     if (this.view.kind === 'space') return this.currentSpace?.title || 'Space';
     if (this.view.kind === 'post') return 'Post';
+    if (this.view.kind === 'profile') {
+      return this.publicProfile?.profile?.username
+        ? `@${this.publicProfile.profile.username}`
+        : 'Profile';
+    }
+    if (this.view.kind === 'dm') {
+      return this.activeDmConversation
+        ? this.dmTitle(this.activeDmConversation)
+        : 'Messages';
+    }
     return 'Anonymous';
   }
 
@@ -1807,9 +1979,50 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
   }
 
   openSearchProfile(profile: AnonymousProfile): void {
-    // Profiles open via search hit → deep link into Space directory for now.
-    this.searchQuery = profile.username;
-    void this.runSearch();
+    this.openAuthorProfile(profile?.username);
+  }
+
+  openAuthorProfile(username: string | null | undefined, event?: Event): void {
+    event?.stopPropagation?.();
+    const handle = String(username || '')
+      .trim()
+      .replace(/^@+/, '');
+    if (!handle) return;
+    if (this.view.kind === 'profile' && this.view.username === handle) return;
+    this.pushView({ kind: 'profile', username: handle });
+    void this.loadPublicProfile(handle);
+  }
+
+  async loadPublicProfile(username: string): Promise<void> {
+    const handle = username.trim().replace(/^@+/, '');
+    this.profileLoading = true;
+    this.profilePostsLoading = true;
+    this.profileError = '';
+    this.publicProfile = null;
+    this.profilePosts = [];
+    this.paint();
+    const [profileRes, postsRes] = await Promise.all([
+      this.anon.publicProfile(handle),
+      this.anon.authorPosts(handle, { limit: 24 }),
+    ]);
+    if (this.destroyed) return;
+    this.profileLoading = false;
+    this.profilePostsLoading = false;
+    if ((profileRes as AnonymousApiError).ok === false) {
+      this.profileError = this.anon.errorMessage(
+        profileRes as AnonymousApiError,
+        'Profile unavailable'
+      );
+      this.paint();
+      return;
+    }
+    this.publicProfile = (profileRes as { payload: AnonymousPublicProfilePayload }).payload;
+    if ((postsRes as AnonymousApiError).ok === false) {
+      this.profilePosts = [];
+    } else {
+      this.profilePosts = (postsRes as { posts: AnonymousPost[] }).posts || [];
+    }
+    this.paint();
   }
 
   async loadMasqueradeInbox(force = false): Promise<void> {
@@ -1851,9 +2064,67 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
   }
 
   openMasqueradeThread(c: Conversation): void {
-    void this.router.navigate(['/messages'], {
-      queryParams: { conversation: c.id, surface: 'masquerade' },
-    });
+    this.activeDmId = c.id;
+    this.activeDmConversation = c;
+    this.dmComposeBody = '';
+    this.dmComposeError = '';
+    this.pushView({ kind: 'dm', conversationId: c.id });
+    void this.loadDmThread(c.id);
+  }
+
+  async loadDmThread(conversationId: string): Promise<void> {
+    this.dmThreadLoading = true;
+    this.dmThreadError = '';
+    this.dmMessages = [];
+    this.paint();
+    try {
+      if (!this.meId) {
+        this.meId = (await this.auth.getUser())?.id || null;
+      }
+      const rows = await this.messages.listMessages(conversationId, 60);
+      // API returns newest-first; show oldest → newest in thread.
+      this.dmMessages = [...rows].reverse();
+    } catch (e: any) {
+      this.dmThreadError = e?.message || 'Conversation unavailable';
+    } finally {
+      this.dmThreadLoading = false;
+      this.paint();
+    }
+  }
+
+  async sendDmMessage(): Promise<void> {
+    const id = this.activeDmId;
+    const body = this.dmComposeBody.trim();
+    if (!id || !body || this.dmSendBusy) return;
+    this.dmSendBusy = true;
+    this.dmComposeError = '';
+    this.paint();
+    try {
+      if (!this.meId) {
+        this.meId = (await this.auth.getUser())?.id || null;
+      }
+      const sent = await this.messages.sendMessage(id, body);
+      this.dmMessages = [...this.dmMessages, sent];
+      this.dmComposeBody = '';
+      this.dmThreads = this.dmThreads.map((c) =>
+        c.id === id ? { ...c, last_message: sent } : c
+      );
+      if (this.activeDmConversation?.id === id) {
+        this.activeDmConversation = {
+          ...this.activeDmConversation,
+          last_message: sent,
+        };
+      }
+    } catch (e: any) {
+      this.dmComposeError = e?.message || 'Could not send';
+    } finally {
+      this.dmSendBusy = false;
+      this.paint();
+    }
+  }
+
+  trackMessage(_: number, m: Message): string {
+    return m.id;
   }
 
   async loadNotifications(force = false): Promise<void> {

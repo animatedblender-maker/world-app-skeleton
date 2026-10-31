@@ -13,8 +13,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -48,9 +47,18 @@ fun AnonymousSpaceDetailView(
     val state by store.state.collectAsState()
     val scope = rememberCoroutineScope()
     var showComposer by remember { mutableStateOf(false) }
+    var showModPanel by remember { mutableStateOf(false) }
     val space = state.currentSpace
 
     LaunchedEffect(slug) { store.openSpace(slug) }
+
+    if (showModPanel) {
+        AnonymousModPanelView(
+            spaceTitle = space?.title ?: slug,
+            onDismiss = { showModPanel = false },
+        )
+        return
+    }
 
     if (showComposer && space != null) {
         AnonymousComposerView(
@@ -97,6 +105,11 @@ fun AnonymousSpaceDetailView(
                         },
                         color = MatteryaColors.accent,
                     )
+                }
+                if (space.isOwner == true || space.isModerator == true) {
+                    IconButton(onClick = { showModPanel = true }) {
+                        Icon(Icons.Default.Shield, contentDescription = "Mod tools", tint = MatteryaColors.ink)
+                    }
                 }
                 IconButton(onClick = { showComposer = true }) {
                     Icon(Icons.Default.Add, contentDescription = "Post", tint = MatteryaColors.ink)

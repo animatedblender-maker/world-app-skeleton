@@ -22,7 +22,15 @@ import { HubsPlaybackService, type HubsPlaybackState } from '../hubs-playback.se
   standalone: true,
   imports: [CommonModule],
   template: `
-    <div class="mini-wrap" *ngIf="show" role="region" aria-label="Hubs mini player">
+    <!-- Keep film mounted while a hubs post is active (even on watch) to avoid remount flicker on collapse. -->
+    <div
+      class="mini-wrap"
+      *ngIf="mounted"
+      [class.mini-hidden]="!show"
+      [attr.aria-hidden]="show ? null : 'true'"
+      role="region"
+      aria-label="Hubs mini player"
+    >
       <div class="mini">
         <button type="button" class="thumb-btn" (click)="expand()" aria-label="Expand video">
           <video
@@ -82,6 +90,13 @@ import { HubsPlaybackService, type HubsPlaybackState } from '../hubs-playback.se
         padding: 0 var(--m-page-padding, 16px);
         pointer-events: none;
         box-sizing: border-box;
+      }
+      .mini-wrap.mini-hidden {
+        visibility: hidden;
+        opacity: 0;
+        pointer-events: none;
+        /* Keep off-screen so it never intercepts taps on watch. */
+        transform: translateY(120%);
       }
       .mini {
         pointer-events: auto;
@@ -333,7 +348,12 @@ export class HubsMiniPlayerComponent implements OnInit, OnDestroy {
     this.routeSub = this.router.events
       .pipe(filter((e): e is NavigationEnd => e instanceof NavigationEnd))
       .subscribe((e) => {
-        this.onWatchRoute = this.isWatchUrl(e.urlAfterRedirects || e.url);
+        const nextWatch = this.isWatchUrl(e.urlAfterRedirects || e.url);
+        // Leaving watch → mini: re-apply catalog playhead (watch advanced while film was paused).
+        if (this.onWatchRoute && !nextWatch) {
+          this.startApplied = false;
+        }
+        this.onWatchRoute = nextWatch;
         this.queueFilmSync();
       });
   }
@@ -364,10 +384,15 @@ export class HubsMiniPlayerComponent implements OnInit, OnDestroy {
     return /\/hubs\/watch(\/|$|\?)/.test(url || '');
   }
 
+  /** Visible docked chrome — never on the full watch page. */
   get show(): boolean {
-    // Stay hidden on the full watch page so Share / overlays never leave a dual player.
     if (this.onWatchRoute) return false;
     return !!this.state.post && !this.state.expanded;
+  }
+
+  /** Keep <video> in DOM while hubs session is active (watch or mini) to reduce collapse remount flicker. */
+  get mounted(): boolean {
+    return !!this.state.post;
   }
 
   get title(): string {
@@ -435,7 +460,7 @@ export class HubsMiniPlayerComponent implements OnInit, OnDestroy {
   }
 
   private syncFilm(): void {
-    if (!this.show || !this.state.post) {
+    if (!this.state.post) {
       this.teardownFilm();
       return;
     }
@@ -445,6 +470,9 @@ export class HubsMiniPlayerComponent implements OnInit, OnDestroy {
     const postId = this.state.post.id;
     const src = this.mediaSrc;
     if (!src) return;
+
+    // On full watch the main player owns audio — keep mini film warm but paused (no dual audio).
+    const shouldPlay = this.show && !!this.state.playing;
 
     if (this.boundPostId !== postId || this.boundSrc !== src) {
       this.boundPostId = postId;
@@ -461,7 +489,7 @@ export class HubsMiniPlayerComponent implements OnInit, OnDestroy {
 
     this.syncing = true;
     try {
-      if (this.state.playing) {
+      if (shouldPlay) {
         void video.play().then(
           () => {
             this.filmReady = true;

@@ -54,10 +54,10 @@
 
 ## Remaining gaps (web)
 - Messages: CallKit-grade call UX polish
-- Hubs: remount-free continuous mini player (watch up-next shipped)
-- Anonymous: Search profile deep-link / in-shell chat thread (Inbox now lists DMs + alerts)
+- Hubs: remount-free continuous mini player — **reduced flicker 15:17Z** (film kept warm across watch↔mini; full shared-element handoff still future)
+- Anonymous: Search profile deep-link / in-shell chat — **shipped 15:17Z**
 - Feed: continue-watching strip — **shipped 13:27Z**
-- Android Masquerade: mod panel polish (media zoom/video + DM threads wired)
+- Android Masquerade: mod panel — **placeholder panel shipped 15:17Z** (iOS parity; ops queue still parked)
 
 - **13:24Z Wave (scheduler):**
   - No Android/web worktrees to merge (only iOS wt: feed-home-butter, freeze-cold-open, names-r2 — left alone).
@@ -75,3 +75,9 @@
   - **Messages archive/delete:** GraphQL `archiveConversation` / `deleteConversation` on web `MessagesService` (same iOS mutations). Primary inbox: explicit Archive + Delete buttons (desktop + mobile); mobile swipe-left reveals Archive/Delete. Optimistic remove + local hidden-id fallback (iOS `ConversationInboxStore`). Requests keep Accept/Delete.
   - **Hubs watch up-next:** `video-player` emits `ended`; watch page autoplays first `related[]` item via same-route navigate (component reused; player `src` updates in place). Near-end timeupdate fallback for flaky R2/HLS end events.
   - `ng build --configuration production` clean. Deploy via `npm run deploy:gh-pages`.
+
+- **15:17Z Wave (Android + Web parity; no iOS edits):**
+  - **Web Anonymous:** Search people → in-shell public profile (`/v1/anonymous/profiles/:username` + author posts). Inbox Masquerade DM opens **in-shell thread** (list/send via MessagesService; no hop to `/messages`). Feed author handle deep-links to profile.
+  - **Web Hubs mini-player:** Keep `<video>` mounted while hubs session active (hidden on watch) so collapse watch→mini avoids full remount/reload flicker; re-seek catalog playhead on leave-watch.
+  - **Android Masquerade mod panel:** `AnonymousModPanelView` placeholder (iOS `AnonymousModPanelView` parity — report queue / removals / sanctions / rules “Coming soon”); shield entry on Space detail when `isOwner`/`isModerator`.
+  - `./gradlew :app:assembleDebug` **BUILD SUCCESSFUL**. `ng build --configuration production` clean.
