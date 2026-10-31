@@ -52,6 +52,7 @@ import com.matterya.matterya.theme.MatteryaCopy
 import com.matterya.matterya.theme.MatteryaDimens
 import com.matterya.matterya.ui.components.AvatarView
 import com.matterya.matterya.ui.components.FollowButton
+import com.matterya.matterya.ui.components.MatteryaVerifiedBadge
 import com.matterya.matterya.ui.components.VideoThumbnailView
 
 /** iOS `SearchView` — people + content result rows (not full PostCards). */
@@ -248,12 +249,21 @@ private fun ProfileResultRow(
             AvatarView(url = profile.avatarUrl, seed = profile.userId, size = 40.dp)
             Spacer(Modifier.width(12.dp))
             Column {
-                Text(
-                    profile.displayName ?: profile.username ?: "User",
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp,
-                    color = MatteryaColors.ink,
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        profile.displayName ?: profile.username ?: "User",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        color = MatteryaColors.ink,
+                        maxLines = 1,
+                    )
+                    if (profile.showsVerifiedBadge) {
+                        MatteryaVerifiedBadge(size = 14.dp)
+                    }
+                }
                 Text(
                     profile.username?.let { "@$it" } ?: profile.countryName.orEmpty(),
                     fontSize = 12.sp,

@@ -17,6 +17,8 @@ data class Profile(
     val bio: String? = null,
     @SerialName("followers_count") val followersCount: Int? = null,
     @SerialName("following_count") val followingCount: Int? = null,
+    /** Official / admin accounts (Matterya). */
+    @SerialName("is_verified") val isVerified: Boolean? = null,
     /** active | deactivated | deleted */
     @SerialName("account_status") val accountStatus: String? = null,
     @SerialName("deactivated_at") val deactivatedAt: String? = null,
@@ -43,6 +45,9 @@ data class Profile(
 
     val displayLabel: String
         get() = ContentSanitizer.displayName(displayName, username)
+
+    val showsVerifiedBadge: Boolean
+        get() = isVerified == true || username?.trim()?.equals("matterya", ignoreCase = true) == true
 }
 
 data class Country(

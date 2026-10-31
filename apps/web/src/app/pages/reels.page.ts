@@ -39,25 +39,8 @@ const SPARKS_BLOCKED_KEY = 'matterya.sparks.blocked_authors.v1';
           <span class="wordmark-place" *ngIf="countryName || countryCode">{{ countryName || countryCode }}</span>
         </div>
 
+        <!-- iOS SparksTopChrome: Close | SPARKS | ⋯ only (mute lives on player chrome if needed) -->
         <div class="chrome-right">
-          <button
-            type="button"
-            class="chrome-btn"
-            (click)="toggleGlobalMute()"
-            [attr.aria-label]="reelMuted ? 'Unmute' : 'Mute'"
-          >
-            <svg *ngIf="!reelMuted" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8">
-              <path d="M4 10h4l5-4v12l-5-4H4z"></path>
-              <path d="M16 9a3 3 0 0 1 0 6"></path>
-              <path d="M18.5 6.5a6 6 0 0 1 0 11"></path>
-            </svg>
-            <svg *ngIf="reelMuted" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8">
-              <path d="M4 10h4l5-4v12l-5-4H4z"></path>
-              <line x1="16" y1="8" x2="21" y2="13"></line>
-              <line x1="21" y1="8" x2="16" y2="13"></line>
-            </svg>
-          </button>
-          <!-- iOS SparksTopChrome ⋯ — Not interested / Hide / Block / Report -->
           <div class="overflow-wrap" *ngIf="activePost as post">
             <button
               type="button"
@@ -155,97 +138,101 @@ const SPARKS_BLOCKED_KEY = 'matterya.sparks.blocked_authors.v1';
 
             <div class="reel-gradient" aria-hidden="true"></div>
 
+            <!-- iOS sparkDock: frosted meta + horizontal Like / Chat / Keep / Send / Open chips -->
             <div class="reel-bottom">
-              <div class="reel-meta">
-                <button
-                  type="button"
-                  class="reel-author"
-                  (click)="openAuthorProfile(post.author, post.author_id)"
-                >
-                  <span class="author-avatar">
-                    <img *ngIf="avatarFor(post)" [src]="avatarFor(post)" alt="" />
-                    <span *ngIf="!avatarFor(post)">{{ initialsFor(post) }}</span>
-                  </span>
-                  <span class="author-name">{{ displayName(post) }}</span>
-                </button>
+              <div class="spark-dock" (click)="$event.stopPropagation()">
+                <div class="reel-author-row">
+                  <button
+                    type="button"
+                    class="reel-author"
+                    (click)="openAuthorProfile(post.author, post.author_id)"
+                  >
+                    <span class="author-avatar">
+                      <img *ngIf="avatarFor(post)" [src]="avatarFor(post)" alt="" />
+                      <span *ngIf="!avatarFor(post)">{{ initialsFor(post) }}</span>
+                    </span>
+                    <span class="author-copy">
+                      <span class="author-name">{{ displayName(post) }}</span>
+                      <span class="author-sub" *ngIf="post.author?.username">@{{ post.author?.username }}</span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    class="author-country"
+                    *ngIf="post.country_name || post.country_code"
+                    (click)="openCountrySparks(post)"
+                  >
+                    {{ post.country_name || post.country_code }}
+                  </button>
+                </div>
 
                 <p class="reel-caption" *ngIf="captionFor(post)">{{ captionFor(post) }}</p>
 
-                <button
-                  type="button"
-                  class="country-chip"
-                  *ngIf="post.country_code || post.country_name"
-                  (click)="openCountrySparks(post)"
-                >
-                  <span class="chip-dot"></span>
-                  {{ post.country_name || post.country_code }}
-                </button>
-              </div>
+                <div class="reel-actions">
+                  <button
+                    type="button"
+                    class="action-chip"
+                    [class.liked]="post.liked_by_me"
+                    [disabled]="likeBusy[post.id]"
+                    (click)="togglePostLike(post)"
+                    aria-label="Like"
+                  >
+                    <svg class="chip-icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        [attr.fill]="post.liked_by_me ? 'currentColor' : 'none'"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        d="M12 21s-6.7-4.4-9.2-7.4C.9 11.4 1.5 7.6 4.6 6 6.6 5 9 5.6 10.5 7.4L12 9l1.5-1.6C15 5.6 17.4 5 19.4 6c3.1 1.6 3.7 5.4 1.8 7.6C18.7 16.6 12 21 12 21z"
+                      ></path>
+                    </svg>
+                    <span>{{ post.like_count ? compactCount(post.like_count) : 'Like' }}</span>
+                  </button>
 
-              <!-- iOS sparkActionsRow: Like / Chat / Keep / Send / Open -->
-              <div class="reel-actions" (click)="$event.stopPropagation()">
-                <button
-                  type="button"
-                  class="rail-btn"
-                  [class.liked]="post.liked_by_me"
-                  [disabled]="likeBusy[post.id]"
-                  (click)="togglePostLike(post)"
-                  aria-label="Like"
-                >
-                  <svg class="rail-icon" viewBox="0 0 24 24" aria-hidden="true">
-                    <path
-                      [attr.fill]="post.liked_by_me ? 'currentColor' : 'none'"
-                      stroke="currentColor"
-                      stroke-width="1.8"
-                      d="M12 21s-6.7-4.4-9.2-7.4C.9 11.4 1.5 7.6 4.6 6 6.6 5 9 5.6 10.5 7.4L12 9l1.5-1.6C15 5.6 17.4 5 19.4 6c3.1 1.6 3.7 5.4 1.8 7.6C18.7 16.6 12 21 12 21z"
-                    ></path>
-                  </svg>
-                  <span class="rail-label">{{ post.like_count ? compactCount(post.like_count) : 'Like' }}</span>
-                </button>
+                  <button
+                    type="button"
+                    class="action-chip"
+                    [class.active]="commentOpenPostId === post.id"
+                    (click)="toggleComments(post)"
+                    aria-label="Chat"
+                  >
+                    <svg class="chip-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                      <path d="M4 5h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"></path>
+                    </svg>
+                    <span>{{ post.comment_count ? compactCount(post.comment_count) : 'Chat' }}</span>
+                  </button>
 
-                <button
-                  type="button"
-                  class="rail-btn"
-                  [class.active]="commentOpenPostId === post.id"
-                  (click)="toggleComments(post)"
-                  aria-label="Chat"
-                >
-                  <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                    <path d="M4 5h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"></path>
-                  </svg>
-                  <span class="rail-label">{{ post.comment_count ? compactCount(post.comment_count) : 'Chat' }}</span>
-                </button>
+                  <button
+                    type="button"
+                    class="action-chip"
+                    [class.kept]="isKept(post)"
+                    (click)="toggleKeep(post)"
+                    [attr.aria-label]="isKept(post) ? 'Kept' : 'Keep'"
+                  >
+                    <svg class="chip-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                      <path
+                        [attr.fill]="isKept(post) ? 'currentColor' : 'none'"
+                        d="M6 4h12a1 1 0 0 1 1 1v16l-7-4-7 4V5a1 1 0 0 1 1-1z"
+                      />
+                    </svg>
+                    <span>{{ isKept(post) ? 'Kept' : 'Keep' }}</span>
+                  </button>
 
-                <button
-                  type="button"
-                  class="rail-btn"
-                  [class.kept]="isKept(post)"
-                  (click)="toggleKeep(post)"
-                  [attr.aria-label]="isKept(post) ? 'Kept' : 'Keep'"
-                >
-                  <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                    <path
-                      [attr.fill]="isKept(post) ? 'currentColor' : 'none'"
-                      d="M6 4h12a1 1 0 0 1 1 1v16l-7-4-7 4V5a1 1 0 0 1 1-1z"
-                    />
-                  </svg>
-                  <span class="rail-label">{{ isKept(post) ? 'Kept' : 'Keep' }}</span>
-                </button>
+                  <button type="button" class="action-chip" (click)="sharePost(post)" aria-label="Send">
+                    <svg class="chip-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                      <path d="M7 12c0-4 2.5-7 8-7" stroke-linecap="round" />
+                      <path d="M12 2l4 3-4 3" stroke-linecap="round" stroke-linejoin="round" />
+                      <path d="M15 5c-6.5 0-10 3.2-10 9v5" stroke-linecap="round" />
+                    </svg>
+                    <span>Send</span>
+                  </button>
 
-                <button type="button" class="rail-btn" (click)="sharePost(post)" aria-label="Send">
-                  <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                    <path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7" stroke-linecap="round" />
-                    <path d="M12 16V4M8 8l4-4 4 4" stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
-                  <span class="rail-label">Send</span>
-                </button>
-
-                <button type="button" class="rail-btn" (click)="openPost(post)" aria-label="Open">
-                  <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                    <path d="M7 17L17 7M9 7h8v8" stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
-                  <span class="rail-label">Open</span>
-                </button>
+                  <button type="button" class="action-chip" (click)="openPost(post)" aria-label="Open">
+                    <svg class="chip-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                      <path d="M7 17L17 7M9 7h8v8" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                    <span>Open</span>
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -512,8 +499,14 @@ const SPARKS_BLOCKED_KEY = 'matterya.sparks.blocked_authors.v1';
         left: 0;
         right: 0;
         bottom: 0;
-        height: 42%;
-        background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.75));
+        height: 38%;
+        /* iOS light vignette — film stays readable under frosted dock */
+        background: linear-gradient(
+          180deg,
+          transparent,
+          rgba(20, 18, 16, 0.18) 45%,
+          rgba(20, 18, 16, 0.42)
+        );
         pointer-events: none;
       }
       .reel-bottom {
@@ -524,131 +517,173 @@ const SPARKS_BLOCKED_KEY = 'matterya.sparks.blocked_authors.v1';
         z-index: 3;
         display: flex;
         align-items: flex-end;
-        justify-content: space-between;
-        gap: 8px;
-        padding: 0 12px calc(28px + env(safe-area-inset-bottom));
+        justify-content: center;
+        padding: 0 16px calc(14px + env(safe-area-inset-bottom));
         pointer-events: none;
       }
-      .reel-meta {
-        flex: 1 1 auto;
-        min-width: 0;
-        max-width: calc(100% - 78px);
+      /* iOS sparkDock — frosted meta + chips over film */
+      .spark-dock {
+        width: 100%;
+        max-width: 100%;
         display: flex;
         flex-direction: column;
-        align-items: flex-start;
-        gap: 10px;
+        align-items: stretch;
+        gap: 8px;
+        padding: 10px 12px;
+        border-radius: 18px;
         pointer-events: auto;
-        padding-bottom: 4px;
+        background:
+          linear-gradient(180deg, rgba(20, 18, 16, 0.18), rgba(20, 18, 16, 0.28)),
+          rgba(20, 18, 16, 0.22);
+        border: 0.5px solid rgba(248, 246, 242, 0.12);
+        backdrop-filter: blur(14px) saturate(1.1);
+        -webkit-backdrop-filter: blur(14px) saturate(1.1);
+        box-shadow: 0 5px 16px rgba(0, 0, 0, 0.18);
+      }
+      .reel-author-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
       }
       .reel-author {
         display: inline-flex;
         align-items: center;
-        gap: 10px;
+        gap: 8px;
         border: 0;
         background: transparent;
-        color: #fff;
+        color: var(--m-paper, #f8f6f2);
         padding: 0;
         cursor: pointer;
         text-align: left;
+        min-width: 0;
+        flex: 1 1 auto;
       }
       .author-avatar {
-        width: 36px;
-        height: 36px;
+        width: 34px;
+        height: 34px;
         border-radius: 50%;
         overflow: hidden;
         background: rgba(255, 255, 255, 0.12);
+        border: 0.5px solid rgba(248, 246, 242, 0.35);
         display: grid;
         place-items: center;
         font-size: 11px;
         font-weight: 700;
         flex: 0 0 auto;
+        color: var(--m-reels-accent, #f6f3ef);
       }
       .author-avatar img {
         width: 100%;
         height: 100%;
         object-fit: cover;
       }
+      .author-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        min-width: 0;
+      }
       .author-name {
+        font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
         font-size: 14px;
-        font-weight: 700;
-        text-shadow: 0 1px 8px rgba(0, 0, 0, 0.45);
+        font-weight: 600;
+        line-height: 1.2;
+        color: var(--m-paper, #f8f6f2);
+        text-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .author-sub {
+        font-size: 11px;
+        font-weight: 500;
+        color: rgba(248, 246, 242, 0.7);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .author-country {
+        flex: 0 0 auto;
+        border: 0;
+        background: transparent;
+        padding: 0;
+        margin: 0;
+        font-size: 11px;
+        font-weight: 500;
+        color: rgba(248, 246, 242, 0.65);
+        cursor: pointer;
+        white-space: nowrap;
+        max-width: 38%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .reel-author:has(.author-sub) + .author-country::before {
+        content: '·';
+        margin-right: 6px;
+        color: rgba(248, 246, 242, 0.4);
       }
       .reel-caption {
         margin: 0;
+        font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
         font-size: 14px;
         line-height: 1.35;
-        color: rgba(255, 255, 255, 0.92);
-        text-shadow: 0 1px 10px rgba(0, 0, 0, 0.5);
+        color: rgba(248, 246, 242, 0.94);
+        text-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
         display: -webkit-box;
-        -webkit-line-clamp: 4;
+        -webkit-line-clamp: 2;
         -webkit-box-orient: vertical;
         overflow: hidden;
       }
-      .country-chip {
-        display: inline-flex;
-        align-items: center;
+      /* iOS sparkActionsRow — horizontal flexible chips */
+      .reel-actions {
+        display: flex;
+        flex-direction: row;
+        align-items: stretch;
         gap: 6px;
+        width: 100%;
+      }
+      .action-chip {
+        flex: 1 1 0;
+        min-width: 0;
         border: 0;
         border-radius: 999px;
-        background: rgba(255, 255, 255, 0.14);
-        color: rgba(255, 255, 255, 0.95);
-        font-size: 12px;
-        font-weight: 650;
-        padding: 6px 10px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+        padding: 8px 6px;
         cursor: pointer;
+        color: var(--m-paper, #f8f6f2);
+        background: rgba(20, 18, 16, 0.35);
+        border: 0.5px solid rgba(248, 246, 242, 0.14);
         backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 1;
+        white-space: nowrap;
       }
-      .chip-dot {
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: var(--m-accent-bright, #f6f3ef);
+      .action-chip span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
       }
-      .reel-actions {
-        flex: 0 0 auto;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 12px;
-        pointer-events: auto;
-        padding-right: 4px;
-        padding-bottom: 2px;
-      }
-      .rail-btn {
-        border: 0;
-        background: transparent;
-        color: #fff;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 5px;
-        padding: 0;
-        cursor: pointer;
-        min-width: 48px;
-      }
-      .rail-btn:disabled {
+      .action-chip:disabled {
         opacity: 0.55;
         cursor: not-allowed;
       }
-      .rail-btn.liked {
-        color: #ff4d6a;
+      .action-chip.liked {
+        color: var(--m-like, #ea000b);
       }
-      .rail-btn.kept {
-        color: var(--m-accent-bright, #f6f3ef);
+      .action-chip.kept,
+      .action-chip.active {
+        color: var(--m-reels-accent, #f6f3ef);
       }
-      .rail-btn.active {
-        color: var(--m-accent-bright, #f6f3ef);
-      }
-      .rail-icon {
-        width: 28px;
-        height: 28px;
-        filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.45));
-      }
-      .rail-label {
-        font-size: 11px;
-        font-weight: 650;
-        color: rgba(255, 255, 255, 0.9);
-        text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+      .chip-icon {
+        width: 12px;
+        height: 12px;
+        flex: 0 0 auto;
       }
       .overflow-wrap {
         position: relative;
@@ -893,16 +928,14 @@ const SPARKS_BLOCKED_KEY = 'matterya.sparks.blocked_authors.v1';
         :host {
           background: #0a0908;
         }
-        /* Denser Keep/Open rail on phone-sized stage. */
-        .reel-actions {
-          gap: 10px;
+        /* Slightly tighter chips on the phone-sized stage. */
+        .action-chip {
+          padding: 7px 5px;
+          font-size: 9.5px;
         }
-        .rail-icon {
-          width: 24px;
-          height: 24px;
-        }
-        .rail-label {
-          font-size: 10px;
+        .chip-icon {
+          width: 11px;
+          height: 11px;
         }
         .reels-root {
           display: flex;

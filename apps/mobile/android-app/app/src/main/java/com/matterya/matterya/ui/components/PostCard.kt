@@ -147,6 +147,15 @@ fun PostCard(
     } else {
         PlayPlatformBridge.displayCreator(post).authorId
     }
+    // iOS `cardPrimaryShowsVerified`
+    val showsVerifiedBadge = if (isFeedReshare) {
+        post.author?.showsVerifiedBadge == true
+    } else {
+        post.author?.showsVerifiedBadge == true ||
+            PlayPlatformBridge.displayCreator(post).username
+                ?.trim()
+                ?.equals("matterya", ignoreCase = true) == true
+    }
     val isOwn = resolvedCurrentUserId != null && post.authorId == resolvedCurrentUserId
     val showFollow = !isOwn && followId.isNotBlank() && followId != resolvedCurrentUserId && onToggleFollow != null
 
@@ -200,6 +209,7 @@ fun PostCard(
                 primaryName = ContentSanitizer.displayName(
                     primaryName, null, primaryName,
                 ),
+                showsVerifiedBadge = showsVerifiedBadge,
                 avatarUrl = primaryAvatar,
                 avatarSeed = primarySeed.ifEmpty { primaryName },
                 sharedByLine = sharedByLine,
@@ -224,6 +234,7 @@ fun PostCard(
                 primaryName = ContentSanitizer.displayName(
                     primaryName, null, primaryName,
                 ),
+                showsVerifiedBadge = showsVerifiedBadge,
                 avatarUrl = primaryAvatar,
                 avatarSeed = primarySeed.ifEmpty { primaryName },
                 sharedByLine = sharedByLine,
@@ -480,6 +491,7 @@ fun PostCard(
 private fun JournalHeader(
     showAuthor: Boolean,
     primaryName: String,
+    showsVerifiedBadge: Boolean,
     avatarUrl: String?,
     avatarSeed: String,
     sharedByLine: String?,
@@ -517,7 +529,10 @@ private fun JournalHeader(
                 }
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
                         Text(
                             primaryName,
                             fontSize = 14.sp,
@@ -529,8 +544,11 @@ private fun JournalHeader(
                                 .weight(1f, fill = false)
                                 .clickable(onClick = onOpenAuthor),
                         )
+                        if (showsVerifiedBadge) {
+                            MatteryaVerifiedBadge(size = 14.dp)
+                        }
                         if (showFollow && onFollow != null) {
-                            Spacer(Modifier.width(8.dp))
+                            Spacer(Modifier.width(4.dp))
                             FollowButton(
                                 userId = followId,
                                 isFollowing = isFollowing,
@@ -629,6 +647,7 @@ private fun JournalHeader(
 @Composable
 private fun AuthorHeader(
     primaryName: String,
+    showsVerifiedBadge: Boolean,
     avatarUrl: String?,
     avatarSeed: String,
     sharedByLine: String?,
@@ -657,7 +676,10 @@ private fun AuthorHeader(
         }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 Text(
                     primaryName,
                     fontSize = 14.sp,
@@ -669,8 +691,11 @@ private fun AuthorHeader(
                         .weight(1f, fill = false)
                         .clickable(onClick = onOpenAuthor),
                 )
+                if (showsVerifiedBadge) {
+                    MatteryaVerifiedBadge(size = 14.dp)
+                }
                 if (showFollow && onFollow != null) {
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(4.dp))
                     FollowButton(
                         userId = followId,
                         isFollowing = isFollowing,

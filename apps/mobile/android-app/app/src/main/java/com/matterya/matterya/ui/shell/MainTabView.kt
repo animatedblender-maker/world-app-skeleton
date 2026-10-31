@@ -189,6 +189,7 @@ fun MainTabView(
                 peerUserId = other?.userId.orEmpty(),
                 unreadCount = 0,
                 relativeTime = RelativeTime.format(c.lastMessageAt ?: c.updatedAt),
+                showsVerifiedBadge = other?.showsVerifiedBadge == true,
             )
         }
     }

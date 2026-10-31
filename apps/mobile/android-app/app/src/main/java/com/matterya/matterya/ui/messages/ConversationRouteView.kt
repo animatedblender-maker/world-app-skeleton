@@ -446,6 +446,7 @@ fun ConversationRouteView(
                 errorMessage = sendError,
                 peerAvatarUrl = peer?.avatarUrl,
                 peerName = title,
+                peerShowsVerifiedBadge = peer?.showsVerifiedBadge == true,
                 onAudioCall = {
                     scope.launch {
                         callManager.startCall(

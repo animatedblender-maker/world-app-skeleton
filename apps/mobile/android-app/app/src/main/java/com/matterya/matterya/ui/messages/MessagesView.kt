@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.sp
 import com.matterya.matterya.model.Message
 import com.matterya.matterya.theme.MatteryaColors
 import com.matterya.matterya.ui.components.AvatarView
+import com.matterya.matterya.ui.components.MatteryaVerifiedBadge
 import com.matterya.matterya.ui.components.UnreadBadge
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -75,6 +76,7 @@ data class ConversationItem(
     val peerUserId: String = "",
     val unreadCount: Int = 0,
     val relativeTime: String = "",
+    val showsVerifiedBadge: Boolean = false,
 )
 
 /**
@@ -307,14 +309,23 @@ private fun ConversationRowContent(conversation: ConversationItem) {
             size = 48.dp,
         )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                conversation.title,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 14.sp, // subheadline
-                color = MatteryaColors.ink,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    conversation.title,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp, // subheadline
+                    color = MatteryaColors.ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (conversation.showsVerifiedBadge) {
+                    MatteryaVerifiedBadge(size = 14.dp)
+                }
+            }
             Text(
                 conversation.subtitle.ifEmpty { "No messages yet" },
                 fontSize = 12.sp, // caption
@@ -372,6 +383,7 @@ fun ConversationView(
     errorMessage: String? = null,
     peerAvatarUrl: String? = null,
     peerName: String = title,
+    peerShowsVerifiedBadge: Boolean = false,
     onBack: () -> Unit = {},
     onAudioCall: () -> Unit = {},
     onVideoCall: () -> Unit = {},
@@ -416,14 +428,23 @@ fun ConversationView(
         ) {
             AvatarView(url = peerAvatarUrl, seed = peerName, size = 34.dp)
             Spacer(Modifier.width(10.dp))
-            Text(
-                title,
-                fontWeight = FontWeight.SemiBold,
-                color = MatteryaColors.ink,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(
+                Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Text(
+                    title,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MatteryaColors.ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (peerShowsVerifiedBadge) {
+                    MatteryaVerifiedBadge(size = 15.dp)
+                }
+            }
             IconButton(onClick = onAudioCall) {
                 Icon(Icons.Default.Call, contentDescription = "Audio call", tint = MatteryaColors.ink)
             }

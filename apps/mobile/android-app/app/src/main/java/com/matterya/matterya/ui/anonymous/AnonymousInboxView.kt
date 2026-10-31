@@ -42,6 +42,7 @@ import com.matterya.matterya.theme.MatteryaColors
 import com.matterya.matterya.theme.MatteryaCopy
 import com.matterya.matterya.theme.MatteryaDimens
 import com.matterya.matterya.ui.components.AvatarView
+import com.matterya.matterya.ui.components.MatteryaVerifiedBadge
 import com.matterya.matterya.viewmodel.AnonymousStore
 import kotlinx.coroutines.launch
 
@@ -174,12 +175,19 @@ private fun MasqueradeConversationRow(
         }
         Spacer(Modifier.size(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                title,
-                fontWeight = if (unread) FontWeight.Bold else FontWeight.SemiBold,
-                color = MatteryaColors.ink,
-                fontSize = 14.sp,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    title,
+                    fontWeight = if (unread) FontWeight.Bold else FontWeight.SemiBold,
+                    color = MatteryaColors.ink,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                )
+                if (other?.showsVerifiedBadge == true) {
+                    Spacer(Modifier.size(6.dp))
+                    MatteryaVerifiedBadge(size = 15.dp)
+                }
+            }
             Spacer(Modifier.height(4.dp))
             Text(
                 preview,

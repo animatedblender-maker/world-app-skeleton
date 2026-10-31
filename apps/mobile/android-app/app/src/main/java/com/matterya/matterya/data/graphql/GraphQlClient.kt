@@ -119,11 +119,11 @@ object GqlOps {
     shared_post {
       id title body media_type media_url thumb_url author_id
       like_count comment_count
-      author { user_id display_name username avatar_url country_name country_code }
+      author { user_id display_name username avatar_url country_name country_code is_verified }
     }
     visibility like_count comment_count liked_by_me
     created_at updated_at author_id country_name country_code city_name
-    author { user_id display_name username avatar_url country_name country_code }
+    author { user_id display_name username avatar_url country_name country_code is_verified }
     """
 
     /** Exact iOS `postFieldsWithBookmarks` (adds saved_by_me). */
@@ -132,26 +132,26 @@ object GqlOps {
     shared_post {
       id title body media_type media_url thumb_url author_id
       like_count comment_count
-      author { user_id display_name username avatar_url country_name country_code }
+      author { user_id display_name username avatar_url country_name country_code is_verified }
     }
     visibility like_count comment_count liked_by_me saved_by_me
     created_at updated_at author_id country_name country_code city_name
-    author { user_id display_name username avatar_url country_name country_code }
+    author { user_id display_name username avatar_url country_name country_code is_verified }
     """
 
     const val COMMENT_FIELDS = """
     id post_id parent_id author_id body like_count liked_by_me created_at updated_at
-    author { user_id display_name username avatar_url country_name country_code }
+    author { user_id display_name username avatar_url country_name country_code is_verified }
     """
 
     const val PROFILE_FIELDS = """
-    user_id email display_name username avatar_url
+    user_id email display_name username avatar_url is_verified
     country_name country_code city_name bio
     created_at updated_at
     """
 
     const val PROFILE_FIELDS_FULL = """
-    user_id email display_name username avatar_url
+    user_id email display_name username avatar_url is_verified
     country_name country_code city_name bio
     account_status deactivated_at deleted_at
     created_at updated_at
@@ -302,7 +302,7 @@ object GqlOps {
     fun updateProfile() = """
       mutation UpdateProfile(${'$'}input: UpdateProfileInput!) {
         updateProfile(input: ${'$'}input) {
-          user_id email display_name username avatar_url
+          user_id email display_name username avatar_url is_verified
           country_name country_code city_name bio
           account_status
           created_at updated_at
@@ -350,7 +350,7 @@ object GqlOps {
     fun profileByUsername() = """
       query ProfileByUsername(${'$'}username: String!) {
         profileByUsername(username: ${'$'}username) {
-          user_id email display_name username avatar_url
+          user_id email display_name username avatar_url is_verified
           country_name country_code city_name bio created_at updated_at
         }
       }
@@ -359,7 +359,7 @@ object GqlOps {
     fun searchProfiles() = """
       query SearchProfiles(${'$'}query: String!, ${'$'}limit: Int) {
         searchProfiles(query: ${'$'}query, limit: ${'$'}limit) {
-          user_id email display_name username avatar_url
+          user_id email display_name username avatar_url is_verified
           country_name country_code city_name bio created_at updated_at
         }
       }
@@ -368,7 +368,7 @@ object GqlOps {
     fun browseProfiles() = """
       query BrowseProfiles(${'$'}limit: Int, ${'$'}offset: Int) {
         browseProfiles(limit: ${'$'}limit, offset: ${'$'}offset) {
-          user_id email display_name username avatar_url
+          user_id email display_name username avatar_url is_verified
           country_name country_code city_name bio created_at updated_at
         }
       }
@@ -377,7 +377,7 @@ object GqlOps {
     fun profileById() = """
       query ProfileById(${'$'}user_id: ID!) {
         profileById(user_id: ${'$'}user_id) {
-          user_id email display_name username avatar_url
+          user_id email display_name username avatar_url is_verified
           country_name country_code city_name bio created_at updated_at
         }
       }
@@ -448,11 +448,11 @@ object GqlOps {
         startConversation(target_id: ${'$'}targetId) {
           id is_direct created_at updated_at last_message_at
           members {
-            user_id display_name username avatar_url country_name country_code last_read_at
+            user_id display_name username avatar_url country_name country_code last_read_at is_verified
           }
           last_message {
             id conversation_id sender_id body media_type media_path media_name created_at updated_at
-            sender { user_id display_name username avatar_url country_name country_code }
+            sender { user_id display_name username avatar_url country_name country_code is_verified }
           }
         }
       }

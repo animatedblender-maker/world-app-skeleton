@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.matterya.matterya.data.hubs.YouTubeChannel
 import com.matterya.matterya.model.CountryPost
+import com.matterya.matterya.ui.components.MatteryaVerifiedBadge
 import com.matterya.matterya.theme.MatteryaColors
 import com.matterya.matterya.theme.MatteryaCopy
 import com.matterya.matterya.theme.MatteryaDimens
@@ -124,7 +125,19 @@ fun YouTubeChannelView(
             )
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
-                Text(channel.title, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, color = MatteryaColors.ink)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        channel.title,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 18.sp,
+                        color = MatteryaColors.ink,
+                        maxLines = 1,
+                    )
+                    if (channel.author?.showsVerifiedBadge == true) {
+                        Spacer(Modifier.width(6.dp))
+                        MatteryaVerifiedBadge(size = 15.dp)
+                    }
+                }
                 channel.handle?.let {
                     Text("@$it", fontSize = 13.sp, color = MatteryaColors.inkMuted)
                 }

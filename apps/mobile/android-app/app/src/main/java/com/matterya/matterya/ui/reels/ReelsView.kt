@@ -80,6 +80,7 @@ import com.matterya.matterya.theme.MatteryaReportCategories
 import com.matterya.matterya.ui.anonymous.MatteryaReportDialog
 import com.matterya.matterya.ui.components.AvatarView
 import com.matterya.matterya.ui.components.FollowButton
+import com.matterya.matterya.ui.components.MatteryaVerifiedBadge
 import com.matterya.matterya.ui.components.VideoPlayerView
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
@@ -807,15 +808,24 @@ private fun SparkDock(
                 )
                 Spacer(Modifier.width(8.dp))
                 Column {
-                    Text(
-                        post.author?.displayName ?: "Member",
-                        color = paper,
-                        fontFamily = FontFamily.Serif,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 14.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            post.author?.displayName ?: "Member",
+                            color = paper,
+                            fontFamily = FontFamily.Serif,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        if (post.author?.showsVerifiedBadge == true) {
+                            MatteryaVerifiedBadge(size = 13.dp)
+                        }
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         post.author?.username?.takeIf { it.isNotBlank() }?.let { handle ->
                             Text(

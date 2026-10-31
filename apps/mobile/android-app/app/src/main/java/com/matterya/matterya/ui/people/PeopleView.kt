@@ -25,6 +25,7 @@ import com.matterya.matterya.model.Profile
 import com.matterya.matterya.theme.MatteryaColors
 import com.matterya.matterya.ui.components.AvatarView
 import com.matterya.matterya.ui.components.FollowButton
+import com.matterya.matterya.ui.components.MatteryaVerifiedBadge
 
 /** iOS `PeopleView` — list rows with avatar, @user · country, Follow chip, Load more. */
 @Composable
@@ -99,12 +100,19 @@ fun PeopleView(
                                 AvatarView(url = person.avatarUrl, seed = person.userId, size = 44.dp)
                                 Spacer(Modifier.width(12.dp))
                                 Column {
-                                    Text(
-                                        person.displayName ?: person.username ?: "Member",
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontSize = 14.sp,
-                                        color = MatteryaColors.ink,
-                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            person.displayName ?: person.username ?: "Member",
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = 14.sp,
+                                            color = MatteryaColors.ink,
+                                            maxLines = 1,
+                                        )
+                                        if (person.showsVerifiedBadge) {
+                                            Spacer(Modifier.width(4.dp))
+                                            MatteryaVerifiedBadge(size = 14.dp)
+                                        }
+                                    }
                                     Text(
                                         "@${person.username ?: "user"} · ${person.countryName.orEmpty()}",
                                         fontSize = 12.sp,

@@ -43,6 +43,7 @@ import com.matterya.matterya.theme.MatteryaCopy
 import com.matterya.matterya.theme.MatteryaDimens
 import com.matterya.matterya.ui.components.AvatarView
 import com.matterya.matterya.ui.components.MatteryaTopBar
+import com.matterya.matterya.ui.components.MatteryaVerifiedBadge
 import com.matterya.matterya.ui.components.PostCard
 
 /**
@@ -247,13 +248,21 @@ private fun ProfileHeader(
             Spacer(Modifier.width(22.dp))
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 val name = profile?.displayName?.takeIf { it.isNotBlank() }
-                if (name != null) {
-                    Text(
-                        name,
-                        fontFamily = FontFamily.Serif,
-                        fontSize = 26.sp,
-                        color = MatteryaColors.ink,
-                    )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (name != null) {
+                        Text(
+                            name,
+                            fontFamily = FontFamily.Serif,
+                            fontSize = 26.sp,
+                            color = MatteryaColors.ink,
+                        )
+                    }
+                    if (profile?.showsVerifiedBadge == true) {
+                        MatteryaVerifiedBadge(size = 18.dp)
+                    }
                 }
                 profile?.username?.let {
                     Text("@$it", color = MatteryaColors.inkMuted, fontSize = 14.sp)

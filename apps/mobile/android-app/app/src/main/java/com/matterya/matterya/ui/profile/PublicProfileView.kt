@@ -49,6 +49,7 @@ import com.matterya.matterya.theme.MatteryaCopy
 import com.matterya.matterya.theme.MatteryaDimens
 import com.matterya.matterya.ui.components.AvatarView
 import com.matterya.matterya.ui.components.FollowButton
+import com.matterya.matterya.ui.components.MatteryaVerifiedBadge
 import com.matterya.matterya.ui.components.PostCard
 
 /** iOS `PublicProfileView` — header, stats, Message/Edit, posts feed. */
@@ -227,7 +228,10 @@ private fun ProfileHeader(
             )
             Spacer(Modifier.width(20.dp))
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
                     Text(
                         profile.displayName?.takeIf { it.isNotBlank() } ?: "Member",
                         fontFamily = FontFamily.Serif,
@@ -235,8 +239,11 @@ private fun ProfileHeader(
                         color = MatteryaColors.ink,
                         modifier = Modifier.weight(1f, fill = false),
                     )
+                    if (profile.showsVerifiedBadge) {
+                        MatteryaVerifiedBadge(size = 18.dp)
+                    }
                     if (!isOwner && !profile.isDemoUser) {
-                        Spacer(Modifier.width(10.dp))
+                        Spacer(Modifier.width(4.dp))
                         FollowButton(
                             userId = profile.userId,
                             isFollowing = isFollowing,

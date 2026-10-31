@@ -70,6 +70,7 @@ object JsonCoding {
             countryName = string(row, "country_name"),
             countryCode = string(row, "country_code"),
             lastReadAt = string(row, "last_read_at"),
+            isVerified = row["is_verified"]?.jsonPrimitive?.booleanOrNull,
         )
     }
 
@@ -88,6 +89,7 @@ object JsonCoding {
             bio = string(row, "bio"),
             followersCount = row["followers_count"]?.jsonPrimitive?.intOrNull,
             followingCount = row["following_count"]?.jsonPrimitive?.intOrNull,
+            isVerified = row["is_verified"]?.jsonPrimitive?.booleanOrNull,
             accountStatus = string(row, "account_status"),
             deactivatedAt = string(row, "deactivated_at"),
             deletedAt = string(row, "deleted_at"),

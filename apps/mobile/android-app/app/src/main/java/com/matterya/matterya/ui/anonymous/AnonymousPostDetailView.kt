@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -35,6 +36,7 @@ import com.matterya.matterya.model.RelativeTime
 import com.matterya.matterya.theme.MatteryaColors
 import com.matterya.matterya.theme.MatteryaCopy
 import com.matterya.matterya.theme.MatteryaDimens
+import com.matterya.matterya.ui.components.MatteryaVerifiedBadge
 import com.matterya.matterya.viewmodel.AnonymousStore
 import kotlinx.coroutines.launch
 
@@ -164,12 +166,25 @@ private fun CommentRow(comment: AnonymousComment) {
             ),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "@${comment.authorUsername}",
-                color = MatteryaColors.inkMuted,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
+            val isOfficial =
+                comment.authorUsername.trim().equals("matterya", ignoreCase = true)
+            if (isOfficial) {
+                Text(
+                    "Matterya",
+                    color = MatteryaColors.ink,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.width(6.dp))
+                MatteryaVerifiedBadge(size = 11.dp)
+            } else {
+                Text(
+                    "@${comment.authorUsername}",
+                    color = MatteryaColors.inkMuted,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
             if (comment.createdAt.isNotBlank()) {
                 Text(" · ", color = MatteryaColors.inkMuted, fontSize = 11.sp)
                 Text(RelativeTime.format(comment.createdAt), color = MatteryaColors.inkMuted, fontSize = 11.sp)
