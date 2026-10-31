@@ -26,8 +26,8 @@ Client JSON from `policyTreeForClient()` never includes outcomes.
 
 ## Escalation (specific cases only)
 
-Step 2 includes a standalone **Terrorism** kind (separate from Violence).  
-Step 2 options are ordered by **harm priority** (Self-harm → Terrorism → Violence → Harassment → Hate → Doxxing → Scam → Misinfo → Mature → Spam → Other).
+Step 2 includes standalone **CSAM**, **Terrorism**, and **Adult solicitation** kinds.  
+Step 2 options are ordered by **harm priority** (CSAM → Self-harm → Terrorism → Violence → Harassment → Hate → Doxxing → Scam → Misinfo → Adult solicitation → Mature → Spam → Other).
 
 Root option **Escalate — special safety case**, plus gates inside mature / threats / stalking / blackmail / self-harm / terrorism threats / doxxing:
 

@@ -48,10 +48,10 @@ export type PolicyNode = PolicyBranch | PolicyLeaf;
  * (child safety, imminent violence, suicide crisis, specialist second look).
  * Not offered as a general “I’m unsure of the category” shortcut everywhere.
  */
-function escalationChildSafety(root: ModerationCategorySlug = 'mature'): PolicyLeaf {
+function escalationChildSafety(root: ModerationCategorySlug = 'csam'): PolicyLeaf {
   return leaf(
     'escalation.child_safety',
-    'Escalate — child sexual exploitation / grooming',
+    'Escalate — CSAM / grooming (specialist + account)',
     root,
     'remove',
     {
@@ -109,8 +109,8 @@ function escalationRootTree(): PolicyNode {
   return branch('escalation', 'What special case needs escalation?', [
     {
       key: '1',
-      label: 'Child sexual exploitation / grooming (minor involved)',
-      node: escalationChildSafety('mature'),
+      label: 'CSAM / grooming (minor involved)',
+      node: escalationChildSafety('csam'),
     },
     {
       key: '2',
@@ -143,18 +143,21 @@ export const POLICY_TREE: PolicyBranch = {
         kind: 'branch',
         id: 'violation_kind',
         question: 'What kind of violation?',
-        // Ordered by harm priority (highest first). Mature is mid/low — child-safety
-        // still escalates via its own gate; unlabeled adult content is not top priority.
+        // Ordered by harm priority (highest first).
+        // CSAM is its own #1 category (always severe; escalate in confirmed cases).
+        // Adult solicitation is separate from Mature (porn/nudity) and from CSAM.
         options: [
-          { key: '1', label: 'Self-harm / suicide', node: selfHarmTree() },
-          { key: '2', label: 'Terrorism', node: terrorismTree() },
-          { key: '3', label: 'Violence / graphic harm', node: violenceTree() },
-          { key: '4', label: 'Harassment / bullying', node: harassmentTree() },
-          { key: '5', label: 'Hate speech', node: hateTree() },
-          { key: '6', label: 'Doxxing / privacy', node: doxxingTree() },
-          { key: '7', label: 'Scam / fraud', node: scamTree() },
-          { key: '8', label: 'Misinformation', node: misinfoTree() },
-          { key: '9', label: 'Mature / sexual content', node: matureTree() },
+          { key: '1', label: 'CSAM', node: csamTree() },
+          { key: '2', label: 'Self-harm / suicide', node: selfHarmTree() },
+          { key: '3', label: 'Terrorism', node: terrorismTree() },
+          { key: '4', label: 'Violence / graphic harm', node: violenceTree() },
+          { key: '5', label: 'Harassment / bullying', node: harassmentTree() },
+          { key: '6', label: 'Hate speech', node: hateTree() },
+          { key: '7', label: 'Doxxing / privacy', node: doxxingTree() },
+          { key: '8', label: 'Scam / fraud', node: scamTree() },
+          { key: '9', label: 'Misinformation', node: misinfoTree() },
+          { key: 'A', label: 'Adult solicitation', node: solicitationTree() },
+          { key: 'M', label: 'Mature / sexual content', node: matureTree() },
           { key: 'S', label: 'Spam', node: spamTree() },
           {
             key: '0',
@@ -370,7 +373,7 @@ function harassmentTree(): PolicyNode {
               {
                 key: '1',
                 label: 'Yes — minor involved → escalate child safety',
-                node: escalationChildSafety('mature'),
+                node: escalationChildSafety('csam'),
               },
               {
                 key: '2',
@@ -492,93 +495,48 @@ function hateTree(): PolicyNode {
   ]);
 }
 
-function matureInnerTree(): PolicyNode {
-  return branch('mature', 'What kind of mature content?', [
+/**
+ * CSAM — standalone Step-2 category #1.
+ * Everything here is severe. Confirmed CSAM / grooming / minor NCII → escalate.
+ */
+function csamTree(): PolicyNode {
+  return branch('csam', 'What kind of CSAM / child sexual exploitation?', [
     {
       key: '1',
-      label: 'Pornography / explicit sex',
-      node: branch('mature.porn', 'How was it presented?', [
-        {
-          key: '1',
-          label: 'Unlabeled explicit media',
-          node: leaf('mature.porn.unlabeled', 'Unlabeled pornography', 'mature', 'remove'),
-        },
-        {
-          key: '2',
-          label: 'Labeled adult space / expected context',
-          node: leaf(
-            'mature.porn.labeled_space',
-            'Labeled adult-context porn',
-            'mature',
-            'mark'
-          ),
-        },
-        {
-          key: '3',
-          label: 'Animated / drawn explicit',
-          node: leaf('mature.porn.animated', 'Animated explicit', 'mature', 'mark'),
-        },
-      ]),
+      label: 'Confirmed CSAM (real, AI, drawn, or text depicting a minor sexually)',
+      node: escalationChildSafety('csam'),
     },
     {
       key: '2',
-      label: 'Sexualization of minors (any)',
-      // Prefer escalation.child_safety so training + account path share one leaf.
-      node: escalationChildSafety('mature'),
+      label: 'Grooming / sexual solicitation of a minor',
+      node: escalationChildSafety('csam'),
     },
     {
       key: '3',
-      label: 'Nudity (non-sexual / artistic)',
-      node: branch('mature.nudity', 'Context?', [
-        {
-          key: '1',
-          label: 'Sexualized nudity',
-          node: leaf('mature.nudity.sexualized', 'Sexualized nudity', 'mature', 'mark'),
-        },
-        {
-          key: '2',
-          label: 'Artistic / educational / medical',
-          node: leaf('mature.nudity.artistic', 'Artistic/educational nudity', 'mature', 'dismiss'),
-        },
-        {
-          key: '3',
-          label: 'Shock / unwanted exposure',
-          node: leaf('mature.nudity.shock', 'Shock nudity', 'mature', 'remove'),
-        },
-      ]),
+      label: 'NCII / intimate imagery of a minor',
+      node: escalationChildSafety('csam'),
     },
     {
       key: '4',
-      label: 'Fetish / kink (consensual adult)',
-      node: leaf('mature.fetish', 'Adult fetish/kink', 'mature', 'mark'),
-    },
-    {
-      key: '5',
-      label: 'Suggestive but not explicit',
-      node: leaf('mature.suggestive', 'Suggestive non-explicit', 'mature', 'mark'),
-    },
-    {
-      key: '6',
-      label: 'Auto-flag false positive (not sexual)',
+      label: 'Sexualization of a minor (no explicit imagery)',
       node: leaf(
-        'mature.false_positive',
-        'Mature auto-flag false positive',
-        'mature',
-        'dismiss'
+        'csam.sexualization',
+        'Sexualization of a minor',
+        'csam',
+        'remove',
+        {
+          severity: 'severe',
+          rationale: 'Always severe; escalate if imagery or grooming is confirmed',
+        }
       ),
     },
     {
-      key: '7',
-      label: 'Grooming / sexual solicitation of a minor',
-      node: escalationChildSafety('mature'),
-    },
-    {
-      key: '8',
-      label: 'Child endangerment (non-sexual)',
+      key: '5',
+      label: 'Child endangerment (non-sexual) involving a minor',
       node: leaf(
-        'mature.child_endangerment',
+        'csam.child_endangerment',
         'Non-sexual child endangerment',
-        'mature',
+        'csam',
         'remove',
         {
           severity: 'severe',
@@ -586,24 +544,163 @@ function matureInnerTree(): PolicyNode {
         }
       ),
     },
+    {
+      key: '6',
+      label: 'Suspected CSAM — needs specialist confirm → escalate',
+      node: escalationChildSafety('csam'),
+    },
   ]);
 }
 
-/** Mature path always asks the child-safety gate first (platform pattern). */
+/** Adult sexual solicitation — separate from Mature (media) and CSAM (minors). */
+function solicitationTree(): PolicyNode {
+  return branch('solicitation', 'What kind of adult solicitation?', [
+    {
+      key: '1',
+      label: 'Offering sexual services / escort / paid sex',
+      node: leaf(
+        'solicitation.services',
+        'Offering adult sexual services',
+        'solicitation',
+        'remove',
+        { rationale: 'Commercial sexual solicitation of adults' }
+      ),
+    },
+    {
+      key: '2',
+      label: 'Seeking / requesting sexual services from adults',
+      node: leaf(
+        'solicitation.seeking',
+        'Seeking adult sexual services',
+        'solicitation',
+        'remove'
+      ),
+    },
+    {
+      key: '3',
+      label: 'Unsolicited sexual advances toward an adult',
+      node: leaf(
+        'solicitation.unsolicited',
+        'Unsolicited adult sexual advances',
+        'solicitation',
+        'remove'
+      ),
+    },
+    {
+      key: '4',
+      label: 'Adult sextortion / sexual blackmail',
+      node: leaf(
+        'solicitation.sextortion',
+        'Adult sextortion / sexual blackmail',
+        'solicitation',
+        'remove',
+        {
+          severity: 'severe',
+          rationale: 'Severe adult exploitation — instant account path',
+        }
+      ),
+    },
+    {
+      key: '5',
+      label: 'Involves a minor → use CSAM category / escalate',
+      node: escalationChildSafety('csam'),
+    },
+  ]);
+}
+
+/** Mature = adult consensual / unlabeled porn & nudity only (not CSAM, not solicitation). */
 function matureTree(): PolicyNode {
   return branch(
     'mature.gate',
-    'Does this involve sexual content with a minor (real, AI, drawn, or grooming)?',
+    'Does this involve a minor sexually, or adult sexual solicitation?',
     [
       {
         key: '1',
-        label: 'Yes — child sexual exploitation → escalate',
-        node: escalationChildSafety('mature'),
+        label: 'Minor involved sexually → CSAM (escalate)',
+        node: escalationChildSafety('csam'),
       },
       {
         key: '2',
-        label: 'No — adults only / non-sexual',
-        node: matureInnerTree(),
+        label: 'Adult solicitation / paid sex / unsolicited advances',
+        node: solicitationTree(),
+      },
+      {
+        key: '3',
+        label: 'Adult porn / nudity / fetish only',
+        node: branch('mature', 'What kind of mature content?', [
+          {
+            key: '1',
+            label: 'Pornography / explicit sex',
+            node: branch('mature.porn', 'How was it presented?', [
+              {
+                key: '1',
+                label: 'Unlabeled explicit media',
+                node: leaf('mature.porn.unlabeled', 'Unlabeled pornography', 'mature', 'remove'),
+              },
+              {
+                key: '2',
+                label: 'Labeled adult space / expected context',
+                node: leaf(
+                  'mature.porn.labeled_space',
+                  'Labeled adult-context porn',
+                  'mature',
+                  'mark'
+                ),
+              },
+              {
+                key: '3',
+                label: 'Animated / drawn explicit (adults)',
+                node: leaf('mature.porn.animated', 'Animated explicit', 'mature', 'mark'),
+              },
+            ]),
+          },
+          {
+            key: '2',
+            label: 'Nudity (non-sexual / artistic)',
+            node: branch('mature.nudity', 'Context?', [
+              {
+                key: '1',
+                label: 'Sexualized nudity',
+                node: leaf('mature.nudity.sexualized', 'Sexualized nudity', 'mature', 'mark'),
+              },
+              {
+                key: '2',
+                label: 'Artistic / educational / medical',
+                node: leaf(
+                  'mature.nudity.artistic',
+                  'Artistic/educational nudity',
+                  'mature',
+                  'dismiss'
+                ),
+              },
+              {
+                key: '3',
+                label: 'Shock / unwanted exposure',
+                node: leaf('mature.nudity.shock', 'Shock nudity', 'mature', 'remove'),
+              },
+            ]),
+          },
+          {
+            key: '3',
+            label: 'Fetish / kink (consensual adult)',
+            node: leaf('mature.fetish', 'Adult fetish/kink', 'mature', 'mark'),
+          },
+          {
+            key: '4',
+            label: 'Suggestive but not explicit',
+            node: leaf('mature.suggestive', 'Suggestive non-explicit', 'mature', 'mark'),
+          },
+          {
+            key: '5',
+            label: 'Auto-flag false positive (not sexual)',
+            node: leaf(
+              'mature.false_positive',
+              'Mature auto-flag false positive',
+              'mature',
+              'dismiss'
+            ),
+          },
+        ]),
       },
     ]
   );
@@ -915,8 +1012,8 @@ function doxxingTree(): PolicyNode {
         [
           {
             key: '1',
-            label: 'Yes — minor → escalate child safety',
-            node: escalationChildSafety('mature'),
+            label: 'Yes — minor → CSAM escalate',
+            node: escalationChildSafety('csam'),
           },
           {
             key: '2',

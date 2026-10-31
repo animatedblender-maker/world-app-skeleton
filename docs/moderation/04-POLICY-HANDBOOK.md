@@ -65,7 +65,8 @@ Like Meta / Discord / TikTok / X, escalation is **not** a general “I’m unsur
 **Where the tree asks:**
 
 - Root → **Escalate — special safety case** (lists the four above)
-- Mature → first question: involves a minor sexually?
+- CSAM category → confirmed/suspected cases escalate  
+- Mature → gate redirects minors to CSAM escalate, solicitation to Adult solicitation
 - Harassment threats / stalking → imminent?
 - Sexual blackmail → minor involved?
 - Self-harm → active crisis with plan?
@@ -78,7 +79,7 @@ Ordinary uncertainty inside a category: pick the best fitting leaf, or Pass (`P`
 
 ## 3. Cross-cutting rules (read before category guides)
 
-1. **Minors always win.** Anything sexual involving anyone under 18 (real, AI, drawn, text solicitation, grooming) → `escalation.child_safety` (severe). Do not mark. Do not dismiss as “art.”
+1. **Minors always win.** Anything sexual involving anyone under 18 → Step 2 **CSAM** (always severe). Confirmed CSAM / grooming / minor NCII → `escalation.child_safety`. Do not mark. Do not dismiss as “art.”
 2. **News / documentary / EDSA.** Graphic violence or sensitive imagery with clear public-interest framing → `violence.news` (mark) or artistic/educational leaves — not gore-remove — unless it glorifies or recruits.
 3. **Satire / clearly labeled fiction.** Prefer dismiss (`misinfo.satire`, `violence.fictional`) when intent is obvious.
 4. **Reclaimed speech.** In-group reclaimed slurs without attacking others → `hate.reclaimed` (dismiss). Out-group weaponization → hate remove leaves.
@@ -136,15 +137,31 @@ Protected characteristics (Matterya practice, Meta/X/TikTok-aligned): race, ethn
 | `hate.conspiracy` | Blood libel–style group conspiracies | remove · mild |
 | `hate.reclaimed` | In-group reclaimed usage | dismiss |
 
-### Mature / sexual
+### CSAM (standalone Step-2 #1 — always severe)
+
+| Leaf | Pick when | Outcome |
+|---|---|---|
+| `escalation.child_safety` | Confirmed CSAM, grooming, minor NCII, or suspected CSAM | remove · **severe** + escalate |
+| `csam.sexualization` | Sexualization of a minor without explicit imagery | remove · **severe** |
+| `csam.child_endangerment` | Non-sexual endangerment of minors | remove · **severe** |
+
+### Adult solicitation (standalone)
+
+| Leaf | Pick when | Outcome |
+|---|---|---|
+| `solicitation.services` | Offering paid sex / escort / sexual services | remove · mild |
+| `solicitation.seeking` | Requesting adult sexual services | remove · mild |
+| `solicitation.unsolicited` | Unsolicited sexual advances to an adult | remove · mild |
+| `solicitation.sextortion` | Adult sextortion / sexual blackmail | remove · **severe** |
+| → CSAM escalate | Anything involving a minor | `escalation.child_safety` |
+
+### Mature / sexual (adult media only)
 
 | Leaf | Pick when | Outcome |
 |---|---|---|
 | `mature.porn.unlabeled` | Explicit sex outside expected adult context | remove · mild |
 | `mature.porn.labeled_space` | Explicit in clearly adult Masquerade Space | mark |
-| `mature.porn.animated` | Animated/drawn adult porn (no minors) | mark |
-| `escalation.child_safety` | Any sexual content involving minors (incl. AI/drawn) or grooming — use escalate path | remove · **severe** |
-| `mature.child_endangerment` | Non-sexual endangerment of minors (dangerous challenges, trafficking facilitation, physical abuse) | remove · **severe** |
+| `mature.porn.animated` | Animated/drawn adult porn (adults only) | mark |
 | `mature.nudity.sexualized` | Sexualized adult nudity | mark |
 | `mature.nudity.artistic` | Art / medical / educational | dismiss |
 | `mature.nudity.shock` | Unwanted flash / shock nudity | remove · mild |
@@ -152,7 +169,7 @@ Protected characteristics (Matterya practice, Meta/X/TikTok-aligned): race, ethn
 | `mature.suggestive` | Suggestive, not explicit | mark |
 | `mature.false_positive` | Auto NSFW wrong | dismiss |
 
-**NCII** (non-consensual intimate imagery of adults) lives under **doxxing.intimate** (severe) — same as X / Discord / Meta / Snap.
+**Adult NCII** → `doxxing.intimate` (severe). **Minor NCII** → CSAM escalate.
 
 ### Violence
 
@@ -267,3 +284,4 @@ Matterya is not a copy of any one platform. We borrow **decision patterns** (rem
 | 2026-10-31 | Escalation leaves for specific cases only: `escalation.child_safety`, `escalation.imminent_violence`, `escalation.suicide_crisis`, `escalation.second_look`. Wired into mature/threats/stalking/blackmail/self-harm/extremist/doxxing gates. |
 | 2026-10-31 | Step-2 standalone **Terrorism** category (`terrorism.ops` / `praise` / `threat` / `news` / `historical`). Removed `violence.extremist` in favor of this path. |
 | 2026-10-31 | Step-2 ordered by harm priority: Self-harm → Terrorism → Violence → Harassment → Hate → Doxxing → Scam → Misinfo → Mature → Spam → Other. |
+| 2026-10-31 | Standalone **CSAM** (#1, always severe, escalate on confirmed/suspected) and **Adult solicitation**. Mature is adult media only. |
