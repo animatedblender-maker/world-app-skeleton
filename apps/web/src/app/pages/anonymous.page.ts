@@ -53,7 +53,8 @@ const SPACE_FILTERS: Array<{ id: AnonymousSpaceFilter; title: string }> = [
   { id: 'paid', title: 'Paid' },
 ];
 
-/** iOS AnonymousStore welcomeLetterSeenKey / spacesOnboardingSeenKey */
+/** iOS AnonymousStore UserDefaults keys (exact names). */
+const WILDE_SEEN_KEY = 'matterya.anonymous.wildeSeen.v1';
 const WELCOME_LETTER_SEEN_KEY = 'matterya.anonymous.welcomeLetterSeen.v1';
 const SPACES_ONBOARDING_SEEN_KEY = 'matterya.anonymous.spacesOnboardingSeen.v1';
 
@@ -76,9 +77,15 @@ const SPACES_ONBOARDING_SEEN_KEY = 'matterya.anonymous.spacesOnboardingSeen.v1';
           </button>
           <div class="anon-brand">
             <div class="anon-title">{{ headerTitle }}</div>
-            <div class="anon-chip" *ngIf="view.kind === 'shell'">{{ copy.anonymousModeChip }}</div>
+            <div
+              class="anon-chip"
+              *ngIf="phase === 'ready' && view.kind === 'shell'"
+            >
+              {{ copy.anonymousModeChip }}
+            </div>
           </div>
           <button
+            *ngIf="phase === 'ready'"
             type="button"
             class="icon-btn"
             aria-label="Notifications"
@@ -89,6 +96,7 @@ const SPACES_ONBOARDING_SEEN_KEY = 'matterya.anonymous.spacesOnboardingSeen.v1';
               <path d="M10 18.5a2 2 0 0 0 4 0" stroke-linecap="round" />
             </svg>
           </button>
+          <div *ngIf="phase !== 'ready'" class="icon-btn" aria-hidden="true"></div>
         </div>
 
         <div class="wilde" *ngIf="showWildeEpigraph">
@@ -1461,10 +1469,11 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
   busy = false;
   previewUsername = '';
 
-  shellTab: ShellTab = 'spaces';
+  /** iOS AnonymousRootView defaults to Feed as the primary Masquerade surface. */
+  shellTab: ShellTab = 'feed';
   shellTabs: Array<{ id: ShellTab; title: string }> = [
-    { id: 'spaces', title: 'Spaces' },
     { id: 'feed', title: 'Feed' },
+    { id: 'spaces', title: 'Spaces' },
     { id: 'search', title: 'Search' },
     { id: 'inbox', title: 'Inbox' },
     { id: 'me', title: 'Me' },
@@ -1573,9 +1582,13 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
     return this.copy.matteryaMasquerade;
   }
 
-  /** Wilde quote is onboarding-only (attest / claim), matching iOS. */
+  /**
+   * Wilde epigraph — header only on attest / claim gates (iOS AnonymousRootView),
+   * and again inside the welcome letter body. Never on pickSpaces / ready.
+   */
   get showWildeEpigraph(): boolean {
-    return this.phase === 'need_attest' || this.phase === 'need_username';
+    if (this.phase !== 'need_attest' && this.phase !== 'need_username') return false;
+    return !this.hasSeenWilde();
   }
 
   private static parseWelcomeLetter(body: string): Array<{ text: string; strong: boolean }> {
@@ -1590,20 +1603,46 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
       });
   }
 
-  private hasCompletedWelcomeLetter(): boolean {
+  private storageFlag(key: string): boolean {
     try {
-      return localStorage.getItem(WELCOME_LETTER_SEEN_KEY) === '1';
+      const v = localStorage.getItem(key);
+      return v === '1' || v === 'true';
     } catch {
       return false;
     }
   }
 
-  private hasCompletedSpacesOnboarding(): boolean {
+  private setStorageFlag(key: string): void {
     try {
-      return localStorage.getItem(SPACES_ONBOARDING_SEEN_KEY) === '1';
+      localStorage.setItem(key, '1');
     } catch {
-      return false;
+      // ignore quota / private mode
     }
+  }
+
+  private hasSeenWilde(): boolean {
+    return this.storageFlag(WILDE_SEEN_KEY);
+  }
+
+  /** iOS markWildeSeenIfReady — dismiss header Wilde once past claim. */
+  private markWildeSeenIfReady(): void {
+    if (
+      this.phase !== 'ready' &&
+      this.phase !== 'welcomeLetter' &&
+      this.phase !== 'pickSpaces' &&
+      !this.session?.profile
+    ) {
+      return;
+    }
+    this.setStorageFlag(WILDE_SEEN_KEY);
+  }
+
+  private hasCompletedWelcomeLetter(): boolean {
+    return this.storageFlag(WELCOME_LETTER_SEEN_KEY);
+  }
+
+  private hasCompletedSpacesOnboarding(): boolean {
+    return this.storageFlag(SPACES_ONBOARDING_SEEN_KEY);
   }
 
   toastMePlaceholder(message: string): void {
@@ -1689,30 +1728,31 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
       this.paint();
       return;
     }
-    // iOS: new name → welcome letter → Space picker → Feed.
+    // iOS: claim/attest → welcome letter → Space picker → Feed.
     if (!this.hasCompletedWelcomeLetter()) {
       this.phase = 'welcomeLetter';
+      this.markWildeSeenIfReady();
       this.paint();
       return;
     }
     if (!this.hasCompletedSpacesOnboarding()) {
       this.phase = 'pickSpaces';
+      this.markWildeSeenIfReady();
       this.paint();
       void this.loadOnboardingSpaces();
       return;
     }
     this.phase = 'ready';
+    this.markWildeSeenIfReady();
+    this.shellTab = 'feed';
     this.paint();
     void this.loadSpaces(true);
     void this.loadFeed(true);
   }
 
   completeWelcomeLetter(): void {
-    try {
-      localStorage.setItem(WELCOME_LETTER_SEEN_KEY, '1');
-    } catch {
-      // ignore
-    }
+    this.setStorageFlag(WELCOME_LETTER_SEEN_KEY);
+    this.markWildeSeenIfReady();
     if (!this.hasCompletedSpacesOnboarding()) {
       this.phase = 'pickSpaces';
       this.paint();
@@ -1723,13 +1763,12 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
   }
 
   completeSpacesOnboarding(): void {
-    try {
-      localStorage.setItem(SPACES_ONBOARDING_SEEN_KEY, '1');
-    } catch {
-      // ignore
-    }
+    this.setStorageFlag(SPACES_ONBOARDING_SEEN_KEY);
+    this.markWildeSeenIfReady();
     this.phase = 'ready';
     this.shellTab = 'feed';
+    this.view = { kind: 'shell' };
+    this.viewStack = [];
     this.paint();
     void this.loadFeed(true);
     void this.loadSpaces(true);
@@ -1740,18 +1779,20 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
     this.onboardingLoading = true;
     this.paint();
     try {
-      const [forYou, popular] = await Promise.all([
+      // iOS: forYou + popular, then free fill (AnonymousStore.spacesOnboardingCandidates).
+      const [forYou, popular, free] = await Promise.all([
         this.anon.listSpaces('for_you', null, 24),
         this.anon.listSpaces('popular', null, 24),
+        this.anon.listSpaces('free', null, 24),
       ]);
       if (this.destroyed) return;
       const merged: AnonymousSpace[] = [];
       const seen = new Set<string>();
-      const packs = [forYou, popular];
+      const packs = [forYou, popular, free];
       for (const res of packs) {
         if ((res as AnonymousApiError).ok === false) continue;
         for (const space of (res as { spaces: AnonymousSpace[] }).spaces || []) {
-          if (!this.isFreeSpace(space)) continue;
+          if (this.isPaidSpace(space)) continue;
           if (seen.has(space.id)) continue;
           seen.add(space.id);
           merged.push(space);
@@ -2196,8 +2237,18 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
     void this.router.navigate(['/auth'], { queryParams: { next: '/masquerade' } });
   }
 
+  /** iOS AnonymousSpace.isPaid — admission paid / paid_plus_approval. */
+  isPaidSpace(space: AnonymousSpace): boolean {
+    const admission = String(space?.admission || '').toLowerCase();
+    return admission === 'paid' || admission === 'paid_plus_approval';
+  }
+
   isFreeSpace(space: AnonymousSpace): boolean {
-    return space.admission === 'free' && (space.billing_mode === 'free' || !space.billing_mode);
+    if (this.isPaidSpace(space)) return false;
+    const admission = String(space?.admission || 'free').toLowerCase();
+    if (admission && admission !== 'free') return false;
+    const billing = String(space?.billing_mode || 'free').toLowerCase();
+    return !billing || billing === 'free';
   }
 
   relativeTime(iso: string): string {

@@ -527,6 +527,7 @@ fun YouTubeAppView(
                                         onOpen = onOpenVideo,
                                         cardWidth = railCardWidth,
                                         showsMetadata = true,
+                                        endless = true,
                                     )
                                 }
                             }
@@ -538,6 +539,7 @@ fun YouTubeAppView(
                                         onOpen = onOpenVideo,
                                         cardWidth = railCardWidth,
                                         showsMetadata = true,
+                                        endless = true,
                                     )
                                 }
                             }
@@ -549,6 +551,7 @@ fun YouTubeAppView(
                                         onOpen = onOpenVideo,
                                         cardWidth = peopleRailCardWidth,
                                         showsMetadata = true,
+                                        endless = true,
                                     )
                                 }
                             }
@@ -559,6 +562,7 @@ fun YouTubeAppView(
                                     onOpen = onOpenVideo,
                                     cardWidth = railCardWidth,
                                     showsMetadata = true,
+                                    endless = true,
                                 )
                             }
                             items(cachedMoreWatchRails, key = { it.id }) { rail ->
@@ -568,6 +572,7 @@ fun YouTubeAppView(
                                     onOpen = onOpenVideo,
                                     cardWidth = railCardWidth,
                                     showsMetadata = true,
+                                    endless = true,
                                 )
                             }
                             item(key = "bottom-pad") { Spacer(Modifier.height(bottomPad)) }

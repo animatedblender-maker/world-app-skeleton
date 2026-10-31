@@ -7,6 +7,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -16,6 +17,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -23,6 +26,13 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,6 +53,8 @@ import com.matterya.matterya.ui.components.AvatarView
 import com.matterya.matterya.ui.components.HandDrawnMediaFrame
 import com.matterya.matterya.ui.components.MatteryaHubsLogoView
 import com.matterya.matterya.ui.components.VideoThumbnailView
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 /** iOS `YouTubeVideoFrame` chrome styles for Hubs. */
 @Composable
@@ -460,6 +472,120 @@ fun HubsShelfThumbCard(
     }
 }
 
+/**
+ * iOS `HubsLoopingHorizontalRail` — endless sideways Netflix rail.
+ *
+ * LazyRow 2-cycle + silent `scrollToItem` wrap (Compose equivalent of iOS eager
+ * 2-cycle HStack + contentOffset jump). Only visible cards compose — lighter than
+ * duplicating thumbs in an eager Row. Falls back to a plain padded row when
+ * `posts.size < 3`. First card starts fully in frame (cycle-1 head).
+ */
+@Composable
+fun HubsLoopingHorizontalRail(
+    posts: List<CountryPost>,
+    onOpen: (CountryPost) -> Unit,
+    modifier: Modifier = Modifier,
+    spacing: Dp = 12.dp,
+    horizontalPadding: Dp = MatteryaDimens.pagePadding,
+    cardWidth: Dp = 168.dp,
+    showsMetadata: Boolean = false,
+    onNearEnd: (() -> Unit)? = null,
+) {
+    val n = posts.size
+    if (n == 0) return
+
+    if (n < 3) {
+        Row(
+            modifier
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = horizontalPadding),
+            horizontalArrangement = Arrangement.spacedBy(spacing),
+        ) {
+            posts.forEach { post ->
+                HubsShelfThumbCard(
+                    post = post,
+                    width = cardWidth,
+                    showsMetadata = showsMetadata,
+                    onTap = { onOpen(post) },
+                )
+            }
+        }
+        return
+    }
+
+    // Two cycles of the ranked set; start on cycle 1 so both edges can wrap.
+    val total = n * 2
+    val signature = remember(posts) { posts.joinToString(",") { it.id } }
+    key(signature) {
+        val listState = rememberLazyListState(initialFirstVisibleItemIndex = n)
+        var nearEndArmed by remember { mutableStateOf(true) }
+
+        LaunchedEffect(listState, n, onNearEnd) {
+            var jumping = false
+            snapshotFlow {
+                listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+            }
+                .distinctUntilChanged()
+                .collect { (index, offset) ->
+                    if (jumping) return@collect
+                    when {
+                        index < n / 2 -> {
+                            jumping = true
+                            listState.scrollToItem(index + n, offset)
+                            jumping = false
+                        }
+                        index >= n + n / 2 -> {
+                            jumping = true
+                            listState.scrollToItem(index - n, offset)
+                            jumping = false
+                        }
+                    }
+                    if (onNearEnd != null && nearEndArmed) {
+                        val logical = ((index % n) + n) % n
+                        if (logical > (n * 0.72f).toInt()) {
+                            nearEndArmed = false
+                            onNearEnd()
+                        }
+                    }
+                }
+        }
+
+        // Re-arm near-end after a short cool-down (iOS ~1.2s).
+        if (onNearEnd != null) {
+            LaunchedEffect(nearEndArmed) {
+                if (!nearEndArmed) {
+                    delay(1_200)
+                    nearEndArmed = true
+                }
+            }
+        }
+
+        LazyRow(
+            state = listState,
+            modifier = modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = horizontalPadding),
+            horizontalArrangement = Arrangement.spacedBy(spacing),
+        ) {
+            items(
+                count = total,
+                key = { index ->
+                    val copy = index / n
+                    val logical = index % n
+                    "$copy-${posts[logical].id}-$logical"
+                },
+            ) { index ->
+                val post = posts[index % n]
+                HubsShelfThumbCard(
+                    post = post,
+                    width = cardWidth,
+                    showsMetadata = showsMetadata,
+                    onTap = { onOpen(post) },
+                )
+            }
+        }
+    }
+}
+
 /** Horizontal shelf of [HubsShelfThumbCard]s with optional trailing action. */
 @Composable
 fun HubsHorizontalShelf(
@@ -470,6 +596,9 @@ fun HubsHorizontalShelf(
     trailing: @Composable (() -> Unit)? = null,
     cardWidth: Dp = 168.dp,
     showsMetadata: Boolean = false,
+    /** When true, sideways swipe wraps endlessly (Hubs Netflix rails). */
+    endless: Boolean = false,
+    onNearEnd: (() -> Unit)? = null,
 ) {
     Column(modifier.fillMaxWidth()) {
         Row(
@@ -488,19 +617,29 @@ fun HubsHorizontalShelf(
             )
             trailing?.invoke()
         }
-        Row(
-            Modifier
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = MatteryaDimens.pagePadding),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            posts.forEach { post ->
-                HubsShelfThumbCard(
-                    post = post,
-                    width = cardWidth,
-                    showsMetadata = showsMetadata,
-                    onTap = { onOpen(post) },
-                )
+        if (endless) {
+            HubsLoopingHorizontalRail(
+                posts = posts,
+                onOpen = onOpen,
+                cardWidth = cardWidth,
+                showsMetadata = showsMetadata,
+                onNearEnd = onNearEnd,
+            )
+        } else {
+            Row(
+                Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = MatteryaDimens.pagePadding),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                posts.forEach { post ->
+                    HubsShelfThumbCard(
+                        post = post,
+                        width = cardWidth,
+                        showsMetadata = showsMetadata,
+                        onTap = { onOpen(post) },
+                    )
+                }
             }
         }
         Spacer(Modifier.height(12.dp))
