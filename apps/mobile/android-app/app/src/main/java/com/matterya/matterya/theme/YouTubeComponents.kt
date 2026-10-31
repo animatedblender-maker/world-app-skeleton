@@ -168,7 +168,7 @@ fun YouTubeChannelRow(
     }
 }
 
-/** Mini player bar under chat / tabs. */
+/** Mini player bar under chat / tabs. [showsThumbnail]=false leaves a hole for continuous Exo. */
 @Composable
 fun YouTubeMiniPlayerBar(
     post: CountryPost,
@@ -178,7 +178,10 @@ fun YouTubeMiniPlayerBar(
     onClose: () -> Unit,
     onTogglePlay: () -> Unit = {},
     modifier: Modifier = Modifier,
+    showsThumbnail: Boolean = true,
 ) {
+    @Suppress("UNUSED_VARIABLE")
+    val _muted = isMuted
     Row(
         modifier
             .fillMaxWidth()
@@ -195,12 +198,14 @@ fun YouTubeMiniPlayerBar(
                 .clip(RoundedCornerShape(6.dp))
                 .background(MatteryaColors.canvasMuted),
         ) {
-            VideoThumbnailView(
-                post = post,
-                maxLogicalPx = 160,
-                showsPlayIcon = false,
-                modifier = Modifier.fillMaxSize(),
-            )
+            if (showsThumbnail) {
+                VideoThumbnailView(
+                    post = post,
+                    maxLogicalPx = 160,
+                    showsPlayIcon = false,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {

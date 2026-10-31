@@ -52,8 +52,9 @@ import com.matterya.matterya.theme.MatteryaColors
 import com.matterya.matterya.theme.MatteryaCopy
 import com.matterya.matterya.ui.ads.AdsView
 import com.matterya.matterya.model.GlobePanel
-import com.matterya.matterya.theme.YouTubeMiniPlayerBar
+import com.matterya.matterya.theme.MatteryaDimens
 import com.matterya.matterya.ui.anonymous.AnonymousRootView
+import com.matterya.matterya.ui.living.GlobalHubPlaybackLayer
 import com.matterya.matterya.ui.components.AppMenuAction
 import com.matterya.matterya.ui.components.AppMenuOverlay
 import com.matterya.matterya.ui.components.BottomTabBar
@@ -1395,31 +1396,43 @@ fun MainTabView(
             onDismiss = { vm.appState.setGlobePanel(null) },
         )
 
-        // Continuous mini player bar when hubs playback is minimized (iOS MainTabView)
+        // Continuous Hubs ExoPlayer — expand↔mini ytMorph; keep mounted across tabs/chat dock.
         val hubPost = appSnap.hubPlaybackPost
-        if (
-            hubPost != null &&
-            !appSnap.hubPlaybackExpanded &&
-            reelsCtx == null &&
-            storyCtx == null
-        ) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .padding(bottom = if (onTabsRoot) 56.dp else 0.dp),
-                contentAlignment = Alignment.BottomCenter,
-            ) {
-                YouTubeMiniPlayerBar(
+        if (hubPost != null && reelsCtx == null && storyCtx == null) {
+            if (appSnap.hubPlaybackExpanded) {
+                val related = state.hubStrip
+                    .filter { it.id != hubPost.id && it.hasVideo && !it.isReel }
+                    .distinctBy { it.id }
+                    .take(24)
+                YouTubeWatchView(
                     post = hubPost,
+                    related = related,
+                    embedsPlayer = false,
                     isPlaying = appSnap.hubPlaybackPlaying,
                     isMuted = appSnap.hubPlaybackMuted,
-                    onExpand = { vm.appState.expandHubPlayback() },
-                    onClose = { vm.appState.stopHubPlayback() },
-                    onTogglePlay = {
-                        vm.appState.setHubPlaybackPlaying(!appSnap.hubPlaybackPlaying)
-                    },
+                    onBack = { vm.appState.minimizeHubPlayback(returnToChat = false) },
+                    onOpenVideo = { vm.appState.openPost(it) },
+                    onLike = vm::toggleLike,
+                    onShare = { vm.appState.presentShareSheet(it) },
                 )
             }
+            GlobalHubPlaybackLayer(
+                post = hubPost,
+                expanded = appSnap.hubPlaybackExpanded,
+                isPlaying = appSnap.hubPlaybackPlaying,
+                isMuted = appSnap.hubPlaybackMuted,
+                // Tab root: sit above tab bar. Chat dock / pushed routes: flush bottom.
+                bottomClearance = when {
+                    appSnap.hubPlaybackExpanded -> 0.dp
+                    onTabsRoot && !appSnap.hubPlaybackDockInChat -> MatteryaDimens.tabBarHeight
+                    else -> 0.dp
+                },
+                onExpand = { vm.appState.expandHubPlayback() },
+                onClose = { vm.appState.stopHubPlayback() },
+                onTogglePlay = {
+                    vm.appState.setHubPlaybackPlaying(!appSnap.hubPlaybackPlaying)
+                },
+            )
         }
 
         AppMenuOverlay(

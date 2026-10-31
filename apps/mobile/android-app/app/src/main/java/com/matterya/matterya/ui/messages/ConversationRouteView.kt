@@ -483,7 +483,8 @@ fun ConversationRouteView(
                 onOpenShare = { share ->
                     appState?.let { ChatShareRouting.open(share, it) }
                 },
-                hubMiniPost = appSnap.hubPlaybackPost?.takeIf { !appSnap.hubPlaybackExpanded },
+                // Continuous mini lives in MainTabView GlobalHubPlaybackLayer (avoid double chrome).
+                hubMiniPost = null,
                 hubMiniPlaying = appSnap.hubPlaybackPlaying,
                 onHubMiniExpand = { appState?.expandHubPlayback() },
                 onHubMiniClose = { appState?.stopHubPlayback() },

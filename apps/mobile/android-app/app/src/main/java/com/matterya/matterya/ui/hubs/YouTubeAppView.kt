@@ -159,9 +159,29 @@ fun YouTubeAppView(
             allVideos.filter { PlayPlatformBridge.isHubsForYouLongForm(it) }
                 .filter { catalog.playbackPosition(it.id) >= 1.0 }
         }
-        continueWatching = (if (shuffle) pureShuffle(historyOrFallback) else historyOrFallback)
+        val seed = (if (shuffle) pureShuffle(historyOrFallback) else historyOrFallback)
             .distinctBy { it.id }
-            .take(railCardCount)
+        // Pad Continue toward ~15 unique media (iOS padContinueRail).
+        if (seed.size >= railCardCount) {
+            continueWatching = seed.take(railCardCount)
+            return
+        }
+        val seenIds = seed.map { it.id }.toMutableSet()
+        val seenMedia = seed.map { hubsRailMediaKey(it) }.toMutableSet()
+        val out = seed.toMutableList()
+        val filler = allVideos.filter {
+            PlayPlatformBridge.isHubsForYouLongForm(it) || (it.hasVideo && !it.isReel)
+        }
+        for (post in filler) {
+            if (out.size >= railCardCount) break
+            if (post.id in seenIds) continue
+            val key = hubsRailMediaKey(post)
+            if (key in seenMedia) continue
+            seenIds.add(post.id)
+            seenMedia.add(key)
+            out.add(post)
+        }
+        continueWatching = out.take(railCardCount)
     }
 
     fun rebuildHomeLists(shuffle: Boolean, remount: Boolean) {
@@ -239,7 +259,7 @@ fun YouTubeAppView(
             return out
         }
 
-        // Because you watched — dense only.
+        // Because you watched — dense only; same-slug, ≥15 unique or skip.
         cachedBecauseYouWatched = if (dense) {
             val seed = continueWatching.firstOrNull()
             if (seed != null) {
@@ -247,7 +267,10 @@ fun YouTubeAppView(
                 claimedMedia.add(mediaKey(seed))
                 val seedSlug = catalog.parentHubSlug(seed)
                 val related = (buckets[seedSlug] ?: emptyList()).filter { it.id != seed.id }
-                val becausePosts = claim(related, railN)
+                var becausePosts = claim(related, railN)
+                if (becausePosts.size < railN && becausePosts.size >= maxOf(4, minRail - 4)) {
+                    becausePosts = padToRailN(becausePosts)
+                }
                 if (becausePosts.size >= minRail) {
                     val raw = (seed.displayHeadline ?: seed.displayExcerpt).trim()
                         .replace('\n', ' ')
@@ -257,8 +280,18 @@ fun YouTubeAppView(
                         raw.length <= 42 -> "Because you watched $raw"
                         else -> "Because you watched ${raw.take(42).trim()}…"
                     }
-                    HubsMoreRail(id = "because-${seed.id}", title = title, posts = becausePosts)
-                } else null
+                    HubsMoreRail(
+                        id = "because-${seed.id}",
+                        title = title,
+                        posts = becausePosts.take(railN),
+                    )
+                } else {
+                    for (post in becausePosts) {
+                        claimedIds.remove(post.id)
+                        claimedMedia.remove(mediaKey(post))
+                    }
+                    null
+                }
             } else null
         } else null
 
@@ -511,7 +544,7 @@ fun YouTubeAppView(
                             if (cachedPeopleRail.isNotEmpty()) {
                                 item(key = "people") {
                                     HubsHorizontalShelf(
-                                        title = "From people like you",
+                                        title = MatteryaCopy.fromPeopleLikeYou,
                                         posts = cachedPeopleRail,
                                         onOpen = onOpenVideo,
                                         cardWidth = peopleRailCardWidth,
@@ -595,7 +628,7 @@ private fun HubsHeroBillboard(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    "PEOPLE'S CINEMA",
+                    MatteryaCopy.peoplesCinema,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.2.sp,
@@ -603,7 +636,7 @@ private fun HubsHeroBillboard(
                 )
                 Text(
                     post.displayHeadline
-                        ?: post.displayExcerpt.ifEmpty { "Watch now" },
+                        ?: post.displayExcerpt.ifEmpty { MatteryaCopy.watchNow },
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
                     color = MatteryaColors.paper,
@@ -629,7 +662,7 @@ private fun HubsHeroBillboard(
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            "Play",
+                            MatteryaCopy.play,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                             color = MatteryaColors.ink,
@@ -668,7 +701,7 @@ private fun HubsTopBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            "Library",
+            MatteryaCopy.library,
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold,
             color = MatteryaColors.ink,
@@ -688,7 +721,11 @@ private fun HubsTopBar(
         }
         Box {
             IconButton(onClick = onNotifications, modifier = Modifier.size(40.dp)) {
-                Icon(Icons.Default.NotificationsNone, contentDescription = "Notifications", tint = MatteryaColors.ink)
+                Icon(
+                    Icons.Default.NotificationsNone,
+                    contentDescription = MatteryaCopy.notifications,
+                    tint = MatteryaColors.ink,
+                )
             }
             if (notificationsUnread > 0) {
                 UnreadDot(

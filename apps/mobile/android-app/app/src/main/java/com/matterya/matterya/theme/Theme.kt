@@ -79,6 +79,19 @@ object MatteryaDimens {
     val tabBarHeight = 50.dp
 }
 
+/**
+ * iOS `MatteryaMotion` — short easeOut tokens (no hangy springs).
+ * Hubs stage↔mini uses [ytMorphMs] + [ytMorphEasing] (LinearOutSlowIn ≈ easeOut).
+ */
+object MatteryaMotion {
+    const val ytMorphMs: Int = 220
+    const val snappyMs: Int = 120
+    const val minimizeMs: Int = 110
+    const val expandMs: Int = 140
+    /** Compose stand-in for SwiftUI `Animation.easeOut` (decelerate). */
+    val ytMorphEasing = androidx.compose.animation.core.LinearOutSlowInEasing
+}
+
 /** User-facing names for short vertical videos (not "Reels") — iOS `MatteryaCopy`. */
 object MatteryaCopy {
     private const val NBSP = "\u00A0"
@@ -137,6 +150,12 @@ object MatteryaCopy {
     const val shareCreatorHub = "Share creator hub"
     const val aboutThisHub = "About this hub"
     const val featuredCreators = "Featured creators"
+    const val fromPeopleLikeYou = "From people like you"
+    const val library = "Library"
+    const val peoplesCinema = "PEOPLE'S CINEMA"
+    const val play = "Play"
+    const val watchNow = "Watch now"
+    const val notifications = "Notifications"
 
     // MARK: Masquerade (Anonymous mode)
     private const val masqueradeBrand = "Matterya${NBSP}Masquerade"
