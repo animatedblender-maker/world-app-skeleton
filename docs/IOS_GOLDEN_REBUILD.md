@@ -41,8 +41,17 @@ See `docs/ios-golden-file-inventory.txt` (~194 Swift files).
 - [x] Wipe old clients (commit 80c48b3e)
 - [x] Scaffold / restore Compose + Angular trees as infrastructure base
 - [x] Theme + MatteryaCopy from iOS (accent=ink, never brown/gold; UI name Masquerade)
-- [ ] Surfaces — agents porting Feed/Sparks/Hubs/Masquerade/Messages against iOS
-- [ ] QA vs iOS (emulator + gh-pages)
+- [x] Core surfaces ported: Feed autoplay, Sparks, Hubs rails, Masquerade, Messages ink chrome, Profile/Auth/Search
+- [x] Android emulator install verified (Feed + Masquerade Wilde + tabs)
+- [x] Web `ng serve` / `ng build` development OK on :4200
+- [ ] Remaining fidelity gaps (handoff player claim, Sparks layout chips, Hubs shared-element morph, gh-pages prod deploy)
+- [ ] Full QA pass vs iOS simulator side-by-side
+
+## Verified on device (2026-10-31)
+- Android tabs: Feed | Masquerade | + | Matterya Hubs | Messages | Profile
+- Feed: Sparks for you strip, Matterya Hubs chip, ExoPlayer in-frame
+- Masquerade: Matterya Masquerade wordmark, Anonymous mode chip, Wilde quote, tagline
+- Theme: paper `#f8f6f2`, ink `#2c2825` (no brown/gold accents)
 
 ## Wipe
 - Removed `apps/web` and `apps/mobile/android-app` at commit after this plan.
