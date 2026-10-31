@@ -1466,8 +1466,17 @@ class AppState(private val app: Application) {
         if (fromFeedPost != null && fromFeedPost.id != start.id) {
             SparkWarmPool.shared.rekey(fromFeedPost.id, start.id)
         }
+
+        // FAST PATH (iOS): never rank catalogs on the tap frame.
+        // Prefer strip/rail seeds only; expand after first paint.
+        val instantSeeds = instantOpenSeeds(start, preferred = seedPosts, limit = 12)
+
+        // Deep-warm ONLY the tapped clip sync (already decoding if feed autoplay).
         start.playableVideoUrl?.let { url ->
             SparkWarmPool.shared.warmSingle(start.id, url)
+            if (fromFeedPost != null && fromFeedPost.id != start.id) {
+                SparkWarmPool.shared.warmSingle(fromFeedPost.id, url)
+            }
         }
         // Solo the parked buffer now (still muted) so Sparks mounts onto a live decoder.
         val parked = SparkWarmPool.shared.parkedPlayer(start.id)
@@ -1475,29 +1484,118 @@ class AppState(private val app: Application) {
         if (parked != null) {
             MediaPlaybackCoordinator.shared.soloSparkAudio(keeping = parked)
             parked.volume = 0f
+            if (!parked.isPlaying) {
+                parked.playWhenReady = true
+                parked.play()
+            }
         }
 
-        val preferred = if (seedPosts.isNotEmpty()) seedPosts else instantSparksSeedQueue(start)
-        openReelsViewer(start, preferred)
-        if (preferred.size < 12) {
-            scope.launch { postsService.loadSparksDiscoveryCatalog(forceRefresh = false) }
+        // Paint overlay THIS frame — no catalog absorb, no ahead warm storm.
+        openReelsViewer(start, instantSeeds)
+
+        // After paint: expand seed queue + warm next clips (GraphQL only if strip was thin).
+        val preferred = seedPosts
+        scope.launch {
+            val seedLimit = max(20, 12)
+            val expanded = mergeSparksOpenSeeds(start, preferred = preferred, limit = seedLimit)
+            warmSparksOpenHandoff(expanded, focusIndex = 0)
+            SparkWarmPool.shared.prepare(expanded, around = 0, ahead = 3, behind = 0)
+            if (expanded.size >= seedLimit) return@launch
+            runCatching { postsService.loadSparksDiscoveryCatalog(forceRefresh = false) }
+            val richer = mergeSparksOpenSeeds(start, preferred = preferred, limit = seedLimit)
+            if (richer.size > expanded.size) {
+                SparkWarmPool.shared.prepare(richer, around = 0, ahead = 3, behind = 0)
+                // Grow the live Sparks queue if viewer is still open on the same head.
+                val ctx = _snapshot.value.reelsViewerContext
+                if (ctx != null && ctx.startingPost.id == start.id && richer.size > ctx.seedPosts.size) {
+                    _snapshot.update {
+                        it.copy(
+                            reelsViewerContext = ctx.copy(seedPosts = richer),
+                        )
+                    }
+                }
+            }
         }
     }
 
-    private fun instantSparksSeedQueue(start: CountryPost, limit: Int = 48): List<CountryPost> {
+    /** Tap-frame seeds only — preferred strip/rail, no discovery ranking (iOS). */
+    private fun instantOpenSeeds(
+        start: CountryPost,
+        preferred: List<CountryPost>,
+        limit: Int,
+    ): List<CountryPost> {
+        val head = ReelsRankingEngine.resolvePlayerStart(start)
+        val out = mutableListOf(head)
+        val seen = mutableSetOf(head.id)
+        for (post in preferred) {
+            val resolved = ReelsRankingEngine.resolvePlayerStart(post)
+            if (!seen.add(resolved.id)) continue
+            if (!ReelsRankingEngine.isSparkEligible(resolved)) continue
+            if (resolved.id != head.id && SparkDiscoveryEngine.isViewed(resolved.id)) continue
+            out.add(resolved)
+            if (out.size >= limit) break
+        }
+        return out
+    }
+
+    /** Strip/rail first, then catalog fill — never block open on GraphQL (iOS). */
+    private fun mergeSparksOpenSeeds(
+        start: CountryPost,
+        preferred: List<CountryPost>,
+        limit: Int,
+    ): List<CountryPost> {
         val head = ReelsRankingEngine.resolvePlayerStart(start)
         val out = mutableListOf(head)
         val seen = mutableSetOf(head.id)
         fun absorb(posts: List<CountryPost>) {
             for (post in posts) {
+                val resolved = ReelsRankingEngine.resolvePlayerStart(post)
+                if (!seen.add(resolved.id)) continue
+                if (!ReelsRankingEngine.isSparkEligible(resolved)) continue
+                if (resolved.id != head.id && SparkDiscoveryEngine.isViewed(resolved.id)) continue
+                out.add(resolved)
+                if (out.size >= limit) return
+            }
+        }
+        absorb(preferred)
+        if (out.size < limit) absorb(instantSparksSeedQueue(start, limit))
+        return out
+    }
+
+    private fun warmSparksOpenHandoff(seeds: List<CountryPost>, focusIndex: Int) {
+        if (focusIndex !in seeds.indices) return
+        val focus = seeds[focusIndex]
+        focus.playableVideoUrl?.let { SparkWarmPool.shared.warmSingle(focus.id, it) }
+        val ahead = 3
+        val hi = minOf(seeds.size, focusIndex + ahead + 1)
+        if (focusIndex + 1 >= hi) return
+        for (i in (focusIndex + 1) until hi) {
+            val post = seeds[i]
+            val url = post.playableVideoUrl ?: continue
+            SparkWarmPool.shared.warmSingle(post.id, url)
+        }
+    }
+
+    private fun instantSparksSeedQueue(start: CountryPost, limit: Int = 24): List<CountryPost> {
+        val head = ReelsRankingEngine.resolvePlayerStart(start)
+        val out = mutableListOf(head)
+        val seen = mutableSetOf(head.id)
+        fun absorb(posts: List<CountryPost>) {
+            val ranked = SparkDiscoveryEngine.rankForDiscovery(posts)
+                .filter { it.id == head.id || !SparkDiscoveryEngine.isViewed(it.id) }
+            for (post in ranked) {
                 if (!seen.add(post.id)) continue
                 if (!ReelsRankingEngine.isSparkEligible(post)) continue
+                if (post.id != head.id && SparkDiscoveryEngine.isViewed(post.id)) continue
                 out.add(post)
                 if (out.size >= limit) return
             }
         }
-        absorb(postsService.sparksCatalogSnapshot().shuffled())
-        if (out.size < limit) absorb(postsService.hubsSessionCatalog.shuffled())
+        absorb(postsService.sparksCatalogSnapshot())
+        if (out.size < limit) absorb(postsService.hubsSessionCatalog)
+        if (out.size < limit) {
+            contentCache.posts(ContentCacheKey.HomeFeed)?.let { absorb(it) }
+        }
         return out
     }
 

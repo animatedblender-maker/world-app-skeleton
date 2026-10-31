@@ -1,5 +1,11 @@
 import { CommonModule } from '@angular/common';
-import { ChangeDetectorRef, Component, OnInit } from '@angular/core';
+import {
+  AfterViewChecked,
+  ChangeDetectorRef,
+  Component,
+  ElementRef,
+  OnInit,
+} from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 
@@ -82,11 +88,15 @@ type HubsRail = {
           <!-- Continue watching -->
           <section class="shelf" *ngIf="continueRail.length">
             <div class="section-title">{{ copy.continueWatching }}</div>
-            <div class="rail" (scroll)="onContinueScroll($event)">
+            <div
+              class="rail"
+              [attr.data-loop-n]="continueRail.length"
+              (scroll)="onContinueRailScroll($event)"
+            >
               <button
                 type="button"
                 class="rail-card"
-                *ngFor="let p of continueRail; trackBy: trackById"
+                *ngFor="let p of loopedPosts(continueRail); trackBy: trackLooped"
                 (click)="openVideo(p)"
               >
                 <div class="rail-thumb">
@@ -101,11 +111,15 @@ type HubsRail = {
           <!-- Because you watched -->
           <section class="shelf" *ngIf="becauseRail?.posts?.length">
             <div class="section-title">{{ becauseRail!.title }}</div>
-            <div class="rail">
+            <div
+              class="rail"
+              [attr.data-loop-n]="becauseRail!.posts.length"
+              (scroll)="onLoopingRailScroll($event, becauseRail!.posts.length)"
+            >
               <button
                 type="button"
                 class="rail-card"
-                *ngFor="let p of becauseRail!.posts; trackBy: trackById"
+                *ngFor="let p of loopedPosts(becauseRail!.posts); trackBy: trackLooped"
                 (click)="openVideo(p)"
               >
                 <div class="rail-thumb">
@@ -119,11 +133,15 @@ type HubsRail = {
           <!-- From people like you -->
           <section class="shelf" *ngIf="peopleRail.length">
             <div class="section-title">From people like you</div>
-            <div class="rail">
+            <div
+              class="rail"
+              [attr.data-loop-n]="peopleRail.length"
+              (scroll)="onLoopingRailScroll($event, peopleRail.length)"
+            >
               <button
                 type="button"
                 class="rail-card wide"
-                *ngFor="let p of peopleRail; trackBy: trackById"
+                *ngFor="let p of loopedPosts(peopleRail); trackBy: trackLooped"
                 (click)="openVideo(p)"
               >
                 <div class="rail-thumb">
@@ -151,11 +169,16 @@ type HubsRail = {
                 <div class="channel-name">{{ c.title }}</div>
               </button>
             </div>
-            <div class="rail" *ngIf="followingRail.length">
+            <div
+              class="rail"
+              *ngIf="followingRail.length"
+              [attr.data-loop-n]="followingRail.length"
+              (scroll)="onLoopingRailScroll($event, followingRail.length)"
+            >
               <button
                 type="button"
                 class="rail-card"
-                *ngFor="let p of followingRail; trackBy: trackById"
+                *ngFor="let p of loopedPosts(followingRail); trackBy: trackLooped"
                 (click)="openVideo(p)"
               >
                 <div class="rail-thumb">
@@ -169,11 +192,15 @@ type HubsRail = {
           <!-- Vibe / category rails -->
           <section class="shelf" *ngFor="let rail of vibeRails; trackBy: trackRail">
             <div class="section-title">{{ rail.title }}</div>
-            <div class="rail">
+            <div
+              class="rail"
+              [attr.data-loop-n]="rail.posts.length"
+              (scroll)="onLoopingRailScroll($event, rail.posts.length)"
+            >
               <button
                 type="button"
                 class="rail-card"
-                *ngFor="let p of rail.posts; trackBy: trackById"
+                *ngFor="let p of loopedPosts(rail.posts); trackBy: trackLooped"
                 (click)="openVideo(p)"
               >
                 <div class="rail-thumb">
@@ -187,11 +214,15 @@ type HubsRail = {
           <!-- More to watch -->
           <section class="shelf" *ngFor="let rail of moreRails; trackBy: trackRail">
             <div class="section-title">{{ rail.title }}</div>
-            <div class="rail">
+            <div
+              class="rail"
+              [attr.data-loop-n]="rail.posts.length"
+              (scroll)="onLoopingRailScroll($event, rail.posts.length)"
+            >
               <button
                 type="button"
                 class="rail-card"
-                *ngFor="let p of rail.posts; trackBy: trackById"
+                *ngFor="let p of loopedPosts(rail.posts); trackBy: trackLooped"
                 (click)="openVideo(p)"
               >
                 <div class="rail-thumb">
@@ -759,12 +790,13 @@ type HubsRail = {
     `,
   ],
 })
-export class HubsPageComponent implements OnInit {
+export class HubsPageComponent implements OnInit, AfterViewChecked {
   /** Product floor: unique media per dense Netflix row (iOS rails rebuild rule). */
   private static readonly railN = 15;
   private static readonly vibeRailCount = 3;
   private static readonly moreRailRows = 2;
   private static readonly softFloor = 6;
+  private static readonly railGapPx = 12;
 
   readonly copy = MatteryaCopy;
 
@@ -798,12 +830,16 @@ export class HubsPageComponent implements OnInit {
 
   continueVisibleCount = HubsPageComponent.railN;
   private readonly continuePageSize = HubsPageComponent.railN;
+  private loopingJump = false;
+  private continueNearEndArmed = true;
+  private loopNeedsReset = false;
 
   constructor(
     public catalog: HubsCatalogService,
     private auth: AuthService,
     private cdr: ChangeDetectorRef,
     private follow: FollowService,
+    private host: ElementRef<HTMLElement>,
     private location: LocationService,
     private playback: HubsPlaybackService,
     private profiles: ProfileService,
@@ -813,6 +849,18 @@ export class HubsPageComponent implements OnInit {
 
   ngOnInit(): void {
     void this.refresh();
+  }
+
+  ngAfterViewChecked(): void {
+    if (this.loading || this.mode !== 'home') return;
+    if (this.loopNeedsReset) {
+      const root = this.host.nativeElement;
+      root.querySelectorAll<HTMLElement>('.rail[data-loop-n]').forEach((el) => {
+        delete el.dataset['loopInit'];
+      });
+      this.loopNeedsReset = false;
+    }
+    this.initLoopingRailOffsets();
   }
 
   get playReels(): CountryPost[] {
@@ -925,6 +973,7 @@ export class HubsPageComponent implements OnInit {
     this.followingRail = [];
     this.vibeRails = [];
     this.moreRails = [];
+    this.loopNeedsReset = true;
   }
 
   /**
@@ -1105,6 +1154,7 @@ export class HubsPageComponent implements OnInit {
       row += 1;
     }
     this.moreRails = more;
+    this.loopNeedsReset = true;
   }
 
   private becauseYouWatchedTitle(post: CountryPost): string {
@@ -1119,26 +1169,103 @@ export class HubsPageComponent implements OnInit {
     return `Because you watched ${raw.slice(0, maxChars).trim()}…`;
   }
 
-  onContinueScroll(event: Event): void {
+  /** 2-cycle DOM for endless rails; short shelves stay a plain row. */
+  loopedPosts(posts: CountryPost[]): CountryPost[] {
+    if (!posts?.length) return [];
+    if (posts.length < 3) return posts;
+    return posts.concat(posts);
+  }
+
+  trackLooped(index: number, p: CountryPost): string {
+    return `${index}-${p.id}`;
+  }
+
+  onContinueRailScroll(ev: Event): void {
+    const n = this.continueRail.length;
+    this.onLoopingRailScroll(ev, n);
+    if (n < 3) {
+      this.growContinueIfNearEnd(ev);
+      return;
+    }
+    if (!this.continueNearEndArmed) return;
+    const el = ev.target as HTMLElement | null;
+    if (!el) return;
+    const first = el.children[0] as HTMLElement | undefined;
+    if (!first?.offsetWidth) return;
+    const stride = first.offsetWidth + HubsPageComponent.railGapPx;
+    const cycleWidth = n * stride;
+    if (cycleWidth <= 0) return;
+    const logical = Math.floor((el.scrollLeft % cycleWidth) / stride);
+    if (logical > n * 0.72) {
+      this.continueNearEndArmed = false;
+      this.growContinueRail();
+      window.setTimeout(() => {
+        this.continueNearEndArmed = true;
+      }, 1200);
+    }
+  }
+
+  onLoopingRailScroll(ev: Event, n: number): void {
+    if (n < 3 || this.loopingJump) return;
+    const el = ev.target as HTMLElement | null;
+    if (!el) return;
+    const first = el.children[0] as HTMLElement | undefined;
+    if (!first?.offsetWidth) return;
+    const stride = first.offsetWidth + HubsPageComponent.railGapPx;
+    const cycleWidth = n * stride;
+    if (cycleWidth <= 0) return;
+
+    if (el.scrollLeft < cycleWidth * 0.35) {
+      this.loopingJump = true;
+      el.scrollLeft += cycleWidth;
+      this.loopingJump = false;
+    } else if (el.scrollLeft > cycleWidth * 1.35) {
+      this.loopingJump = true;
+      el.scrollLeft -= cycleWidth;
+      this.loopingJump = false;
+    }
+  }
+
+  private growContinueIfNearEnd(event: Event): void {
     const el = event.target as HTMLElement | null;
     if (!el) return;
+    const remaining = el.scrollWidth - el.scrollLeft - el.clientWidth;
+    if (remaining < 280) this.growContinueRail();
+  }
+
+  private growContinueRail(): void {
     const all = this.continueWatchingAll;
     if (this.continueVisibleCount >= Math.min(all.length, HubsPageComponent.railN * 3)) return;
-    const remaining = el.scrollWidth - el.scrollLeft - el.clientWidth;
-    if (remaining < 280) {
-      this.continueVisibleCount = Math.min(
-        Math.min(all.length, HubsPageComponent.railN * 3),
-        this.continueVisibleCount + this.continuePageSize
-      );
-      // Re-slice continue from already-claimed rebuild would reshuffle; just grow from feed.
-      const ids = new Set(this.continueRail.map((p) => p.id));
-      for (const p of all) {
-        if (this.continueRail.length >= this.continueVisibleCount) break;
-        if (ids.has(p.id) || !this.catalog.isLongForm(p)) continue;
-        this.continueRail.push(p);
-        ids.add(p.id);
+    this.continueVisibleCount = Math.min(
+      Math.min(all.length, HubsPageComponent.railN * 3),
+      this.continueVisibleCount + this.continuePageSize
+    );
+    const ids = new Set(this.continueRail.map((p) => p.id));
+    for (const p of all) {
+      if (this.continueRail.length >= this.continueVisibleCount) break;
+      if (ids.has(p.id) || !this.catalog.isLongForm(p)) continue;
+      this.continueRail.push(p);
+      ids.add(p.id);
+    }
+    this.paint();
+  }
+
+  /** Seed each looping rail to cycle-1 head so both edges can wrap. */
+  private initLoopingRailOffsets(): void {
+    const root = this.host.nativeElement;
+    const rails = root.querySelectorAll<HTMLElement>('.rail[data-loop-n]');
+    for (const el of Array.from(rails)) {
+      if (el.dataset['loopInit'] === '1') continue;
+      const n = Number(el.getAttribute('data-loop-n') || 0);
+      if (n < 3) {
+        el.dataset['loopInit'] = '1';
+        continue;
       }
-      this.paint();
+      const first = el.children[0] as HTMLElement | undefined;
+      if (!first?.offsetWidth) continue;
+      const stride = first.offsetWidth + HubsPageComponent.railGapPx;
+      el.scrollLeft = n * stride;
+      el.dataset['loopInit'] = '1';
     }
   }
 

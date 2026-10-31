@@ -1,23 +1,34 @@
 package com.matterya.matterya.ui.hubs
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -45,6 +56,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -54,6 +66,7 @@ import com.matterya.matterya.data.cache.ContentCacheKey
 import com.matterya.matterya.data.hubs.HubVideoSeedService
 import com.matterya.matterya.data.hubs.YouTubeCatalogService
 import com.matterya.matterya.data.hubs.YouTubeHomeFilter
+import com.matterya.matterya.data.hubs.YouTubeLibrarySection
 import com.matterya.matterya.data.media.ImageCache
 import com.matterya.matterya.data.media.PlayPlatformBridge
 import com.matterya.matterya.data.posts.PostsService
@@ -64,6 +77,7 @@ import com.matterya.matterya.theme.MatteryaCopy
 import com.matterya.matterya.theme.MatteryaDimens
 import com.matterya.matterya.theme.PlayBrandMark
 import com.matterya.matterya.theme.YouTubeMediaLayout
+import com.matterya.matterya.theme.YouTubeVideoListRow
 import com.matterya.matterya.ui.components.UnreadDot
 import com.matterya.matterya.ui.components.VideoThumbnailView
 import kotlinx.coroutines.Dispatchers
@@ -94,6 +108,9 @@ fun YouTubeAppView(
     seedVideos: List<CountryPost> = emptyList(),
     seedSparks: List<CountryPost> = emptyList(),
     seedContinueWatching: List<CountryPost> = emptyList(),
+    /** Bookmarked long-form / sparks for Library (iOS appState.saved*). */
+    savedVideos: List<CountryPost> = emptyList(),
+    savedReels: List<CountryPost> = emptyList(),
     followingIds: Set<String> = emptySet(),
     viewerCountry: String? = null,
     currentUserId: String? = null,
@@ -112,8 +129,6 @@ fun YouTubeAppView(
     val _unusedSparks = seedSparks
     @Suppress("UNUSED_VARIABLE")
     val _unusedViewer = viewerCountry
-    @Suppress("UNUSED_VARIABLE")
-    val _unusedOpenSpark = onOpenSpark
 
     val context = LocalContext.current
     val catalog = remember { YouTubeCatalogService.get(context) }
@@ -129,6 +144,8 @@ fun YouTubeAppView(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var homeListEpoch by remember { mutableIntStateOf(0) }
     var hubsRailsDense by remember { mutableStateOf(false) }
+    var showLibrary by remember { mutableStateOf(false) }
+    var librarySection by remember { mutableStateOf(YouTubeLibrarySection.History) }
 
     var cachedVibeRails by remember { mutableStateOf<List<HubsVibeRail>>(emptyList()) }
     var cachedMoreWatchRails by remember { mutableStateOf<List<HubsMoreRail>>(emptyList()) }
@@ -451,137 +468,355 @@ fun YouTubeAppView(
         ?: homeVideos.firstOrNull()
         ?: allVideos.firstOrNull { PlayPlatformBridge.isHubsForYouLongForm(it) }
 
-    Column(
+    val libraryVideos = remember(
+        librarySection,
+        allVideos,
+        savedVideos,
+        savedReels,
+        currentUserId,
+    ) {
+        when (librarySection) {
+            YouTubeLibrarySection.History -> catalog.historyVideos(allVideos)
+            YouTubeLibrarySection.Reels -> {
+                val saved = savedReels.ifEmpty {
+                    allVideos.filter { it.isReel && it.savedByMe }
+                }
+                val uploads = catalog.myUploads(allVideos, currentUserId).filter { it.isReel }
+                (saved + uploads).distinctBy { it.id }
+            }
+            YouTubeLibrarySection.WatchLater -> {
+                savedVideos.ifEmpty {
+                    allVideos.filter {
+                        catalog.livingEligible(it) && it.savedByMe && !it.isReel
+                    }
+                }
+            }
+            YouTubeLibrarySection.Liked -> catalog.likedVideos(allVideos)
+            YouTubeLibrarySection.Uploads -> catalog.myUploads(allVideos, currentUserId)
+        }
+    }
+
+    Box(
         Modifier
             .fillMaxSize()
             .background(MatteryaColors.paper),
     ) {
-        HubsTopBar(
-            onSearch = onSearch,
-            onNotifications = onNotifications,
-            notificationsUnread = notificationsUnread,
-            onLibrary = onOpenLibrary,
-            onBrandTap = onOpenHubsHome,
-        )
+        // Home stays mounted under Library (iOS underWatchContent pattern).
+        Column(Modifier.fillMaxSize()) {
+            HubsTopBar(
+                onSearch = onSearch,
+                onNotifications = onNotifications,
+                notificationsUnread = notificationsUnread,
+                onLibrary = {
+                    librarySection = YouTubeLibrarySection.History
+                    showLibrary = true
+                    onOpenLibrary()
+                },
+                onBrandTap = onOpenHubsHome,
+            )
 
-        PullToRefreshBox(
-            isRefreshing = isRefreshing,
-            onRefresh = {
-                isRefreshing = true
-                scope.launch { loadCatalog(forceRefresh = true) }
-            },
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            when {
-                isLoading && homeVideos.isEmpty() && continueWatching.isEmpty() -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            CircularProgressIndicator(color = MatteryaColors.ink)
-                            Spacer(Modifier.height(12.dp))
+            PullToRefreshBox(
+                isRefreshing = isRefreshing,
+                onRefresh = {
+                    isRefreshing = true
+                    scope.launch { loadCatalog(forceRefresh = true) }
+                },
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                when {
+                    isLoading && homeVideos.isEmpty() && continueWatching.isEmpty() -> {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator(color = MatteryaColors.ink)
+                                Spacer(Modifier.height(12.dp))
+                                Text(
+                                    MatteryaCopy.loadingHubs,
+                                    color = MatteryaColors.inkMuted,
+                                    fontSize = 14.sp,
+                                )
+                            }
+                        }
+                    }
+                    errorMessage != null && homeVideos.isEmpty() && continueWatching.isEmpty() -> {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Text(
-                                MatteryaCopy.loadingHubs,
+                                errorMessage ?: MatteryaCopy.hubsUnavailable,
+                                color = MatteryaColors.danger,
+                                modifier = Modifier.padding(24.dp),
+                            )
+                        }
+                    }
+                    homeVideos.isEmpty() && continueWatching.isEmpty() -> {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text(
+                                MatteryaCopy.hubsPublishHint,
                                 color = MatteryaColors.inkMuted,
+                                modifier = Modifier.padding(24.dp),
                                 fontSize = 14.sp,
                             )
                         }
                     }
-                }
-                errorMessage != null && homeVideos.isEmpty() && continueWatching.isEmpty() -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text(
-                            errorMessage ?: MatteryaCopy.hubsUnavailable,
-                            color = MatteryaColors.danger,
-                            modifier = Modifier.padding(24.dp),
-                        )
-                    }
-                }
-                homeVideos.isEmpty() && continueWatching.isEmpty() -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text(
-                            MatteryaCopy.hubsPublishHint,
-                            color = MatteryaColors.inkMuted,
-                            modifier = Modifier.padding(24.dp),
-                            fontSize = 14.sp,
-                        )
-                    }
-                }
-                else -> {
-                    key(homeListEpoch) {
-                        LazyColumn(
-                            Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.spacedBy(20.dp),
-                        ) {
-                            if (heroPost != null) {
-                                item(key = "hero") {
-                                    HubsHeroBillboard(
-                                        post = heroPost,
-                                        onOpen = { onOpenVideo(heroPost) },
-                                    )
+                    else -> {
+                        key(homeListEpoch) {
+                            LazyColumn(
+                                Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.spacedBy(20.dp),
+                            ) {
+                                if (heroPost != null) {
+                                    item(key = "hero") {
+                                        HubsHeroBillboard(
+                                            post = heroPost,
+                                            onOpen = { onOpenVideo(heroPost) },
+                                        )
+                                    }
                                 }
-                            }
-                            if (continueWatching.isNotEmpty()) {
-                                item(key = "continue") {
+                                if (continueWatching.isNotEmpty()) {
+                                    item(key = "continue") {
+                                        HubsHorizontalShelf(
+                                            title = MatteryaCopy.continueWatching,
+                                            posts = continueWatching.take(railCardCount),
+                                            onOpen = onOpenVideo,
+                                            cardWidth = railCardWidth,
+                                            showsMetadata = true,
+                                            endless = true,
+                                        )
+                                    }
+                                }
+                                cachedBecauseYouWatched?.takeIf { it.posts.isNotEmpty() }?.let { because ->
+                                    item(key = because.id) {
+                                        HubsHorizontalShelf(
+                                            title = because.title,
+                                            posts = because.posts,
+                                            onOpen = onOpenVideo,
+                                            cardWidth = railCardWidth,
+                                            showsMetadata = true,
+                                            endless = true,
+                                        )
+                                    }
+                                }
+                                if (cachedPeopleRail.isNotEmpty()) {
+                                    item(key = "people") {
+                                        HubsHorizontalShelf(
+                                            title = MatteryaCopy.fromPeopleLikeYou,
+                                            posts = cachedPeopleRail,
+                                            onOpen = onOpenVideo,
+                                            cardWidth = peopleRailCardWidth,
+                                            showsMetadata = true,
+                                            endless = true,
+                                        )
+                                    }
+                                }
+                                items(cachedVibeRails, key = { it.slug }) { rail ->
                                     HubsHorizontalShelf(
-                                        title = MatteryaCopy.continueWatching,
-                                        posts = continueWatching.take(railCardCount),
+                                        title = rail.title,
+                                        posts = rail.posts,
                                         onOpen = onOpenVideo,
                                         cardWidth = railCardWidth,
                                         showsMetadata = true,
                                         endless = true,
                                     )
                                 }
-                            }
-                            cachedBecauseYouWatched?.takeIf { it.posts.isNotEmpty() }?.let { because ->
-                                item(key = because.id) {
+                                items(cachedMoreWatchRails, key = { it.id }) { rail ->
                                     HubsHorizontalShelf(
-                                        title = because.title,
-                                        posts = because.posts,
+                                        title = rail.title,
+                                        posts = rail.posts,
                                         onOpen = onOpenVideo,
                                         cardWidth = railCardWidth,
                                         showsMetadata = true,
                                         endless = true,
                                     )
                                 }
+                                item(key = "bottom-pad") { Spacer(Modifier.height(bottomPad)) }
                             }
-                            if (cachedPeopleRail.isNotEmpty()) {
-                                item(key = "people") {
-                                    HubsHorizontalShelf(
-                                        title = MatteryaCopy.fromPeopleLikeYou,
-                                        posts = cachedPeopleRail,
-                                        onOpen = onOpenVideo,
-                                        cardWidth = peopleRailCardWidth,
-                                        showsMetadata = true,
-                                        endless = true,
-                                    )
-                                }
-                            }
-                            items(cachedVibeRails, key = { it.slug }) { rail ->
-                                HubsHorizontalShelf(
-                                    title = rail.title,
-                                    posts = rail.posts,
-                                    onOpen = onOpenVideo,
-                                    cardWidth = railCardWidth,
-                                    showsMetadata = true,
-                                    endless = true,
-                                )
-                            }
-                            items(cachedMoreWatchRails, key = { it.id }) { rail ->
-                                HubsHorizontalShelf(
-                                    title = rail.title,
-                                    posts = rail.posts,
-                                    onOpen = onOpenVideo,
-                                    cardWidth = railCardWidth,
-                                    showsMetadata = true,
-                                    endless = true,
-                                )
-                            }
-                            item(key = "bottom-pad") { Spacer(Modifier.height(bottomPad)) }
                         }
                     }
                 }
             }
         }
+
+        if (showLibrary) {
+            HubsLibraryScreen(
+                section = librarySection,
+                videos = libraryVideos,
+                onSectionChange = { librarySection = it },
+                onBack = { showLibrary = false },
+                onOpenVideo = onOpenVideo,
+                onOpenSpark = onOpenSpark,
+                miniPlayerBottomInset = miniPlayerBottomInset,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
+}
+
+/** iOS `libraryScreen` — full-screen Library over Hubs home. */
+@Composable
+private fun HubsLibraryScreen(
+    section: YouTubeLibrarySection,
+    videos: List<CountryPost>,
+    onSectionChange: (YouTubeLibrarySection) -> Unit,
+    onBack: () -> Unit,
+    onOpenVideo: (CountryPost) -> Unit,
+    onOpenSpark: (CountryPost) -> Unit,
+    miniPlayerBottomInset: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val bottomPad = if (miniPlayerBottomInset) 68.dp else 24.dp
+    Column(
+        modifier
+            .background(MatteryaColors.paper)
+            .statusBarsPadding(),
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = MatteryaDimens.pagePadding, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(MatteryaColors.surface.copy(alpha = 0.94f), CircleShape)
+                    .border(0.5.dp, MatteryaColors.border, CircleShape),
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = MatteryaColors.ink,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Text(
+                MatteryaCopy.library,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MatteryaColors.ink,
+            )
+            Spacer(Modifier.weight(1f))
+        }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(0.5.dp)
+                .background(MatteryaColors.divider),
+        )
+
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = MatteryaDimens.pagePadding, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            YouTubeLibrarySection.entries.forEach { tab ->
+                val selected = section == tab
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .clickable { onSectionChange(tab) }
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    Text(
+                        tab.title,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (selected) MatteryaColors.ink else MatteryaColors.inkMuted,
+                        maxLines = 1,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Box(
+                        Modifier
+                            .height(2.dp)
+                            .width(if (selected) 28.dp else 0.dp)
+                            .background(MatteryaColors.ink),
+                    )
+                }
+            }
+        }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(0.5.dp)
+                .background(MatteryaColors.divider),
+        )
+
+        if (videos.isEmpty()) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = MatteryaDimens.pagePadding),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    libraryEmptyCopy(section),
+                    color = MatteryaColors.inkMuted,
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        } else if (section == YouTubeLibrarySection.Reels) {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(3),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    start = MatteryaDimens.pagePadding,
+                    end = MatteryaDimens.pagePadding,
+                    top = 8.dp,
+                    bottom = bottomPad,
+                ),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                gridItems(videos, key = { it.id }) { post ->
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(9f / 16f)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MatteryaColors.canvasMuted)
+                            .clickable { onOpenSpark(post) },
+                    ) {
+                        VideoThumbnailView(
+                            post = post,
+                            maxLogicalPx = 320,
+                            showsPlayIcon = false,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+            }
+        } else {
+            LazyColumn(Modifier.fillMaxSize()) {
+                items(videos, key = { it.id }) { post ->
+                    YouTubeVideoListRow(
+                        post = post,
+                        onOpen = {
+                            if (post.isReel) onOpenSpark(post) else onOpenVideo(post)
+                        },
+                    )
+                }
+                item { Spacer(Modifier.height(bottomPad)) }
+            }
+        }
+    }
+}
+
+private fun libraryEmptyCopy(section: YouTubeLibrarySection): String = when (section) {
+    YouTubeLibrarySection.History ->
+        "Nothing in history yet. Videos you watch will appear here."
+    YouTubeLibrarySection.Reels ->
+        MatteryaCopy.saveSparksHint
+    YouTubeLibrarySection.WatchLater ->
+        "No saved videos. Tap Save on any video to watch later."
+    YouTubeLibrarySection.Liked ->
+        "No liked videos. Like videos while watching to collect them here."
+    YouTubeLibrarySection.Uploads ->
+        "No uploads yet. Publish a long-form video or ${MatteryaCopy.spark.lowercase()} from the create menu."
 }
 
 /** iOS `hubsHeroBillboard` — cinema featured card. */
@@ -698,28 +933,30 @@ private fun HubsTopBar(
     onLibrary: () -> Unit = {},
     onBrandTap: () -> Unit = {},
 ) {
+    // iOS: brand leading, trailing Library chip (not under status bar).
     Row(
         Modifier
             .fillMaxWidth()
             .background(MatteryaColors.surface.copy(alpha = 0.92f))
+            .statusBarsPadding()
             .padding(horizontal = MatteryaDimens.pagePadding, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        PlayBrandMark(
+            compact = true,
+            onClick = onBrandTap,
+            modifier = Modifier.weight(1f),
+        )
         Text(
             MatteryaCopy.library,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
             color = MatteryaColors.ink,
             modifier = Modifier
                 .clip(RoundedCornerShape(percent = 50))
                 .background(MatteryaColors.matteDeep)
                 .clickable(onClick = onLibrary)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-        )
-        PlayBrandMark(
-            compact = true,
-            onClick = onBrandTap,
-            modifier = Modifier.weight(1f),
+                .padding(horizontal = 14.dp, vertical = 10.dp),
         )
         IconButton(onClick = onSearch, modifier = Modifier.size(40.dp)) {
             Icon(Icons.Default.Search, contentDescription = MatteryaCopy.searchHubs, tint = MatteryaColors.ink)
@@ -753,6 +990,8 @@ fun MatteryaHubsView(
     seedVideos: List<CountryPost> = emptyList(),
     seedSparks: List<CountryPost> = emptyList(),
     seedContinueWatching: List<CountryPost> = emptyList(),
+    savedVideos: List<CountryPost> = emptyList(),
+    savedReels: List<CountryPost> = emptyList(),
     followingIds: Set<String> = emptySet(),
     viewerCountry: String? = null,
     currentUserId: String? = null,
@@ -768,6 +1007,8 @@ fun MatteryaHubsView(
     seedVideos = seedVideos,
     seedSparks = seedSparks,
     seedContinueWatching = seedContinueWatching,
+    savedVideos = savedVideos,
+    savedReels = savedReels,
     followingIds = followingIds,
     viewerCountry = viewerCountry,
     currentUserId = currentUserId,

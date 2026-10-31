@@ -273,9 +273,14 @@ fun MainTabView(
                             onEditProfile = { navigate(NavRoutes.editProfile) },
                             onOpenPost = { navigate(NavRoutes.post(it)) },
                             onOpenReels = { post ->
+                                // Prefer on-screen Sparks strip only (iOS instantOpenSeeds).
+                                // Cap at ~12 — presentGlobalSparks expands after first paint.
+                                val strip = state.sparkStrip.ifEmpty {
+                                    state.feedPosts.filter { it.isReel || it.playableVideoUrl != null }
+                                }
                                 vm.appState.openGlobalSparksViewer(
                                     startingPost = post,
-                                    seedPosts = state.sparkStrip.ifEmpty { state.feedPosts },
+                                    seedPosts = strip.take(12),
                                 )
                             },
                             onOpenCountry = { iso -> navigate(NavRoutes.country(iso)) },
@@ -1608,6 +1613,8 @@ private fun TabContent(
                 },
                 seedSparks = state.sparkStrip,
                 seedContinueWatching = state.continueWatching,
+                savedVideos = state.savedVideoPosts,
+                savedReels = state.savedReelPosts,
                 followingIds = appSnap.followingIds,
                 viewerCountry = state.profile?.countryCode,
                 currentUserId = state.profile?.userId,
