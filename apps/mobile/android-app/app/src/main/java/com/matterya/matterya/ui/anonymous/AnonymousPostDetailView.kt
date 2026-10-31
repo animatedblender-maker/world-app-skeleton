@@ -76,7 +76,7 @@ fun AnonymousPostDetailView(
                 if (current != null) {
                     AnonymousPostCard(
                         post = current,
-                        style = AnonymousPostCardStyle.Space,
+                        style = AnonymousPostCardStyle.Thread,
                         onOpen = {},
                         onOpenSpace = { current.spaceSlug?.let { store.pushSpace(it) } },
                         onOpenAuthor = { store.pushProfile(current.authorUsername) },

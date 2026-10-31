@@ -46,6 +46,9 @@ iOS is source of truth. Every screen/service is ported page-by-page. **No Flutte
 | `ViewModels/AnonymousStore.swift` | `viewmodel/AnonymousStore.kt` |
 | `Views/Anonymous/*` | `ui/anonymous/*` |
 | Tab `.anonymous` | AppMenu → full-screen `AnonymousRootView` (Android keeps Globe tab) |
+| `FeedPinchZoomPhoto` / `MatteryaPhotoLightbox` | `ui/components/MatteryaPhotoLightbox.kt` (`FeedPinchZoomPhoto` + lightbox) |
+| `MasqueradeVideoPoster` / `MasqueradeVideoPlayerCover` / thread hub player | `ui/components/MasqueradeVideoPlayer.kt` (+ `VideoPlayerView`) |
+| Anonymous card media (feed pinch + tap expand; thread in-frame video) | `AnonymousPostMediaBlock` in `ui/anonymous/AnonymousComponents.kt`; Thread style on post detail |
 
 ## Run
 ```bash

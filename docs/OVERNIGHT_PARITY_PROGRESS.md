@@ -54,13 +54,19 @@
 - Hubs: remount-free continuous mini player (watch up-next shipped)
 - Anonymous: Search profile deep-link / in-shell chat thread (Inbox now lists DMs + alerts)
 - Feed: continue-watching strip — **shipped 13:27Z**
-- Android Masquerade: deeper media/zoom, mod panel polish (DM threads wired)
+- Android Masquerade: mod panel polish (media zoom/video + DM threads wired)
 
 - **13:24Z Wave (scheduler):**
   - No Android/web worktrees to merge (only iOS wt: feed-home-butter, freeze-cold-open, names-r2 — left alone).
   - **Android Masquerade DMs:** `MessagesService.listConversations(inbox=masquerade)` + surface filter; Inbox tab = official Matterya threads; `ConversationRouteView` opens inside Masquerade; `refreshMasqueradeMessageUnread` for badge. `./gradlew :app:assembleDebug` **BUILD SUCCESSFUL**. APK: `apps/mobile/android-app/app/build/outputs/apk/debug/app-debug.apk` (~25MB).
   - **Web Anonymous:** Search + Inbox shell tabs (people/spaces/posts search; Masquerade DMs + alerts split ≥900px). People page desktop 2/3-col grid. `ng build` clean.
   - **Deploy SUCCESS:** gh-pages `30e7daf` → https://matterya.com (CDN may lag).
+
+- **Overnight wave — Android Masquerade media polish (no iOS edits):**
+  - Images: `FeedPinchZoomPhoto` (in-card pinch, resets on release) + tap → `MatteryaPhotoLightbox` (fullscreen pinch/pan, double-tap, drag-down dismiss).
+  - Videos: feed/space/profile → `MasqueradeVideoPoster` → fullscreen `MasqueradeVideoPlayerCover` (ExoPlayer/`VideoPlayerView`); post detail `AnonymousPostCardStyle.Thread` → `MasqueradeInFrameVideo` (in-frame controls + fullscreen).
+  - Wired in `AnonymousComponents` media block; `AnonymousPostDetailView` uses Thread style.
+  - `./gradlew :app:assembleDebug` **BUILD SUCCESSFUL**. APK: `apps/mobile/android-app/app/build/outputs/apk/debug/app-debug.apk`.
 
 - **13:30Z Wave (web parity):**
   - **Messages archive/delete:** GraphQL `archiveConversation` / `deleteConversation` on web `MessagesService` (same iOS mutations). Primary inbox: explicit Archive + Delete buttons (desktop + mobile); mobile swipe-left reveals Archive/Delete. Optimistic remove + local hidden-id fallback (iOS `ConversationInboxStore`). Requests keep Accept/Delete.
