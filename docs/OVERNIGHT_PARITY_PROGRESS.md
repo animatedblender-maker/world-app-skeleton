@@ -50,8 +50,8 @@
 - **13:27Z:** Web Home feed **Continue watching** strip (iOS FeedView parity) — Hubs history/in-progress via HubsCatalogService; 16:9 rail + progress; opens `/hubs/watch/:id`.
 
 ## Remaining gaps (web)
-- Messages: archive/delete swipe actions; CallKit-grade call UX polish
-- Hubs: remount-free continuous player; autoplay-next related
+- Messages: CallKit-grade call UX polish
+- Hubs: remount-free continuous mini player (watch up-next shipped)
 - Anonymous: Search profile deep-link / in-shell chat thread (Inbox now lists DMs + alerts)
 - Feed: continue-watching strip — **shipped 13:27Z**
 - Android Masquerade: deeper media/zoom, mod panel polish (DM threads wired)
@@ -61,3 +61,8 @@
   - **Android Masquerade DMs:** `MessagesService.listConversations(inbox=masquerade)` + surface filter; Inbox tab = official Matterya threads; `ConversationRouteView` opens inside Masquerade; `refreshMasqueradeMessageUnread` for badge. `./gradlew :app:assembleDebug` **BUILD SUCCESSFUL**. APK: `apps/mobile/android-app/app/build/outputs/apk/debug/app-debug.apk` (~25MB).
   - **Web Anonymous:** Search + Inbox shell tabs (people/spaces/posts search; Masquerade DMs + alerts split ≥900px). People page desktop 2/3-col grid. `ng build` clean.
   - **Deploy SUCCESS:** gh-pages `30e7daf` → https://matterya.com (CDN may lag).
+
+- **13:30Z Wave (web parity):**
+  - **Messages archive/delete:** GraphQL `archiveConversation` / `deleteConversation` on web `MessagesService` (same iOS mutations). Primary inbox: explicit Archive + Delete buttons (desktop + mobile); mobile swipe-left reveals Archive/Delete. Optimistic remove + local hidden-id fallback (iOS `ConversationInboxStore`). Requests keep Accept/Delete.
+  - **Hubs watch up-next:** `video-player` emits `ended`; watch page autoplays first `related[]` item via same-route navigate (component reused; player `src` updates in place). Near-end timeupdate fallback for flaky R2/HLS end events.
+  - `ng build --configuration production` clean. Deploy via `npm run deploy:gh-pages`.

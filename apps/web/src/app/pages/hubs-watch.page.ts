@@ -44,6 +44,7 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
               (timeUpdate)="onTime($event)"
               (playState)="onPlayState($event)"
               (aspectRatio)="onVideoAspect($event)"
+              (ended)="onVideoEnded()"
             ></app-video-player>
             <div class="no-media" *ngIf="!mediaSrc">
               <img *ngIf="poster" [src]="poster" alt="" />
@@ -1474,6 +1475,9 @@ export class HubsWatchPageComponent implements OnInit, OnDestroy {
   private loadSeq = 0;
   private mediaMql: MediaQueryList | null = null;
   private mediaMqlHandler: (() => void) | null = null;
+  /** Guard double-fire from ended + near-end timeupdate. */
+  private autoplayNextArmed = true;
+  private lastAutoplayFromId: string | null = null;
 
   constructor(
     public catalog: HubsCatalogService,
@@ -1598,6 +1602,7 @@ export class HubsWatchPageComponent implements OnInit, OnDestroy {
       // —— First paint ASAP: player + chrome (comments/auth deferred) ——
       post = this.engagement.applyLikeState(post);
       this.post = post;
+      this.autoplayNextArmed = true;
       this.saved = this.catalog.isSaved(post.id);
       this.description = this.catalog.displayBody(post) || post.media_caption || '';
       if (String(post.external_ref_type || '').toLowerCase() === 'hub') {
@@ -1895,7 +1900,34 @@ export class HubsWatchPageComponent implements OnInit, OnDestroy {
       });
       return;
     }
+    // Same HubsWatchPageComponent instance — paramMap → load(); video player updates src in place.
     void this.router.navigate(['/hubs', 'watch', r.id]);
+  }
+
+  /** iOS-like up-next: when the current long-form ends, play the first related item. */
+  onVideoEnded(): void {
+    if (!this.autoplayNextArmed || !this.post) return;
+    const fromId = this.post.id;
+    if (this.lastAutoplayFromId === fromId) return;
+    const next = this.related.find((r) => r.id && r.id !== fromId) ?? null;
+    if (!next) {
+      // Related rail still filling — top up then retry once shortly.
+      this.appendRelatedPage();
+      window.setTimeout(() => {
+        if (!this.autoplayNextArmed || !this.post || this.post.id !== fromId) return;
+        if (this.lastAutoplayFromId === fromId) return;
+        const retry = this.related.find((r) => r.id && r.id !== fromId) ?? null;
+        if (!retry) return;
+        this.autoplayNextArmed = false;
+        this.lastAutoplayFromId = fromId;
+        this.openRelated(retry);
+      }, 280);
+      return;
+    }
+    this.autoplayNextArmed = false;
+    this.lastAutoplayFromId = fromId;
+    // Soft handoff: keep shell mounted; route param change reuses this page.
+    this.openRelated(next);
   }
 
   async toggleLike(): Promise<void> {
@@ -2228,10 +2260,25 @@ export class HubsWatchPageComponent implements OnInit, OnDestroy {
   onTime(ev: { currentTime: number; duration: number }): void {
     if (!this.post) return;
     this.catalog.notePlaybackPosition(ev.currentTime, this.post.id, ev.duration);
+    // Fallback up-next if `ended` is flaky on some R2/HLS streams.
+    const dur = Number(ev.duration);
+    const t = Number(ev.currentTime);
+    if (
+      this.autoplayNextArmed &&
+      Number.isFinite(dur) &&
+      dur > 3 &&
+      Number.isFinite(t) &&
+      t >= dur - 0.35
+    ) {
+      this.onVideoEnded();
+    }
   }
 
   onPlayState(playing: boolean): void {
     this.playback.setPlaying(playing);
+    if (playing) {
+      this.autoplayNextArmed = true;
+    }
   }
 
   onVideoAspect(ratio: number): void {

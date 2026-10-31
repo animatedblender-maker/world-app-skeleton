@@ -272,6 +272,18 @@ mutation DeclineMessageRequest($conversationId: ID!) {
 }
 `;
 
+const ARCHIVE_CONVERSATION_MUTATION = `
+mutation ArchiveConversation($conversationId: ID!) {
+  archiveConversation(conversation_id: $conversationId)
+}
+`;
+
+const DELETE_CONVERSATION_MUTATION = `
+mutation DeleteConversation($conversationId: ID!) {
+  deleteConversation(conversation_id: $conversationId)
+}
+`;
+
 @Injectable({ providedIn: 'root' })
 export class MessagesService {
   private pendingStorageKey = 'worldapp.pendingConversation';
@@ -404,6 +416,24 @@ export class MessagesService {
       { conversationId }
     );
     return !!declineMessageRequest;
+  }
+
+  /** iOS MessagesService.archiveConversation — hide from Primary without deleting. */
+  async archiveConversation(conversationId: string): Promise<boolean> {
+    const { archiveConversation } = await this.gql.request<{ archiveConversation: boolean }>(
+      ARCHIVE_CONVERSATION_MUTATION,
+      { conversationId }
+    );
+    return !!archiveConversation;
+  }
+
+  /** iOS MessagesService.deleteConversation — remove from inbox for this member. */
+  async deleteConversation(conversationId: string): Promise<boolean> {
+    const { deleteConversation } = await this.gql.request<{ deleteConversation: boolean }>(
+      DELETE_CONVERSATION_MUTATION,
+      { conversationId }
+    );
+    return !!deleteConversation;
   }
 
   private mapAuthor(row: any): PostAuthor | null {

@@ -68,6 +68,7 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
             </div>
             <div class="status" *ngIf="loadingConversations">Loading conversations…</div>
             <div class="status error" *ngIf="conversationError">{{ conversationError }}</div>
+            <div class="status feedback" *ngIf="inboxFeedback">{{ inboxFeedback }}</div>
             <div class="status empty" *ngIf="!loadingConversations && !conversations.length">
               <ng-container *ngIf="inboxFolder === 'requests'; else primaryEmpty">
                 No message requests. When someone you don’t follow messages you, it shows up here.
@@ -79,33 +80,75 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
             <div
               class="conversation-block"
               *ngFor="let convo of conversations; trackBy: trackConversationById"
+              [class.swipe-open]="swipeOpenId === convo.id"
             >
-              <button
-                class="conversation"
-                type="button"
-                [class.active]="convo.id === activeConversationId"
-                [class.unread]="isConversationUnread(convo)"
-                (click)="selectConversation(convo, true)"
+              <div
+                class="conversation-swipe"
+                (touchstart)="onConvoTouchStart($event, convo)"
+                (touchmove)="onConvoTouchMove($event, convo)"
+                (touchend)="onConvoTouchEnd($event, convo)"
+                (touchcancel)="onConvoTouchCancel()"
               >
-                <div class="avatar">
-                  <img
-                    *ngIf="otherMember(convo)?.avatar_url"
-                    [src]="otherMember(convo)?.avatar_url"
-                    alt=""
-                  />
-                  <div class="initials" *ngIf="!otherMember(convo)?.avatar_url">
-                    {{ initialsFor(otherMember(convo)) }}
-                  </div>
+                <div
+                  class="conversation-slide"
+                  [style.transform]="swipeOpenId === convo.id ? 'translateX(-148px)' : null"
+                >
+                  <button
+                    class="conversation"
+                    type="button"
+                    [class.active]="convo.id === activeConversationId"
+                    [class.unread]="isConversationUnread(convo)"
+                    (click)="onConversationRowClick(convo)"
+                  >
+                    <div class="avatar">
+                      <img
+                        *ngIf="otherMember(convo)?.avatar_url"
+                        [src]="otherMember(convo)?.avatar_url"
+                        alt=""
+                      />
+                      <div class="initials" *ngIf="!otherMember(convo)?.avatar_url">
+                        {{ initialsFor(otherMember(convo)) }}
+                      </div>
+                    </div>
+                    <div class="meta">
+                      <div class="name-row">
+                        <div class="name">{{ displayNameFor(otherMember(convo)) }}</div>
+                        <div class="time">{{ formatTime(convo.last_message_at || convo.updated_at) }}</div>
+                      </div>
+                      <div class="snippet">{{ conversationSnippet(convo) }}</div>
+                    </div>
+                    <span class="conversation-unread" *ngIf="isConversationUnread(convo)" aria-hidden="true"></span>
+                  </button>
                 </div>
-                <div class="meta">
-                  <div class="name-row">
-                    <div class="name">{{ displayNameFor(otherMember(convo)) }}</div>
-                    <div class="time">{{ formatTime(convo.last_message_at || convo.updated_at) }}</div>
-                  </div>
-                  <div class="snippet">{{ conversationSnippet(convo) }}</div>
+                <div class="swipe-actions" aria-hidden="false">
+                  <button
+                    type="button"
+                    class="swipe-btn archive"
+                    *ngIf="inboxFolder === 'primary'"
+                    [disabled]="inboxBusyId === convo.id"
+                    (click)="archiveConversation(convo); $event.stopPropagation()"
+                  >
+                    Archive
+                  </button>
+                  <button
+                    type="button"
+                    class="swipe-btn delete"
+                    [disabled]="inboxBusyId === convo.id || requestBusyId === convo.id"
+                    (click)="onSwipeDelete(convo); $event.stopPropagation()"
+                  >
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    class="swipe-btn accept"
+                    *ngIf="inboxFolder === 'requests'"
+                    [disabled]="requestBusyId === convo.id"
+                    (click)="acceptRequest(convo); $event.stopPropagation()"
+                  >
+                    Accept
+                  </button>
                 </div>
-                <span class="conversation-unread" *ngIf="isConversationUnread(convo)" aria-hidden="true"></span>
-              </button>
+              </div>
               <div class="request-actions" *ngIf="inboxFolder === 'requests'">
                 <button
                   type="button"
@@ -120,6 +163,24 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
                   class="request-btn decline"
                   [disabled]="requestBusyId === convo.id"
                   (click)="declineRequest(convo); $event.stopPropagation()"
+                >
+                  Delete
+                </button>
+              </div>
+              <div class="inbox-actions" *ngIf="inboxFolder === 'primary'">
+                <button
+                  type="button"
+                  class="inbox-btn archive"
+                  [disabled]="inboxBusyId === convo.id"
+                  (click)="archiveConversation(convo); $event.stopPropagation()"
+                >
+                  Archive
+                </button>
+                <button
+                  type="button"
+                  class="inbox-btn delete"
+                  [disabled]="inboxBusyId === convo.id"
+                  (click)="deleteConversation(convo); $event.stopPropagation()"
                 >
                   Delete
                 </button>
@@ -574,18 +635,60 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
       padding:16px 16px 8px;
     }
     .status.error{ color:var(--m-danger, #ea000b); }
+    .status.feedback{ color:var(--m-ink-secondary, #6b645d); }
     .status.empty{ text-align:center; padding:40px 20px; line-height:1.45; }
     .conversation-block{
       display:flex;
       flex-direction:column;
       gap:0;
+      position:relative;
     }
-    .request-actions{
+    .conversation-swipe{
+      position:relative;
+      overflow:hidden;
+      touch-action:pan-y;
+    }
+    .conversation-slide{
+      position:relative;
+      z-index:1;
+      background:var(--m-paper, #f8f6f2);
+      transition:transform 0.18s ease-out;
+      will-change:transform;
+    }
+    .swipe-actions{
+      position:absolute;
+      inset:0 6px 0 auto;
+      display:none;
+      align-items:stretch;
+      gap:0;
+      z-index:0;
+      width:148px;
+      border-radius:14px;
+      overflow:hidden;
+    }
+    .conversation-block.swipe-open .swipe-actions{ display:flex; }
+    .swipe-btn{
+      flex:1;
+      border:0;
+      font:inherit;
+      font-size:12px;
+      font-weight:700;
+      cursor:pointer;
+      color:#fefdfb;
+      padding:0 8px;
+    }
+    .swipe-btn:disabled{ opacity:0.55; cursor:default; }
+    .swipe-btn.archive{ background:var(--m-accent, #7b6347); }
+    .swipe-btn.accept{ background:var(--m-accent, #7b6347); }
+    .swipe-btn.delete{ background:var(--m-danger, #ea000b); }
+    .request-actions,
+    .inbox-actions{
       display:flex;
       gap:8px;
       padding:0 14px 10px 70px;
     }
-    .request-btn{
+    .request-btn,
+    .inbox-btn{
       border:0;
       border-radius:10px;
       padding:7px 12px;
@@ -594,12 +697,15 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
       font-weight:700;
       cursor:pointer;
     }
-    .request-btn:disabled{ opacity:0.5; cursor:default; }
-    .request-btn.accept{
+    .request-btn:disabled,
+    .inbox-btn:disabled{ opacity:0.5; cursor:default; }
+    .request-btn.accept,
+    .inbox-btn.archive{
       background:var(--m-accent, #7b6347);
       color:#fefdfb;
     }
-    .request-btn.decline{
+    .request-btn.decline,
+    .inbox-btn.delete{
       background:transparent;
       color:var(--m-danger, #ea000b);
       border:0.5px solid color-mix(in srgb, var(--m-danger, #ea000b) 35%, transparent);
@@ -1355,6 +1461,10 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
       .message-list{ padding:16px 20px 20px; gap:12px; }
       .bubble-col{ max-width:min(62%, 420px); }
       .composer{ padding:12px 20px calc(12px + env(safe-area-inset-bottom)); }
+      /* Desktop: explicit Archive/Delete; swipe chrome unused */
+      .inbox-actions{ display:flex; }
+      .swipe-actions{ display:none !important; }
+      .conversation-block.swipe-open .conversation-slide{ transform:none !important; }
     }
     @media (max-width: 899px){
       .wrap{ padding:0; }
@@ -1372,6 +1482,8 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
       .layout.thread-only{ height:100%; }
       .thread{ min-height:0; height:100%; }
       .messages, .message-list{ min-height:0; }
+      /* Mobile: swipe reveal; keep compact explicit buttons too */
+      .inbox-actions{ padding-top:2px; }
     }
     @media (max-width: 600px){
       .wrap{ padding:0; }
@@ -1421,6 +1533,16 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   /** iOS MessagesInboxFolder — Primary | Requests */
   inboxFolder: 'primary' | 'requests' = 'primary';
   requestBusyId: string | null = null;
+  inboxBusyId: string | null = null;
+  inboxFeedback = '';
+  private inboxFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Mobile swipe-reveal open conversation id (iOS swipeActions parity). */
+  swipeOpenId: string | null = null;
+  private swipeStartX = 0;
+  private swipeStartY = 0;
+  private swipeTracking = false;
+  private swipeMoved = false;
+  private readonly hiddenInboxKey = 'matterya.messages.inbox.hidden.v1';
   loadingConversations = false;
   loadingMessages = false;
   conversationError = '';
@@ -1608,6 +1730,10 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       window.clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+    if (this.inboxFeedbackTimer) {
+      clearTimeout(this.inboxFeedbackTimer);
+      this.inboxFeedbackTimer = null;
+    }
     this.cleanupCall();
     this.clearMedia();
   }
@@ -1677,6 +1803,177 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  onConversationRowClick(convo: Conversation): void {
+    if (this.swipeMoved) {
+      this.swipeMoved = false;
+      return;
+    }
+    if (this.swipeOpenId && this.swipeOpenId !== convo.id) {
+      this.swipeOpenId = null;
+    } else if (this.swipeOpenId === convo.id) {
+      this.swipeOpenId = null;
+      this.forceUi();
+      return;
+    }
+    void this.selectConversation(convo, true);
+  }
+
+  onConvoTouchStart(ev: TouchEvent, convo: Conversation): void {
+    if (this.inboxFolder !== 'primary' && this.inboxFolder !== 'requests') return;
+    if (!ev.touches?.length) return;
+    this.swipeTracking = true;
+    this.swipeMoved = false;
+    this.swipeStartX = ev.touches[0].clientX;
+    this.swipeStartY = ev.touches[0].clientY;
+    if (this.swipeOpenId && this.swipeOpenId !== convo.id) {
+      this.swipeOpenId = null;
+    }
+  }
+
+  onConvoTouchMove(ev: TouchEvent, _convo: Conversation): void {
+    if (!this.swipeTracking || !ev.touches?.length) return;
+    const dx = ev.touches[0].clientX - this.swipeStartX;
+    const dy = ev.touches[0].clientY - this.swipeStartY;
+    if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+      this.swipeMoved = true;
+    }
+  }
+
+  onConvoTouchEnd(ev: TouchEvent, convo: Conversation): void {
+    if (!this.swipeTracking) return;
+    this.swipeTracking = false;
+    const touch = ev.changedTouches?.[0];
+    if (!touch) return;
+    const dx = touch.clientX - this.swipeStartX;
+    const dy = touch.clientY - this.swipeStartY;
+    if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy)) {
+      if (this.swipeOpenId === convo.id && Math.abs(dx) < 12) {
+        // tap while open — close without selecting
+        this.swipeOpenId = null;
+        this.swipeMoved = true;
+        this.forceUi();
+      }
+      return;
+    }
+    if (dx < -48) {
+      this.swipeOpenId = convo.id;
+      this.swipeMoved = true;
+    } else if (dx > 36 && this.swipeOpenId === convo.id) {
+      this.swipeOpenId = null;
+      this.swipeMoved = true;
+    }
+    this.forceUi();
+  }
+
+  onConvoTouchCancel(): void {
+    this.swipeTracking = false;
+  }
+
+  onSwipeDelete(convo: Conversation): void {
+    if (this.inboxFolder === 'requests') {
+      void this.declineRequest(convo);
+      return;
+    }
+    void this.deleteConversation(convo);
+  }
+
+  async archiveConversation(convo: Conversation): Promise<void> {
+    if (!convo?.id || this.inboxBusyId) return;
+    this.inboxBusyId = convo.id;
+    this.swipeOpenId = null;
+    this.removeConversationLocally(convo.id);
+    this.markInboxHidden(convo.id);
+    this.showInboxFeedback('Chat archived');
+    this.forceUi();
+    try {
+      await this.messagesService.archiveConversation(convo.id);
+      this.clearInboxHidden(convo.id);
+    } catch (e: any) {
+      // Keep locally hidden (iOS ConversationInboxStore.markArchived fallback).
+      this.conversationError = e?.message ?? String(e);
+    } finally {
+      this.inboxBusyId = null;
+      this.forceUi();
+    }
+  }
+
+  async deleteConversation(convo: Conversation): Promise<void> {
+    if (!convo?.id || this.inboxBusyId) return;
+    this.inboxBusyId = convo.id;
+    this.swipeOpenId = null;
+    this.removeConversationLocally(convo.id);
+    this.markInboxHidden(convo.id);
+    this.showInboxFeedback('Chat removed');
+    this.forceUi();
+    try {
+      await this.messagesService.deleteConversation(convo.id);
+      this.clearInboxHidden(convo.id);
+    } catch (e: any) {
+      this.conversationError = e?.message ?? String(e);
+    } finally {
+      this.inboxBusyId = null;
+      this.forceUi();
+    }
+  }
+
+  private removeConversationLocally(convoId: string): void {
+    this.conversations = this.conversations.filter((c) => c.id !== convoId);
+    if (this.activeConversationId === convoId) {
+      this.activeConversation = null;
+      this.activeConversationId = null;
+      this.messages = [];
+      this.mobileThreadOnly = false;
+    }
+    if (this.pendingConversation?.id === convoId) {
+      this.pendingConversation = null;
+      this.messagesService.clearPendingConversation();
+    }
+  }
+
+  private showInboxFeedback(text: string): void {
+    this.inboxFeedback = text;
+    if (this.inboxFeedbackTimer) clearTimeout(this.inboxFeedbackTimer);
+    this.inboxFeedbackTimer = setTimeout(() => {
+      this.inboxFeedback = '';
+      this.inboxFeedbackTimer = null;
+      this.forceUi();
+    }, 2200);
+  }
+
+  private readHiddenInboxIds(): Set<string> {
+    if (typeof window === 'undefined') return new Set();
+    try {
+      const raw = window.localStorage.getItem(this.hiddenInboxKey);
+      if (!raw) return new Set();
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return new Set();
+      return new Set(parsed.map((id) => String(id)).filter(Boolean));
+    } catch {
+      return new Set();
+    }
+  }
+
+  private writeHiddenInboxIds(ids: Set<string>): void {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(this.hiddenInboxKey, JSON.stringify([...ids]));
+    } catch {
+      // ignore quota
+    }
+  }
+
+  private markInboxHidden(convoId: string): void {
+    const ids = this.readHiddenInboxIds();
+    ids.add(convoId);
+    this.writeHiddenInboxIds(ids);
+  }
+
+  private clearInboxHidden(convoId: string): void {
+    const ids = this.readHiddenInboxIds();
+    if (!ids.delete(convoId)) return;
+    this.writeHiddenInboxIds(ids);
+  }
+
   async loadConversations(selectId?: string | null, silent = false): Promise<void> {
     if (!silent) {
       this.loadingConversations = true;
@@ -1688,20 +1985,25 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       const inbox = this.inboxFolder === 'requests' ? 'requests' : 'primary';
       const serverConvos = await this.messagesService.listConversations(40, inbox);
       if (this.destroyed) return;
+      const hidden = this.readHiddenInboxIds();
       const pending = this.pendingConversation;
       const serverHasPending =
         !!pending && serverConvos.some((item) => item.id === pending.id);
-      const merged = [...serverConvos];
+      const merged = serverConvos.filter((c) => !hidden.has(c.id));
       const seen = new Set(merged.map((item) => item.id));
 
       // Only merge pending/active into Primary — Requests is a strict API folder.
       if (inbox === 'primary') {
-        if (pending && !seen.has(pending.id)) {
+        if (pending && !seen.has(pending.id) && !hidden.has(pending.id)) {
           merged.unshift(pending);
           seen.add(pending.id);
         }
 
-        if (this.activeConversation && !seen.has(this.activeConversation.id)) {
+        if (
+          this.activeConversation &&
+          !seen.has(this.activeConversation.id) &&
+          !hidden.has(this.activeConversation.id)
+        ) {
           merged.unshift(this.activeConversation);
           seen.add(this.activeConversation.id);
         }

@@ -696,6 +696,8 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
   @Output() viewed = new EventEmitter<void>();
   @Output() timeUpdate = new EventEmitter<{ currentTime: number; duration: number }>();
   @Output() playState = new EventEmitter<boolean>();
+  /** Content stream reached natural end (not ads). */
+  @Output() ended = new EventEmitter<void>();
   /** Fired when the content stream errors (e.g. expired R2 403) so parents can re-resolve. */
   @Output() mediaError = new EventEmitter<{ code?: number; message?: string }>();
   @ViewChild('videoEl', { static: true }) videoRef!: ElementRef<HTMLVideoElement>;
@@ -1253,6 +1255,8 @@ export class VideoPlayerComponent implements AfterViewInit, OnChanges, OnDestroy
     this.controlsVisible = true;
     this.currentTime = 0;
     this.progressPercent = 0;
+    this.playState.emit(false);
+    this.ended.emit();
   }
 
   setBuffering(state: boolean): void {
