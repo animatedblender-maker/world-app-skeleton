@@ -302,6 +302,13 @@ app.get('/management/policy.pdf', (req, res) => {
     res.status(500).send('policy handbook pdf failed');
   });
 });
+/** Alias without a trailing extension (some proxies mishandle .pdf paths). */
+app.get('/management/policy/pdf', (req, res) => {
+  void handlePolicyHandbookPdfGet(req, res).catch((err) => {
+    console.error('[management/policy/pdf]', err?.message ?? err);
+    res.status(500).send('policy handbook pdf failed');
+  });
+});
 app.get('/reports', (req, res) => {
   void handleModerationQueueGet(req, res).catch((err) => {
     console.error('[reports]', err?.message ?? err);

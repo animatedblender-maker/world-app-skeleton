@@ -263,7 +263,7 @@ function renderHandbookHtml(bodyHtml: string): string {
   </div>
   <span class="muted">Moderator training</span>
   <span style="flex:1"></span>
-  <a class="nav" href="/management/policy.pdf">Download PDF</a>
+  <a class="nav" href="/management/policy/pdf">Download PDF</a>
   <a class="nav" href="/management">Management</a>
   <a class="nav" href="/reports">Content queue</a>
   <a class="nav" href="/reports/logout">Log out</a>

@@ -33,7 +33,7 @@ const LINKS: HubLink[] = [
   },
   {
     group: 'Moderation',
-    href: '/management/policy.pdf',
+    href: '/management/policy/pdf',
     title: 'Handbook PDF',
     blurb: 'Printable / offline Matterya Moderator Handbook.',
   },
