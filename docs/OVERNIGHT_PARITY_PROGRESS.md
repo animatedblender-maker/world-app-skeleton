@@ -65,6 +65,7 @@
   - Error banner with Dismiss / Retry; peer-drop → Reconnecting… (8s) then disconnect; LiveKit `Reconnecting`/`Reconnected` wired when available.
   - Text messaging + archive/delete untouched. Prod env already has `livekitUrl` (`wss://world-app-9jjcc056.livekit.cloud`); token via `POST /livekit/token` (auth required). Dev env `livekitUrl` empty → friendly unavailable message.
   - `ng build --configuration production` clean. Deploy via `npm run deploy:gh-pages`.
+  - **Deploy SUCCESS:** gh-pages `f3fa525` → https://matterya.com (CDN may lag). Source `2334e687` on `ios-native`.
 
 - **13:24Z Wave (scheduler):**
   - No Android/web worktrees to merge (only iOS wt: feed-home-butter, freeze-cold-open, names-r2 — left alone).
