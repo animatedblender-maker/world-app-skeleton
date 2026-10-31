@@ -43,3 +43,6 @@ See `docs/ios-golden-file-inventory.txt` (~194 Swift files).
 - [ ] Theme + Copy
 - [ ] Surfaces (checklist above)
 - [ ] QA vs iOS
+
+## Wipe
+- Removed `apps/web` and `apps/mobile/android-app` at commit after this plan.
