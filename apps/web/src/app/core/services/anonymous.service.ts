@@ -92,6 +92,24 @@ export type AnonymousApiError = {
   status: number;
 };
 
+export type AnonymousNotification = {
+  id: string;
+  kind: string;
+  title?: string | null;
+  body?: string | null;
+  post_id?: string | null;
+  space_id?: string | null;
+  actor_username?: string | null;
+  created_at: string;
+  read_at?: string | null;
+};
+
+export type AnonymousSearchResults = {
+  people: AnonymousProfile[];
+  spaces: AnonymousSpace[];
+  posts: AnonymousPost[];
+};
+
 @Injectable({ providedIn: 'root' })
 export class AnonymousService {
   private readonly timeoutMs = 12000;
@@ -273,6 +291,79 @@ export class AnonymousService {
     };
     if (opts?.cursor) q['cursor'] = opts.cursor;
     return this.request('GET', '/v1/anonymous/feed', undefined, q);
+  }
+
+  async search(
+    query: string,
+    limit = 12
+  ): Promise<{ ok: true } & AnonymousSearchResults | AnonymousApiError> {
+    const q = query.trim();
+    if (!q) {
+      return { ok: true, people: [], spaces: [], posts: [] };
+    }
+    const res = await this.request<any>('GET', '/v1/anonymous/search', undefined, {
+      q,
+      limit: String(Math.min(Math.max(limit, 1), 24)),
+    });
+    if ('ok' in res && res.ok === false) return res as AnonymousApiError;
+    const data = res?.data ?? res;
+    return {
+      ok: true,
+      people: Array.isArray(data?.people)
+        ? data.people
+        : Array.isArray(data?.profiles)
+          ? data.profiles
+          : [],
+      spaces: Array.isArray(data?.spaces) ? data.spaces : [],
+      posts: Array.isArray(data?.posts) ? data.posts : [],
+    };
+  }
+
+  async notifications(opts?: {
+    cursor?: string | null;
+    limit?: number;
+  }): Promise<
+    | {
+        ok: true;
+        notifications: AnonymousNotification[];
+        next_cursor: string | null;
+        unread_count: number;
+      }
+    | AnonymousApiError
+  > {
+    const q: Record<string, string> = {
+      limit: String(Math.min(Math.max(opts?.limit ?? 40, 1), 80)),
+    };
+    if (opts?.cursor) q['cursor'] = opts.cursor;
+    const res = await this.request<any>('GET', '/v1/anonymous/notifications', undefined, q);
+    if ('ok' in res && res.ok === false) return res as AnonymousApiError;
+    const data = res?.data ?? res;
+    const items: AnonymousNotification[] = Array.isArray(data?.notifications)
+      ? data.notifications
+      : Array.isArray(data?.items)
+        ? data.items
+        : [];
+    return {
+      ok: true,
+      notifications: items,
+      next_cursor: data?.next_cursor ?? data?.nextCursor ?? null,
+      unread_count:
+        typeof data?.unread_count === 'number'
+          ? data.unread_count
+          : typeof data?.unreadCount === 'number'
+            ? data.unreadCount
+            : items.filter((n) => !n.read_at).length,
+    };
+  }
+
+  async markNotificationRead(id: string): Promise<{ ok: true } | AnonymousApiError> {
+    const trimmed = id.trim();
+    if (!trimmed) return { ok: true };
+    return this.request('POST', `/v1/anonymous/notifications/${encodeURIComponent(trimmed)}/read`, {});
+  }
+
+  async markAllNotificationsRead(): Promise<{ ok: true; updated?: number } | AnonymousApiError> {
+    return this.request('POST', '/v1/anonymous/notifications/read-all', {});
   }
 
   async checkoutStart(body: Record<string, unknown> = {}): Promise<AnonymousApiError> {

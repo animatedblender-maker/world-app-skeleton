@@ -98,32 +98,50 @@ class MessagesService(
         }
     }
 
-    suspend fun listConversations(limit: Int = 40): List<Conversation> {
+    /**
+     * @param inbox primary | requests | all | masquerade — mirrors iOS MessagesService.
+     * Masquerade inbox never mixes with normal Messages welcome DMs.
+     */
+    suspend fun listConversations(limit: Int = 40, inbox: String = "primary"): List<Conversation> {
+        val folder = inbox.trim().lowercase().ifEmpty { "primary" }
         runCatching { auth.ensureValidToken() }
         return try {
-            val conversations = fetchConversations(limit, retryingAuth = true)
-            auth.currentUser?.id?.let {
-                cacheUserId = it
-                cachedConversations = conversations
+            val conversations = fetchConversations(limit, folder, retryingAuth = true)
+            if (folder == "primary" || folder == "all") {
+                auth.currentUser?.id?.let {
+                    cacheUserId = it
+                    cachedConversations = conversations
+                }
+                runCatching { prefetchRecentThreads(4) }
+            } else {
+                conversations.forEach { storeConversation(it) }
             }
-            runCatching { prefetchRecentThreads(4) }
             conversations
         } catch (e: Exception) {
-            val userId = auth.currentUser?.id
-            if (userId != null && cacheUserId == userId && cachedConversations.isNotEmpty()) {
-                return cachedConversations
+            if (folder == "primary" || folder == "all") {
+                val userId = auth.currentUser?.id
+                if (userId != null && cacheUserId == userId && cachedConversations.isNotEmpty()) {
+                    return cachedConversations
+                }
             }
             throw e
         }
     }
 
-    private suspend fun fetchConversations(limit: Int, retryingAuth: Boolean): List<Conversation> {
+    private suspend fun fetchConversations(
+        limit: Int,
+        inbox: String,
+        retryingAuth: Boolean,
+    ): List<Conversation> {
         return try {
             val data = gql.request(
                 GqlOps.conversations(),
-                mapOf("limit" to JsonPrimitive(limit)),
+                mapOf(
+                    "limit" to JsonPrimitive(limit),
+                    "inbox" to JsonPrimitive(inbox),
+                ),
             )
-            mapConversations(data["conversations"])
+            filterConversations(mapConversations(data["conversations"]), inbox)
         } catch (e: Exception) {
             val message = e.message?.lowercase().orEmpty()
             val authFailure = message.contains("auth") ||
@@ -132,9 +150,30 @@ class MessagesService(
                 message.contains("token")
             if (retryingAuth && authFailure) {
                 runCatching { auth.ensureValidToken() }
-                return fetchConversations(limit, retryingAuth = false)
+                return fetchConversations(limit, inbox, retryingAuth = false)
+            }
+            if (message.contains("inbox") || message.contains("unknown") || message.contains("surface")) {
+                return fetchConversationsLegacy(limit, inbox)
             }
             throw e
+        }
+    }
+
+    private suspend fun fetchConversationsLegacy(limit: Int, inbox: String): List<Conversation> {
+        val data = gql.request(
+            GqlOps.conversationsLegacy(),
+            mapOf("limit" to JsonPrimitive(limit)),
+        )
+        return filterConversations(mapConversations(data["conversations"]), inbox)
+    }
+
+    private fun filterConversations(list: List<Conversation>, inbox: String): List<Conversation> {
+        val folder = inbox.trim().lowercase()
+        return when (folder) {
+            "masquerade" -> list.filter { it.isMasqueradeSurface }
+            "all" -> list
+            "requests" -> list.filter { it.isRequest && !it.isMasqueradeSurface }
+            else -> list.filter { !it.isMasqueradeSurface && !it.isRequest }
         }
     }
 

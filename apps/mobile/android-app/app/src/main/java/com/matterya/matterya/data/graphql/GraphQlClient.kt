@@ -170,18 +170,19 @@ object GqlOps {
 
     const val CONVERSATION_FIELDS = """
     id is_direct created_at updated_at last_message_at
+    is_request request_status surface
     members {
-      user_id display_name username avatar_url country_name country_code last_read_at
+      user_id display_name username avatar_url country_name country_code last_read_at is_verified
     }
     last_message {
       id conversation_id sender_id body media_type media_path media_name media_mime media_size created_at updated_at
-      sender { user_id display_name username avatar_url country_name country_code }
+      sender { user_id display_name username avatar_url country_name country_code is_verified }
     }
     """
 
     const val MESSAGE_FIELDS = """
     id conversation_id sender_id body media_type media_path media_name media_mime media_size created_at updated_at
-    sender { user_id display_name username avatar_url country_name country_code }
+    sender { user_id display_name username avatar_url country_name country_code is_verified }
     """
 
     // ── Posts ──────────────────────────────────────────────────────────
@@ -423,6 +424,12 @@ object GqlOps {
     // ── Messages ───────────────────────────────────────────────────────
 
     fun conversations() = """
+      query Conversations(${'$'}limit: Int, ${'$'}inbox: String) {
+        conversations(limit: ${'$'}limit, inbox: ${'$'}inbox) { $CONVERSATION_FIELDS }
+      }
+    """
+
+    fun conversationsLegacy() = """
       query Conversations(${'$'}limit: Int) {
         conversations(limit: ${'$'}limit) { $CONVERSATION_FIELDS }
       }

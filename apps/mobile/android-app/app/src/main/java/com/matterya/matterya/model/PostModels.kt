@@ -66,11 +66,15 @@ data class PostAuthor(
     @SerialName("country_name") val countryName: String? = null,
     @SerialName("country_code") val countryCode: String? = null,
     @SerialName("last_read_at") val lastReadAt: String? = null,
+    @SerialName("is_verified") val isVerified: Boolean? = null,
 ) {
     val id: String get() = userId
 
     val displayLabel: String
         get() = ContentSanitizer.displayName(displayName, username)
+
+    val showsVerifiedBadge: Boolean
+        get() = isVerified == true || username?.trim()?.equals("matterya", ignoreCase = true) == true
 }
 
 data class PostMediaPayload(

@@ -100,6 +100,7 @@ data class GraphQLAuthor(
     @SerialName("country_name") val countryName: String? = null,
     @SerialName("country_code") val countryCode: String? = null,
     @SerialName("last_read_at") val lastReadAt: String? = null,
+    @SerialName("is_verified") val isVerified: Boolean? = null,
 ) {
     val toModel: PostAuthor
         get() = PostAuthor(
@@ -110,6 +111,7 @@ data class GraphQLAuthor(
             countryName = countryName,
             countryCode = countryCode,
             lastReadAt = lastReadAt,
+            isVerified = isVerified,
         )
 
     val toModelIfValid: PostAuthor?
@@ -124,6 +126,7 @@ data class GraphQLAuthor(
                 countryName = countryName,
                 countryCode = countryCode,
                 lastReadAt = lastReadAt,
+                isVerified = isVerified,
             )
         }
 }
@@ -236,6 +239,9 @@ data class GraphQLConversation(
     @SerialName("created_at") val createdAt: String = "",
     @SerialName("updated_at") val updatedAt: String = "",
     @SerialName("last_message_at") val lastMessageAt: String? = null,
+    @SerialName("is_request") val isRequest: Boolean? = null,
+    @SerialName("request_status") val requestStatus: String? = null,
+    val surface: String? = null,
     val members: List<GraphQLAuthor> = emptyList(),
     @SerialName("last_message") val lastMessage: GraphQLMessage? = null,
 ) {
@@ -246,6 +252,9 @@ data class GraphQLConversation(
             createdAt = createdAt,
             updatedAt = updatedAt,
             lastMessageAt = lastMessageAt,
+            isRequest = isRequest == true,
+            requestStatus = requestStatus,
+            surface = surface?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: "primary",
             members = members.mapNotNull { it.toModelIfValid },
             lastMessage = lastMessage?.toModel,
         )

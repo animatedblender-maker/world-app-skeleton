@@ -3,6 +3,8 @@ package com.matterya.matterya.viewmodel
 import android.content.Context
 import android.content.SharedPreferences
 import com.matterya.matterya.data.anonymous.AnonymousService
+import com.matterya.matterya.data.auth.AuthService
+import com.matterya.matterya.data.messages.MessagesService
 import com.matterya.matterya.model.AnonymousCreateCommentInput
 import com.matterya.matterya.model.AnonymousCreatePostInput
 import com.matterya.matterya.model.AnonymousCreateSpaceInput
@@ -795,6 +797,22 @@ class AnonymousStore private constructor(appContext: Context) {
             )
         }
         runCatching { AnonymousService.markAllNotificationsRead() }
+    }
+
+    /** Badge for Masquerade Inbox DM threads (official Matterya peer only). */
+    suspend fun refreshMasqueradeMessageUnread() {
+        try {
+            val page = MessagesService.shared.listConversations(limit = 40, inbox = "masquerade")
+            val me = AuthService.instance.currentUser?.id
+            val unread = if (me.isNullOrBlank()) {
+                0
+            } else {
+                page.count { it.hasUnread(me) }
+            }
+            _state.update { it.copy(masqueradeMessageUnreadCount = unread) }
+        } catch (_: Exception) {
+            // Keep last known count — badge must not clear on a flaky inbox probe.
+        }
     }
 
     suspend fun search(query: String) {

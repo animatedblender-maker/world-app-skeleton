@@ -39,14 +39,18 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.matterya.matterya.data.auth.AuthService
+import com.matterya.matterya.data.messages.MessagesService
 import com.matterya.matterya.model.AnonymousPhase
 import com.matterya.matterya.model.AnonymousRoute
+import com.matterya.matterya.model.Message
 import com.matterya.matterya.theme.MatteryaColors
 import com.matterya.matterya.theme.MatteryaCopy
 import com.matterya.matterya.theme.MatteryaDimens
 import com.matterya.matterya.theme.screenBackground
 import com.matterya.matterya.ui.components.ToastBanner
 import com.matterya.matterya.ui.components.ToastStyle
+import com.matterya.matterya.ui.messages.ConversationRouteView
 import com.matterya.matterya.viewmodel.AnonymousStore
 import kotlinx.coroutines.launch
 
@@ -90,6 +94,7 @@ fun AnonymousRootView(
     LaunchedEffect(state.phase) {
         if (state.phase == AnonymousPhase.Ready) {
             store.loadInbox(force = false)
+            store.refreshMasqueradeMessageUnread()
         }
     }
 
@@ -134,17 +139,69 @@ fun AnonymousRootView(
                 )
             }
             route is AnonymousRoute.Conversation -> {
-                // Stay inside Masquerade — simple placeholder until Messages surface is wired.
+                // Stay inside Masquerade — Back returns to Inbox (never jumps to Messages tab).
+                val conversationId = route.id
+                val messagesService = remember { MessagesService.shared }
+                val me = AuthService.instance.currentUser?.id
+                var messages by remember(conversationId) { mutableStateOf<List<Message>>(emptyList()) }
+                var draft by remember(conversationId) { mutableStateOf("") }
+                var loading by remember(conversationId) { mutableStateOf(true) }
+                val seed = remember(conversationId) { messagesService.cachedConversation(conversationId) }
+
+                LaunchedEffect(conversationId) {
+                    loading = true
+                    messages = messagesService.cachedMessages(conversationId).orEmpty()
+                    runCatching { messagesService.listMessages(conversationId) }
+                        .onSuccess { messages = it }
+                    loading = false
+                    store.refreshMasqueradeMessageUnread()
+                }
+
                 Column(Modifier.fillMaxSize().statusBarsPadding()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { store.popNavigation() }) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(onClick = {
+                            store.popNavigation()
+                            scope.launch { store.refreshMasqueradeMessageUnread() }
+                        }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MatteryaColors.ink)
                         }
-                        Text("Masquerade chat", fontWeight = FontWeight.SemiBold, color = MatteryaColors.ink)
+                        Text(
+                            "Masquerade chat",
+                            fontWeight = FontWeight.SemiBold,
+                            color = MatteryaColors.ink,
+                            modifier = Modifier.weight(1f),
+                        )
                     }
-                    AnonymousEmptyState(
-                        title = MatteryaCopy.anonymousMessagesInboxTitle,
-                        message = MatteryaCopy.anonymousMessagesInboxBody,
+                    ConversationRouteView(
+                        conversationId = conversationId,
+                        seed = seed,
+                        messages = messages,
+                        currentUserId = me,
+                        isLoading = loading,
+                        draft = draft,
+                        onDraftChange = { draft = it },
+                        onMessagesChange = { messages = it },
+                        onSend = {
+                            val text = draft.trim()
+                            if (text.isEmpty()) return@ConversationRouteView
+                            scope.launch {
+                                runCatching {
+                                    messagesService.sendMessage(conversationId, text)
+                                }.onSuccess { sent ->
+                                    messages = messages + sent
+                                    draft = ""
+                                }
+                            }
+                        },
+                        onRefresh = {
+                            messagesService.getConversationById(conversationId)
+                                ?: messagesService.listConversations(inbox = "masquerade")
+                                    .firstOrNull { it.id == conversationId }
+                        },
+                        messagesService = messagesService,
                     )
                 }
             }

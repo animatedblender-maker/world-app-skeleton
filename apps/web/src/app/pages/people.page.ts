@@ -133,6 +133,21 @@ import { CountriesService, type CountryModel } from '../data/countries.service';
       flex-direction: column;
       gap: 10px;
     }
+    @media (min-width: 900px) {
+      .people-shell {
+        max-width: 1120px;
+      }
+      .people-list {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+    }
+    @media (min-width: 1280px) {
+      .people-list {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
     .person-card {
       display: flex;
       align-items: center;

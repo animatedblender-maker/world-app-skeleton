@@ -6,13 +6,18 @@ import { Router } from '@angular/router';
 import { BottomTabsComponent } from '../components/bottom-tabs.component';
 import {
   AnonymousComment,
+  AnonymousNotification,
   AnonymousPost,
+  AnonymousProfile,
   AnonymousService,
   AnonymousSession,
   AnonymousSpace,
   AnonymousSpaceFilter,
   type AnonymousApiError,
 } from '../core/services/anonymous.service';
+import { Conversation } from '../core/models/messages.model';
+import { AuthService } from '../core/services/auth.service';
+import { MessagesService } from '../core/services/messages.service';
 import { NotificationsUiService } from '../core/services/notifications-ui.service';
 
 type Phase =
@@ -26,7 +31,7 @@ type Phase =
   | 'offline'
   | 'ready';
 
-type ShellTab = 'spaces' | 'feed' | 'me';
+type ShellTab = 'spaces' | 'feed' | 'search' | 'inbox' | 'me';
 type View =
   | { kind: 'shell' }
   | { kind: 'space'; slug: string }
@@ -296,6 +301,126 @@ const SPACE_FILTERS: Array<{ id: AnonymousSpaceFilter; title: string }> = [
         >
           {{ feedLoading ? 'Loading…' : 'Load more' }}
         </button>
+      </main>
+
+      <!-- Ready: Search -->
+      <main class="anon-body" *ngIf="phase === 'ready' && view.kind === 'shell' && shellTab === 'search'">
+        <label class="search-field">
+          <span class="sr-only">Search Anonymous</span>
+          <input
+            type="search"
+            [(ngModel)]="searchQuery"
+            (ngModelChange)="onSearchQueryChange($event)"
+            placeholder="Search people, Spaces, posts"
+            autocomplete="off"
+          />
+        </label>
+        <div class="state" *ngIf="searchLoading">Searching…</div>
+        <div class="state" *ngIf="!searchLoading && !searchQuery.trim()">
+          <strong>Search Masquerade</strong>
+          <p>Find people, Spaces, and posts without leaving Anonymous.</p>
+        </div>
+        <div
+          class="state"
+          *ngIf="!searchLoading && searchQuery.trim() && !searchPeople.length && !searchSpaces.length && !searchPosts.length"
+        >
+          <strong>No matches</strong>
+          <p>Try another username, Space, or keyword.</p>
+        </div>
+        <section class="search-section" *ngIf="searchPeople.length">
+          <h2>People</h2>
+          <button
+            type="button"
+            class="search-row"
+            *ngFor="let p of searchPeople"
+            (click)="openSearchProfile(p)"
+          >
+            @{{ p.username }}
+          </button>
+        </section>
+        <section class="search-section" *ngIf="searchSpaces.length">
+          <h2>Spaces</h2>
+          <button
+            type="button"
+            class="search-row"
+            *ngFor="let s of searchSpaces"
+            (click)="openSpaceSlug(s.slug)"
+          >
+            <strong>{{ s.title }}</strong>
+            <span class="muted">a/{{ s.slug }}</span>
+          </button>
+        </section>
+        <section class="search-section" *ngIf="searchPosts.length">
+          <h2>Posts</h2>
+          <article
+            class="post-card"
+            *ngFor="let p of searchPosts; trackBy: trackPost"
+            (click)="openPost(p)"
+          >
+            <div class="post-meta">
+              <span>a/{{ p.space_slug || 'space' }}</span>
+              <span>·</span>
+              <span>@{{ p.author.username }}</span>
+            </div>
+            <h2 class="post-title" *ngIf="p.title">{{ p.title }}</h2>
+            <p class="post-body">{{ p.body }}</p>
+          </article>
+        </section>
+      </main>
+
+      <!-- Ready: Inbox (Masquerade DMs + alerts) -->
+      <main class="anon-body" *ngIf="phase === 'ready' && view.kind === 'shell' && shellTab === 'inbox'">
+        <div class="inbox-split">
+          <section class="inbox-pane">
+            <div class="inbox-pane-head">
+              <h2>Messages</h2>
+              <span class="muted">Official Matterya only</span>
+            </div>
+            <div class="state" *ngIf="dmLoading && !dmThreads.length">Loading inbox…</div>
+            <div class="state" *ngIf="!dmLoading && dmError && !dmThreads.length">{{ dmError }}</div>
+            <div class="state" *ngIf="!dmLoading && !dmError && !dmThreads.length">
+              <strong>No Masquerade messages yet</strong>
+              <p>Official Matterya threads appear here. Normal Messages stay separate.</p>
+            </div>
+            <button
+              type="button"
+              class="dm-row"
+              *ngFor="let c of dmThreads; trackBy: trackConversation"
+              (click)="openMasqueradeThread(c)"
+            >
+              <div class="dm-title">{{ dmTitle(c) }}</div>
+              <div class="dm-preview">{{ c.last_message?.body || 'No messages yet' }}</div>
+            </button>
+          </section>
+          <section class="inbox-pane">
+            <div class="inbox-pane-head">
+              <h2>Alerts</h2>
+              <button
+                type="button"
+                class="btn ghost tiny"
+                *ngIf="notifUnread > 0"
+                (click)="markAllNotifsRead()"
+              >
+                Mark all read
+              </button>
+            </div>
+            <div class="state" *ngIf="notifLoading && !notifications.length">Loading alerts…</div>
+            <div class="state" *ngIf="!notifLoading && !notifications.length">
+              <strong>No Masquerade alerts</strong>
+              <p>Votes, replies, and Space notices land here.</p>
+            </div>
+            <button
+              type="button"
+              class="notif-row"
+              *ngFor="let n of notifications; trackBy: trackNotif"
+              [class.unread]="!n.read_at"
+              (click)="openNotification(n)"
+            >
+              <strong>{{ n.title || notifTitle(n) }}</strong>
+              <span>{{ n.body || '' }}</span>
+            </button>
+          </section>
+        </div>
       </main>
 
       <!-- Ready: Me -->
@@ -942,12 +1067,100 @@ const SPACE_FILTERS: Array<{ id: AnonymousSpaceFilter; title: string }> = [
         color: var(--m-ink, #2c2825);
         white-space: pre-wrap;
       }
+      .search-field input {
+        width: 100%;
+        box-sizing: border-box;
+        border: 0.5px solid var(--m-border, #ddd8d1);
+        border-radius: 12px;
+        padding: 12px 14px;
+        margin: 0 0 14px;
+        background: var(--m-paper, #f8f6f2);
+        color: var(--m-ink, #2c2825);
+        font: inherit;
+      }
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        border: 0;
+      }
+      .search-section {
+        margin: 0 0 18px;
+      }
+      .search-section h2 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--m-ink-muted, #8a8278);
+      }
+      .search-row,
+      .dm-row,
+      .notif-row {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        width: 100%;
+        text-align: left;
+        border: 0.5px solid var(--m-border, #ddd8d1);
+        border-radius: 14px;
+        background: var(--m-surface, #fffcf8);
+        padding: 12px 14px;
+        margin: 0 0 8px;
+        cursor: pointer;
+        color: inherit;
+        font: inherit;
+      }
+      .search-row .muted {
+        font-size: 12px;
+      }
+      .dm-title {
+        font-weight: 700;
+      }
+      .dm-preview {
+        font-size: 12px;
+        color: var(--m-ink-muted, #8a8278);
+      }
+      .notif-row.unread {
+        border-color: rgba(180, 50, 50, 0.35);
+        background: rgba(180, 50, 50, 0.06);
+      }
+      .inbox-split {
+        display: flex;
+        flex-direction: column;
+        gap: 22px;
+      }
+      .inbox-pane-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+      .inbox-pane-head h2 {
+        margin: 0;
+        font-size: 16px;
+      }
+      .btn.tiny {
+        padding: 6px 10px;
+        font-size: 11px;
+      }
       @media (min-width: 900px) {
         .anon-shell {
           padding-bottom: 28px;
         }
         .anon-body {
           padding-top: 20px;
+        }
+        .inbox-split {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 20px;
+          align-items: start;
         }
       }
     `,
@@ -964,6 +1177,8 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
   shellTabs: Array<{ id: ShellTab; title: string }> = [
     { id: 'spaces', title: 'Spaces' },
     { id: 'feed', title: 'Feed' },
+    { id: 'search', title: 'Search' },
+    { id: 'inbox', title: 'Inbox' },
     { id: 'me', title: 'Me' },
   ];
   view: View = { kind: 'shell' };
@@ -1002,12 +1217,28 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
   newSpaceDesc = '';
   newSpaceCategory = '';
 
+  searchQuery = '';
+  searchLoading = false;
+  searchPeople: AnonymousProfile[] = [];
+  searchSpaces: AnonymousSpace[] = [];
+  searchPosts: AnonymousPost[] = [];
+  private searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+  dmThreads: Conversation[] = [];
+  dmLoading = false;
+  dmError = '';
+  notifications: AnonymousNotification[] = [];
+  notifLoading = false;
+  notifUnread = 0;
+
   skeletonSlots = [0, 1, 2, 3, 4];
 
   private destroyed = false;
 
   constructor(
     private anon: AnonymousService,
+    private messages: MessagesService,
+    private auth: AuthService,
     private router: Router,
     private notificationsUi: NotificationsUiService,
     private cdr: ChangeDetectorRef
@@ -1026,6 +1257,7 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.destroyed = true;
+    if (this.searchTimer) clearTimeout(this.searchTimer);
   }
 
   private paint(): void {
@@ -1151,6 +1383,11 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
     this.viewStack = [];
     if (tab === 'feed' && !this.feedPosts.length) void this.loadFeed(true);
     if (tab === 'spaces' && !this.spaces.length) void this.loadSpaces(true);
+    if (tab === 'inbox') {
+      void this.loadMasqueradeInbox(true);
+      void this.loadNotifications(true);
+    }
+    if (tab === 'search' && this.searchQuery.trim()) void this.runSearch();
     this.paint();
   }
 
@@ -1528,6 +1765,143 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
   }
   trackComment(_: number, c: AnonymousComment): string {
     return c.id;
+  }
+  trackConversation(_: number, c: Conversation): string {
+    return c.id;
+  }
+  trackNotif(_: number, n: AnonymousNotification): string {
+    return n.id;
+  }
+
+  onSearchQueryChange(_value: string): void {
+    if (this.searchTimer) clearTimeout(this.searchTimer);
+    this.searchTimer = setTimeout(() => void this.runSearch(), 280);
+  }
+
+  async runSearch(): Promise<void> {
+    const q = this.searchQuery.trim();
+    if (!q) {
+      this.searchPeople = [];
+      this.searchSpaces = [];
+      this.searchPosts = [];
+      this.searchLoading = false;
+      this.paint();
+      return;
+    }
+    this.searchLoading = true;
+    this.paint();
+    const res = await this.anon.search(q);
+    this.searchLoading = false;
+    if ((res as AnonymousApiError).ok === false) {
+      this.searchPeople = [];
+      this.searchSpaces = [];
+      this.searchPosts = [];
+      this.paint();
+      return;
+    }
+    const ok = res as { people: AnonymousProfile[]; spaces: AnonymousSpace[]; posts: AnonymousPost[] };
+    this.searchPeople = ok.people || [];
+    this.searchSpaces = ok.spaces || [];
+    this.searchPosts = ok.posts || [];
+    this.paint();
+  }
+
+  openSearchProfile(profile: AnonymousProfile): void {
+    // Profiles open via search hit → deep link into Space directory for now.
+    this.searchQuery = profile.username;
+    void this.runSearch();
+  }
+
+  async loadMasqueradeInbox(force = false): Promise<void> {
+    if (!force && this.dmThreads.length) return;
+    this.dmLoading = true;
+    this.dmError = '';
+    this.paint();
+    try {
+      const page = await this.messages.listConversations(40, 'masquerade');
+      const me = (await this.auth.getUser())?.id || '';
+      this.dmThreads = page.filter((c) => {
+        const other = (c.members || []).find((m: any) => m.user_id !== me);
+        if (!other) return false;
+        const handle = String((other as any).username || '')
+          .trim()
+          .toLowerCase();
+        return (other as any).is_verified === true || handle === 'matterya';
+      });
+    } catch (e: any) {
+      if (!this.dmThreads.length) {
+        this.dmError = e?.message || 'Inbox unavailable';
+      }
+    } finally {
+      this.dmLoading = false;
+      this.paint();
+    }
+  }
+
+  dmTitle(c: Conversation): string {
+    const other = (c.members || [])[0];
+    const peer =
+      (c.members || []).find((m: any) => {
+        const handle = String(m?.username || '')
+          .trim()
+          .toLowerCase();
+        return m?.is_verified === true || handle === 'matterya';
+      }) || other;
+    return (peer as any)?.display_name || (peer as any)?.username || 'Matterya';
+  }
+
+  openMasqueradeThread(c: Conversation): void {
+    void this.router.navigate(['/messages'], {
+      queryParams: { conversation: c.id, surface: 'masquerade' },
+    });
+  }
+
+  async loadNotifications(force = false): Promise<void> {
+    if (!force && this.notifications.length) return;
+    this.notifLoading = true;
+    this.paint();
+    const res = await this.anon.notifications({ limit: 40 });
+    this.notifLoading = false;
+    if ((res as AnonymousApiError).ok === false) {
+      this.paint();
+      return;
+    }
+    const ok = res as {
+      notifications: AnonymousNotification[];
+      unread_count: number;
+    };
+    this.notifications = ok.notifications || [];
+    this.notifUnread = ok.unread_count || this.notifications.filter((n) => !n.read_at).length;
+    this.paint();
+  }
+
+  notifTitle(n: AnonymousNotification): string {
+    if (n.kind === 'reply') return 'New reply';
+    if (n.kind === 'vote') return 'New vote';
+    return 'Masquerade alert';
+  }
+
+  async openNotification(n: AnonymousNotification): Promise<void> {
+    if (!n.read_at) {
+      n.read_at = new Date().toISOString();
+      this.notifUnread = Math.max(0, this.notifUnread - 1);
+      void this.anon.markNotificationRead(n.id);
+      this.paint();
+    }
+    if (n.post_id) {
+      this.pushView({ kind: 'post', id: n.post_id });
+      await this.loadPost(n.post_id);
+    }
+  }
+
+  async markAllNotifsRead(): Promise<void> {
+    const now = new Date().toISOString();
+    this.notifications = this.notifications.map((n) =>
+      n.read_at ? n : { ...n, read_at: now }
+    );
+    this.notifUnread = 0;
+    this.paint();
+    void this.anon.markAllNotificationsRead();
   }
 
   private localPreviewUsername(): string {

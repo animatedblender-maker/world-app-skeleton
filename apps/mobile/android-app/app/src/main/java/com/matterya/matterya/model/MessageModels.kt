@@ -628,9 +628,27 @@ data class Conversation(
     val createdAt: String = "",
     val updatedAt: String = "",
     val lastMessageAt: String? = null,
+    val isRequest: Boolean = false,
+    val requestStatus: String? = null,
+    val surface: String = "primary",
     val members: List<PostAuthor> = emptyList(),
     val lastMessage: Message? = null,
 ) {
+    val isMasqueradeSurface: Boolean
+        get() = surface.equals("masquerade", ignoreCase = true)
+
     fun otherMember(currentUserId: String): PostAuthor? =
         members.firstOrNull { it.userId != currentUserId }
+
+    /** Viewer still has unread inbound messages in this thread (iOS Conversation.hasUnread). */
+    fun hasUnread(currentUserId: String): Boolean {
+        val last = lastMessage ?: return false
+        if (last.senderId == currentUserId) return false
+        val me = members.firstOrNull { it.userId == currentUserId } ?: return true
+        val readAt = me.lastReadAt?.trim().orEmpty()
+        if (readAt.isEmpty()) return true
+        val readDate = RelativeTime.parseDate(readAt) ?: return true
+        val msgDate = RelativeTime.parseDate(last.createdAt) ?: return true
+        return msgDate > readDate
+    }
 }
