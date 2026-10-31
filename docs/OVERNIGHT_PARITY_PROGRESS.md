@@ -34,6 +34,7 @@
   - **Hubs watch** related column hardened (sticky solid rail, dedupe, prefetch pages).
   - **/anonymous** age gate verified: `unauthenticated` → sign-in; `under_18` / `missing_birthdate` / `need_attest` / `need_username` phases; API smoke returns 401 unauthenticated without JWT.
   - Production `ng build` clean. Deploy via `npm run deploy:gh-pages` (gh-pages only).
+  - **Deploy SUCCESS:** gh-pages `953cb72` → https://matterya.com (CDN may lag). Source commit `aed6b14f` on `ios-native`.
 - Say `how far are we now?` or `continue` anytime.
 
 ## Web desktop parity shipped tonight
