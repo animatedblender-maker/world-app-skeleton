@@ -84,7 +84,7 @@ Ordinary uncertainty inside a category: pick the best fitting leaf, or Pass (`P`
 4. **Reclaimed speech.** In-group reclaimed slurs without attacking others → `hate.reclaimed` (dismiss). Out-group weaponization → hate remove leaves.
 5. **Survivors.** People describing their own assault/self-harm for support → prefer mark/dismiss recovery paths, never pile-on remove for the survivor’s own post.
 6. **Hyperbole vs threat.** “I’m gonna kill this exam” → not a threat. “I’m going to your house at 9 with a knife” → `harassment.threats.credible` (severe).
-7. **When torn.** Pass (`P`) or `escalation.second_look`. Do not invent a leaf that doesn’t fit.
+7. **When torn.** Pass (`P`) for ordinary doubt. Use `escalation.second_look` only when stakes are high and the outcome is still unclear after reading. Do not invent a leaf that doesn’t fit.
 
 ---
 
@@ -211,7 +211,7 @@ Protected characteristics (Matterya practice, Meta/X/TikTok-aligned): race, ethn
 |---|---|---|
 | `other.unlisted` | Real violation, no better leaf yet | mark |
 | `allowed.false_positive` | No violation | dismiss |
-| `escalation.second_look` | Needs another human | mark |
+| `escalation.second_look` | High-stakes specialist review (see Escalation section) | mark |
 
 ---
 
