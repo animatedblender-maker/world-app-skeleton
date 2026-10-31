@@ -23,3 +23,9 @@ Client JSON from `policyTreeForClient()` never includes outcomes.
 - `Backspace` / `Esc` — go back  
 - `Enter` — confirm leaf  
 - `P` — pass ticket to another mod  
+
+## Training
+
+Moderator handbook (principles, leaf guides, industry alignment):  
+https://api.matterya.com/management/policy · source `docs/moderation/04-POLICY-HANDBOOK.md`
+

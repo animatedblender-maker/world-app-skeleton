@@ -27,6 +27,12 @@ type HubLink = {
 const LINKS: HubLink[] = [
   {
     group: 'Moderation',
+    href: '/management/policy',
+    title: 'Policy handbook',
+    blurb: 'Train mods: principles, leaf guides, strikes, industry alignment.',
+  },
+  {
+    group: 'Moderation',
     href: '/reports',
     title: 'Content queue',
     blurb: 'Claim-next review for posts and comments.',

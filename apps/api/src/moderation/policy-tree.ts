@@ -143,7 +143,10 @@ function spamTree(): PolicyNode {
     {
       key: '4',
       label: 'Malware / phishing link',
-      node: leaf('spam.malware', 'Malware or phishing', 'spam', 'remove'),
+      node: leaf('spam.malware', 'Malware or phishing', 'spam', 'remove', {
+        severity: 'severe',
+        rationale: 'Credential theft / device compromise — escalate account',
+      }),
     },
     {
       key: '5',
@@ -328,7 +331,10 @@ function hateTree(): PolicyNode {
         {
           key: '3',
           label: 'Calls for exclusion / segregation',
-          node: leaf('hate.protected.exclusion', 'Calls for exclusion', 'hate', 'remove'),
+          node: leaf('hate.protected.exclusion', 'Calls for exclusion', 'hate', 'remove', {
+            severity: 'severe',
+            rationale: 'Meta Tier-1 style exclusion/segregation attacks',
+          }),
         },
         {
           key: '4',
@@ -437,6 +443,34 @@ function matureTree(): PolicyNode {
         'dismiss'
       ),
     },
+    {
+      key: '7',
+      label: 'Grooming / sexual solicitation of a minor',
+      node: leaf(
+        'mature.grooming',
+        'Grooming or sexual solicitation of a minor',
+        'mature',
+        'remove',
+        {
+          severity: 'severe',
+          rationale: 'Discord/Snap/TikTok/YouTube zero-tolerance child safety',
+        }
+      ),
+    },
+    {
+      key: '8',
+      label: 'Child endangerment (non-sexual)',
+      node: leaf(
+        'mature.child_endangerment',
+        'Non-sexual child endangerment',
+        'mature',
+        'remove',
+        {
+          severity: 'severe',
+          rationale: 'Dangerous challenges, trafficking facilitation, physical abuse of minors',
+        }
+      ),
+    },
   ]);
 }
 
@@ -473,6 +507,20 @@ function violenceTree(): PolicyNode {
       label: 'News / documentary graphic (labeled)',
       node: leaf('violence.news', 'News/documentary graphic', 'violence', 'mark'),
     },
+    {
+      key: '6',
+      label: 'Violent extremist org praise / recruitment',
+      node: leaf(
+        'violence.extremist',
+        'Violent extremist praise or recruitment',
+        'violence',
+        'remove',
+        {
+          severity: 'severe',
+          rationale: 'Meta DOI / YouTube VCO / TikTok / Discord / X — zero tolerance',
+        }
+      ),
+    },
   ]);
 }
 
@@ -506,6 +554,19 @@ function selfHarmTree(): PolicyNode {
       label: 'Recovery / awareness (non-graphic)',
       node: leaf('self_harm.recovery', 'Recovery/awareness', 'self_harm', 'dismiss'),
     },
+    {
+      key: '5',
+      label: 'Disordered eating / dangerous weight methods (promo)',
+      node: leaf(
+        'self_harm.eating_disorder',
+        'Disordered eating promotion',
+        'self_harm',
+        'remove',
+        {
+          rationale: 'TikTok / YouTube / Meta — tips or praise for disordered eating',
+        }
+      ),
+    },
   ]);
 }
 
@@ -536,6 +597,19 @@ function misinfoTree(): PolicyNode {
       label: 'Unverified claim (low harm)',
       node: leaf('misinfo.low_harm', 'Low-harm unverified claim', 'misinfo', 'mark'),
     },
+    {
+      key: '6',
+      label: 'Crisis / disaster panic hoax',
+      node: leaf(
+        'misinfo.crisis_panic',
+        'Crisis or disaster panic hoax',
+        'misinfo',
+        'remove',
+        {
+          rationale: 'TikTok / Discord — false claims that can cause public panic or harm',
+        }
+      ),
+    },
   ]);
 }
 
@@ -558,12 +632,29 @@ function scamTree(): PolicyNode {
     {
       key: '3',
       label: 'Romance / social engineering',
-      node: leaf('scam.romance', 'Romance/social engineering', 'scam', 'remove'),
+      node: leaf('scam.romance', 'Romance/social engineering', 'scam', 'remove', {
+        severity: 'severe',
+        rationale: 'Financial + emotional harm — escalate like other fraud',
+      }),
     },
     {
       key: '4',
       label: 'Suspicious but unclear',
       node: leaf('scam.unclear', 'Suspicious unclear', 'scam', 'mark'),
+    },
+    {
+      key: '5',
+      label: 'Sale of weapons / drugs / regulated goods',
+      node: leaf(
+        'scam.regulated_goods',
+        'Regulated or dangerous goods for sale',
+        'scam',
+        'remove',
+        {
+          severity: 'severe',
+          rationale: 'YouTube / Discord / TikTok / Meta restricted goods',
+        }
+      ),
     },
   ]);
 }
@@ -579,9 +670,10 @@ function doxxingTree(): PolicyNode {
     },
     {
       key: '2',
-      label: 'Private messages / intimate images without consent',
-      node: leaf('doxxing.intimate', 'Non-consensual intimate', 'doxxing', 'remove', {
+      label: 'NCII — intimate images / private messages without consent',
+      node: leaf('doxxing.intimate', 'Non-consensual intimate imagery (NCII)', 'doxxing', 'remove', {
         severity: 'severe',
+        rationale: 'X / Discord / Meta / Snap — NCII including AI-generated of real people',
       }),
     },
     {
