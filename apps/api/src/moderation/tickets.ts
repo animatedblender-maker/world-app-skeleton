@@ -109,7 +109,7 @@ export async function ensureTicketsSchema(): Promise<void> {
         check (
           mod_category is null
           or mod_category in (
-            'spam', 'harassment', 'hate', 'mature', 'csam', 'solicitation',
+            'spam', 'harassment', 'hate', 'mature', 'csam', 'solicitation', 'servitude',
             'violence', 'terrorism', 'self_harm', 'misinfo', 'scam', 'doxxing', 'other'
           )
         );

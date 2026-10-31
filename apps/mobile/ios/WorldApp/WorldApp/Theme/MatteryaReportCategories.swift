@@ -19,6 +19,7 @@ enum MatteryaReportCategories {
         .init(slug: "violence", label: "Violence"),
         .init(slug: "terrorism", label: "Terrorism"),
         .init(slug: "self_harm", label: "Self-harm"),
+        .init(slug: "servitude", label: "Servitude / domestic helpers"),
         .init(slug: "solicitation", label: "Adult solicitation"),
         .init(slug: "misinfo", label: "Misinformation"),
         .init(slug: "scam", label: "Scam"),
@@ -42,6 +43,7 @@ enum MatteryaReportCategories {
         if t.contains("terror") || t.contains("extremist") { return "terrorism" }
         if t.contains("csam") || t.contains("grooming") || t.contains("child sexual") { return "csam" }
         if t.contains("solicit") || t.contains("escort") { return "solicitation" }
+        if t.contains("servitude") || t.contains("domestic helper") || t.contains("forced labor") || t.contains("traffick") { return "servitude" }
         if t.contains("illegal") || t.contains("harm") { return "other" }
         return "other"
     }

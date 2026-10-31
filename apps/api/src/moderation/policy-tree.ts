@@ -124,6 +124,21 @@ function escalationRootTree(): PolicyNode {
     },
     {
       key: '4',
+      label: 'Labor / domestic trafficking (confirmed)',
+      node: leaf(
+        'escalation.trafficking',
+        'Escalate — labor / domestic trafficking',
+        'servitude',
+        'remove',
+        {
+          severity: 'severe',
+          rationale:
+            'Confirmed trafficking — remove + account queue; preserve for specialist review',
+        }
+      ),
+    },
+    {
+      key: '5',
       label: 'Specialist second look (high-stakes, outcome unclear)',
       node: escalationSecondLook(),
     },
@@ -151,11 +166,12 @@ export const POLICY_TREE: PolicyBranch = {
           { key: '2', label: 'Self-harm / suicide', node: selfHarmTree() },
           { key: '3', label: 'Terrorism', node: terrorismTree() },
           { key: '4', label: 'Violence / graphic harm', node: violenceTree() },
-          { key: '5', label: 'Harassment / bullying', node: harassmentTree() },
-          { key: '6', label: 'Hate speech', node: hateTree() },
-          { key: '7', label: 'Doxxing / privacy', node: doxxingTree() },
-          { key: '8', label: 'Scam / fraud', node: scamTree() },
-          { key: '9', label: 'Misinformation', node: misinfoTree() },
+          { key: '5', label: 'Servitude / domestic helpers', node: servitudeTree() },
+          { key: '6', label: 'Harassment / bullying', node: harassmentTree() },
+          { key: '7', label: 'Hate speech', node: hateTree() },
+          { key: '8', label: 'Doxxing / privacy', node: doxxingTree() },
+          { key: '9', label: 'Scam / fraud', node: scamTree() },
+          { key: 'I', label: 'Misinformation', node: misinfoTree() },
           { key: 'A', label: 'Adult solicitation', node: solicitationTree() },
           { key: 'M', label: 'Mature / sexual content', node: matureTree() },
           { key: 'S', label: 'Spam', node: spamTree() },
@@ -491,6 +507,105 @@ function hateTree(): PolicyNode {
       key: '4',
       label: 'Reclaimed / in-group usage (context OK)',
       node: leaf('hate.reclaimed', 'Reclaimed in-group usage', 'hate', 'dismiss'),
+    },
+  ]);
+}
+
+/**
+ * Forced labor / domestic servitude / exploitative domestic-helper trade
+ * (Meta Human Exploitation / TikTok trafficking patterns).
+ */
+function servitudeTree(): PolicyNode {
+  return branch('servitude', 'What kind of servitude / domestic-helper issue?', [
+    {
+      key: '1',
+      label: 'Forced domestic servitude / forced labor',
+      node: leaf(
+        'servitude.forced',
+        'Forced domestic servitude or labor',
+        'servitude',
+        'remove',
+        {
+          severity: 'severe',
+          rationale: 'Coerced labor / domestic servitude — Meta human exploitation',
+        }
+      ),
+    },
+    {
+      key: '2',
+      label: 'Trafficking of domestic helpers / workers',
+      node: branch(
+        'servitude.trafficking_gate',
+        'Is trafficking confirmed or clearly organized?',
+        [
+          {
+            key: '1',
+            label: 'Yes — confirmed / organized → escalate',
+            node: leaf(
+              'escalation.trafficking',
+              'Escalate — labor / domestic trafficking',
+              'servitude',
+              'remove',
+              {
+                severity: 'severe',
+                rationale:
+                  'Confirmed trafficking — remove + account queue; preserve for specialist review',
+              }
+            ),
+          },
+          {
+            key: '2',
+            label: 'Strong indicators, not fully confirmed',
+            node: leaf(
+              'servitude.trafficking',
+              'Domestic-helper trafficking indicators',
+              'servitude',
+              'remove',
+              { severity: 'severe' }
+            ),
+          },
+        ]
+      ),
+    },
+    {
+      key: '3',
+      label: 'Debt bondage / passport confiscation / wage theft coercion',
+      node: leaf(
+        'servitude.debt_bondage',
+        'Debt bondage or coercive control of workers',
+        'servitude',
+        'remove',
+        { severity: 'severe' }
+      ),
+    },
+    {
+      key: '4',
+      label: 'Exploitative / deceptive domestic-helper recruitment',
+      node: leaf(
+        'servitude.recruitment',
+        'Exploitative domestic-helper recruitment',
+        'servitude',
+        'remove',
+        {
+          rationale: 'Deceptive job offers for maids/helpers that trap workers',
+        }
+      ),
+    },
+    {
+      key: '5',
+      label: 'Involves a minor as worker / helper → CSAM escalate',
+      node: escalationChildSafety('csam'),
+    },
+    {
+      key: '6',
+      label: 'Legitimate domestic-helper job ad (no coercion)',
+      node: leaf(
+        'servitude.legit_job',
+        'Legitimate domestic-helper job posting',
+        'servitude',
+        'dismiss',
+        { rationale: 'Ordinary employment ad without trafficking indicators' }
+      ),
     },
   ]);
 }

@@ -155,6 +155,18 @@ Protected characteristics (Matterya practice, Meta/X/TikTok-aligned): race, ethn
 | `solicitation.sextortion` | Adult sextortion / sexual blackmail | remove · **severe** |
 | → CSAM escalate | Anything involving a minor | `escalation.child_safety` |
 
+### Servitude / domestic helpers (standalone)
+
+| Leaf | Pick when | Outcome |
+|---|---|---|
+| `servitude.forced` | Forced domestic servitude / forced labor | remove · **severe** |
+| `escalation.trafficking` | Confirmed / organized trafficking of helpers | remove · **severe** + escalate |
+| `servitude.trafficking` | Strong trafficking indicators | remove · **severe** |
+| `servitude.debt_bondage` | Debt bondage / passport confiscation / coercive wage theft | remove · **severe** |
+| `servitude.recruitment` | Deceptive domestic-helper recruitment | remove · mild |
+| `servitude.legit_job` | Ordinary helper job ad, no coercion | dismiss |
+| → CSAM escalate | Minor used as worker / helper | `escalation.child_safety` |
+
 ### Mature / sexual (adult media only)
 
 | Leaf | Pick when | Outcome |
@@ -285,3 +297,4 @@ Matterya is not a copy of any one platform. We borrow **decision patterns** (rem
 | 2026-10-31 | Step-2 standalone **Terrorism** category (`terrorism.ops` / `praise` / `threat` / `news` / `historical`). Removed `violence.extremist` in favor of this path. |
 | 2026-10-31 | Step-2 ordered by harm priority: Self-harm → Terrorism → Violence → Harassment → Hate → Doxxing → Scam → Misinfo → Mature → Spam → Other. |
 | 2026-10-31 | Standalone **CSAM** (#1, always severe, escalate on confirmed/suspected) and **Adult solicitation**. Mature is adult media only. |
+| 2026-10-31 | Standalone **Servitude / domestic helpers** (forced labor, trafficking escalate, debt bondage, recruitment, legit job dismiss). |
