@@ -532,9 +532,7 @@ function dashboardHtml(): string {
       <h1>Frame 0 progress</h1>
     </div>
     <div>
-      <a class="out" href="/pipeline">Pipeline</a>
-      ·
-      <a class="out" href="/reports">Reports</a>
+      <a class="out" href="/management">Management</a>
       ·
       <a class="out" href="/frame0/logout">Log out</a>
     </div>

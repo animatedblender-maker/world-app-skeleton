@@ -92,6 +92,7 @@ import {
   handleAccountQueueGet,
   handleAccountQueueAction,
 } from './reports/account-queue-page.js';
+import { handleManagementGet } from './reports/management-page.js';
 import {
   authMailStatus,
   confirmEmailWithToken,
@@ -274,10 +275,17 @@ app.use(
 // Matterya Anonymous (adult-only pseudonymous Spaces) — JWT via getUserFromRequest
 app.use('/v1/anonymous', anonymousRouter);
 
-// ── Matterya moderation + Insights (password gate) ───────────────────
+// ── Matterya management + moderation + Insights (password gate) ──────
+// https://api.matterya.com/management        · Ops hub (all surfaces)
 // https://api.matterya.com/reports           · Claim-next content moderation
 // https://api.matterya.com/reports/accounts  · Account strike / review queue
 // https://api.matterya.com/reports/analytics · Insights (activity/uploads)
+app.get('/management', (req, res) => {
+  void handleManagementGet(req, res).catch((err) => {
+    console.error('[management]', err?.message ?? err);
+    res.status(500).send('management failed');
+  });
+});
 app.get('/reports', (req, res) => {
   void handleModerationQueueGet(req, res).catch((err) => {
     console.error('[reports]', err?.message ?? err);

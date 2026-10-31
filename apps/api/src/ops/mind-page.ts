@@ -206,9 +206,7 @@ function mindHtml(): string {
     <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
       <span class="pill" id="policyPill">policy…</span>
       <span class="pill" id="ledgerFlag">ledger…</span>
-      <a class="out" href="/pipeline">Pipeline</a>
-      <a class="out" href="/frame0">Frame 0</a>
-      <a class="out" href="/reports">Reports</a>
+      <a class="out" href="/management">Management</a>
       <a class="out" href="/mind/logout">Log out</a>
     </div>
   </header>

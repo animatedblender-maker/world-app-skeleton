@@ -267,10 +267,8 @@ function renderShell(opts: {
     <h1>Account review</h1>
   </div>
   <span class="pill ok">${opts.openCount} open</span>
-  <span class="muted">Strikes &amp; account actions</span>
   <span style="flex:1"></span>
-  <a class="nav" href="/reports">Content queue</a>
-  <a class="nav" href="/reports/analytics">Insights</a>
+  <a class="nav" href="/management">Management</a>
   <a class="nav" href="/reports/logout">Log out</a>
 </header>
 <main class="layout">
@@ -380,7 +378,6 @@ function renderAccountCard(d: AccountDisplay): string {
         <span class="k">P</span><span>Pass to another moderator</span>
       </button>
     </form>
-    <p class="hint">Keys <kbd>1</kbd>–<kbd>4</kbd> and <kbd>P</kbd>. Flash stays generic — policy outcomes stay hidden from the content queue.</p>
   </aside>`;
 }
 
@@ -488,7 +485,9 @@ async function applyAccountDecision(opts: {
 
 export async function handleAccountQueueGet(req: Request, res: Response): Promise<void> {
   if (!hasReportsAccess(req)) {
-    res.status(401).send(renderReportsLoginHtml({ next: '/reports/accounts' }));
+    res.status(401).send(
+      renderReportsLoginHtml({ next: '/reports/accounts', titleMode: 'accounts' })
+    );
     return;
   }
   await ensureTicketsSchema();

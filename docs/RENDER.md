@@ -39,13 +39,17 @@ Runs **in-process** on **`matterya-api`** via **`ffmpeg-static`**. No Background
 
 Optional Docker worker (`Dockerfile.media-worker`) is only if you later want a separate paid dyno.
 
-## Moderation + Insights (password pages)
+## Management + Moderation + Insights (password pages)
 
 | | |
 |--|--|
-| **Moderation (Claim next)** | https://api.matterya.com/reports |
-| **Insights (activity/uploads)** | https://api.matterya.com/reports/analytics · also `/insights` |
-| **Password** | env `REPORTS_PAGE_PASSWORD` (same cookie for both) |
+| **Management hub** | https://api.matterya.com/management |
+| **Content moderation** | https://api.matterya.com/reports |
+| **Account review** | https://api.matterya.com/reports/accounts |
+| **Insights** | https://api.matterya.com/reports/analytics · also `/insights` |
+| **Password** | env `REPORTS_PAGE_PASSWORD` (same cookie across ops pages) |
+
+Moderation pages do **not** deep-link Insights or Masquerade; use `/management` as the index.
 
 Optional env:
 

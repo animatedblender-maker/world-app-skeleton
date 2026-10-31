@@ -318,11 +318,8 @@ function renderShell(opts: {
     <h1>Moderation</h1>
   </div>
   <span class="pill ok">${opts.openCount} open</span>
-  <span class="muted">Answer the questions · policy applies the rest</span>
   <span style="flex:1"></span>
-  <a class="nav" href="/reports/accounts">Accounts</a>
-  <a class="nav" href="/reports/analytics">Insights</a>
-  <a class="nav" href="/reports/masquerade">Masquerade (legacy)</a>
+  <a class="nav" href="/management">Management</a>
   <a class="nav" href="/reports/logout">Log out</a>
 </header>
 <main class="layout">
@@ -685,12 +682,6 @@ function renderTicketCard(ticket: TicketDisplay): string {
     <h2 id="decision-question">Loading…</h2>
     <div class="crumb" id="decision-crumbs"></div>
     <div class="options" id="decision-options"></div>
-    <p class="hint">
-      Use number / letter keys to choose. <kbd>Backspace</kbd> goes back.
-      <kbd>Enter</kbd> confirms the final answer.
-      <kbd>P</kbd> passes this ticket to another moderator.
-      You only answer the questions — Matterya policy decides the enforcement.
-    </p>
   </aside>`;
 }
 

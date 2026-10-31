@@ -179,8 +179,7 @@ function renderQueueHtml(items: QueueRow[]): string {
       <p class="sub">Open auto + user reports · Remove / Flag / Ignore</p>
     </div>
     <div class="links">
-      <a href="/reports">Moderation</a>
-      <a href="/reports/analytics">Insights</a>
+      <a href="/management">Management</a>
       <a href="/reports/logout">Log out</a>
     </div>
   </header>

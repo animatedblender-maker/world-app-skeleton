@@ -270,7 +270,7 @@ function opsHtml(activeTab: 'overview' | 'pipeline' | 'frame0'): string {
       <h1>Content &amp; posters</h1>
     </div>
     <div>
-      <a class="out" href="/reports">Reports</a>
+      <a class="out" href="/management">Management</a>
       ·
       <a class="out" href="/pipeline/logout">Log out</a>
     </div>

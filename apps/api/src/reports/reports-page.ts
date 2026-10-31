@@ -107,20 +107,53 @@ function clearAuthCookie(res: Response): void {
 }
 
 /** Matterya paper login gate. */
-export function renderReportsLoginHtml(opts?: { error?: string; next?: string }): string {
+export function renderReportsLoginHtml(opts?: {
+  error?: string;
+  next?: string;
+  titleMode?: 'moderation' | 'insights' | 'management' | 'accounts';
+}): string {
   const err = opts?.error
     ? `<p class="err">${escapeHtml(opts.error)}</p>`
     : '';
   const nextRaw = String(opts?.next || '/reports');
   const next = escapeHtml(nextRaw);
   const isAnalytics =
-    nextRaw.includes('tab=analytics') || nextRaw.includes('/analytics') || nextRaw.includes('/insights');
-  const pageTitle = isAnalytics ? 'Matterya · Insights' : 'Matterya · Moderation';
-  const heading = isAnalytics ? 'Platform insights' : 'Moderation';
-  const sub = isAnalytics
-    ? 'Activity, uploads, and live stats. Enter the password to continue.'
-    : 'Claim-next review queue — one ticket at a time. Enter the password to continue.';
-  const cta = isAnalytics ? 'Open insights' : 'Open moderation';
+    opts?.titleMode === 'insights' ||
+    nextRaw.includes('tab=analytics') ||
+    nextRaw.includes('/analytics') ||
+    nextRaw.includes('/insights');
+  const isManagement =
+    opts?.titleMode === 'management' || nextRaw.includes('/management');
+  const isAccounts =
+    opts?.titleMode === 'accounts' || nextRaw.includes('/accounts');
+  const pageTitle = isManagement
+    ? 'Matterya · Management'
+    : isAnalytics
+      ? 'Matterya · Insights'
+      : isAccounts
+        ? 'Matterya · Account review'
+        : 'Matterya · Moderation';
+  const heading = isManagement
+    ? 'Management'
+    : isAnalytics
+      ? 'Platform insights'
+      : isAccounts
+        ? 'Account review'
+        : 'Moderation';
+  const sub = isManagement
+    ? 'Ops hub for moderation, insights, pipeline, and MIND. Enter the password to continue.'
+    : isAnalytics
+      ? 'Activity, uploads, and live stats. Enter the password to continue.'
+      : isAccounts
+        ? 'Strike and account review queue. Enter the password to continue.'
+        : 'Claim-next review queue — one ticket at a time. Enter the password to continue.';
+  const cta = isManagement
+    ? 'Open management'
+    : isAnalytics
+      ? 'Open insights'
+      : isAccounts
+        ? 'Open account review'
+        : 'Open moderation';
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -256,16 +289,20 @@ export function handleReportsLogin(req: Request, res: Response): void {
     return;
   }
   setAuthCookie(res);
-  const rawNext = String(body.next || '/reports');
-  const next =
-    rawNext.startsWith('/reports') || rawNext.startsWith('/insights')
-      ? rawNext
-      : '/reports';
+  const rawNext = String(body.next || '/management');
+  const allowed =
+    rawNext.startsWith('/reports') ||
+    rawNext.startsWith('/insights') ||
+    rawNext.startsWith('/management') ||
+    rawNext.startsWith('/pipeline') ||
+    rawNext.startsWith('/frame0') ||
+    rawNext.startsWith('/mind');
+  const next = allowed ? rawNext : '/management';
   res.redirect(303, next);
 }
 
 /** GET /reports/logout */
 export function handleReportsLogout(_req: Request, res: Response): void {
   clearAuthCookie(res);
-  res.redirect(303, '/reports');
+  res.redirect(303, '/management');
 }

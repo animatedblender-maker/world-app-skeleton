@@ -1564,7 +1564,7 @@ export function renderEngagementReportHtml(report: HumanEngagementReport): strin
       <div class="side-actions">
         <button type="button" class="btn primary" id="btn-refresh">Refresh data</button>
         <button type="button" class="btn" id="btn-export">Export JSON</button>
-        <a class="btn ghost" href="/reports">Moderation queue</a>
+        <a class="btn ghost" href="/management">Management</a>
         <a class="btn ghost" href="/reports/logout">Log out</a>
       </div>
     </aside>
