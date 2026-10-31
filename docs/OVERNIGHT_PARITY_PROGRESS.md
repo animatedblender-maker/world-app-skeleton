@@ -81,3 +81,4 @@
   - **Web Hubs mini-player:** Keep `<video>` mounted while hubs session active (hidden on watch) so collapse watch→mini avoids full remount/reload flicker; re-seek catalog playhead on leave-watch.
   - **Android Masquerade mod panel:** `AnonymousModPanelView` placeholder (iOS `AnonymousModPanelView` parity — report queue / removals / sanctions / rules “Coming soon”); shield entry on Space detail when `isOwner`/`isModerator`.
   - `./gradlew :app:assembleDebug` **BUILD SUCCESSFUL**. `ng build --configuration production` clean.
+  - **Deploy SUCCESS:** gh-pages `ced7dd4` → https://matterya.com (CDN may lag). Source `2a7b6c52` on `ios-native`.
