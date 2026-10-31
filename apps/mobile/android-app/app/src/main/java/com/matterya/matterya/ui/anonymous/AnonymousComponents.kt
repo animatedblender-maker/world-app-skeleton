@@ -38,6 +38,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,17 +53,23 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.matterya.matterya.model.AnonymousComment
 import com.matterya.matterya.model.AnonymousPost
 import com.matterya.matterya.model.AnonymousSpace
 import com.matterya.matterya.model.RelativeTime
+import com.matterya.matterya.theme.FacebookMediaLayout
 import com.matterya.matterya.theme.MatteryaColors
 import com.matterya.matterya.theme.MatteryaCopy
 import com.matterya.matterya.theme.MatteryaDimens
 import com.matterya.matterya.theme.MatteryaReportCategories
+import com.matterya.matterya.ui.components.AvatarView
 import com.matterya.matterya.ui.components.FeedPinchZoomPhoto
 import com.matterya.matterya.ui.components.MasqueradeInFrameVideo
 import com.matterya.matterya.ui.components.MasqueradeVideoPoster
 import com.matterya.matterya.ui.components.MatteryaPhotoLightbox
+import com.matterya.matterya.ui.components.MatteryaVerifiedBadge
+import kotlin.math.max
+import kotlin.math.min
 
 @Composable
 fun MasqueradeBrandMark(compact: Boolean = false, modifier: Modifier = Modifier) {
@@ -218,11 +225,16 @@ fun AnonymousPostCard(
     onVote: ((Int) -> Unit)? = null,
     onReport: ((String) -> Unit)? = null,
     onBlockAuthor: (() -> Unit)? = null,
+    /** Cached comments for feed tease (iOS AnonymousCommentsWarmCache). */
+    warmComments: List<AnonymousComment> = emptyList(),
+    onWarmComments: (() -> Unit)? = null,
 ) {
     var photoLightbox by remember(post.id) { mutableStateOf(false) }
     var pinching by remember(post.id) { mutableStateOf(false) }
     var menuOpen by remember(post.id) { mutableStateOf(false) }
     var showReport by remember(post.id) { mutableStateOf(false) }
+    var photoPixelSize by remember(post.id) { mutableStateOf<Pair<Int, Int>?>(null) }
+    var teasedComment by remember(post.id) { mutableStateOf<AnonymousComment?>(null) }
     val corner = if (style == AnonymousPostCardStyle.Feed) 0.dp else 10.dp
     val bodyMaxLines = if (style == AnonymousPostCardStyle.Thread) Int.MAX_VALUE else 6
     val myVote = post.myVote ?: 0
@@ -240,6 +252,32 @@ fun AnonymousPostCard(
     val bodyText = post.displayBody.trim()
     val showsSeeMore = style != AnonymousPostCardStyle.Thread &&
         (bodyText.length > 160 || bodyText.count { it == '\n' } > 4)
+    val photoAspect = remember(photoPixelSize) {
+        val px = photoPixelSize
+        if (px == null || px.first <= 1 || px.second <= 1) {
+            FacebookMediaLayout.photoSquareAspect
+        } else {
+            val raw = px.first.toFloat() / px.second.toFloat()
+            if (!raw.isFinite() || raw <= 0.05f) FacebookMediaLayout.photoSquareAspect
+            else min(max(raw, 0.33f), 2.5f)
+        }
+    }
+
+    fun pickTease(list: List<AnonymousComment>): AnonymousComment? =
+        list.maxByOrNull { it.score ?: 0 } ?: list.firstOrNull()
+
+    LaunchedEffect(post.id, style, commentCount) {
+        if (style != AnonymousPostCardStyle.Feed || commentCount <= 0) return@LaunchedEffect
+        if (warmComments.isEmpty()) onWarmComments?.invoke()
+    }
+
+    LaunchedEffect(warmComments, style, commentCount) {
+        if (style != AnonymousPostCardStyle.Feed || commentCount <= 0) {
+            teasedComment = null
+            return@LaunchedEffect
+        }
+        teasedComment = pickTease(warmComments)
+    }
 
     Column(
         Modifier
@@ -258,6 +296,10 @@ fun AnonymousPostCard(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                if (isOfficial) {
+                    AvatarView(url = null, seed = "matterya", size = 22.dp)
+                    Spacer(Modifier.width(6.dp))
+                }
                 if (style == AnonymousPostCardStyle.Feed && spaceLabel != null) {
                     Text(
                         spaceLabel,
@@ -272,17 +314,28 @@ fun AnonymousPostCard(
                     )
                     Text(" · ", color = MatteryaColors.inkMuted, fontSize = 12.sp)
                 }
-                Text(
-                    if (isOfficial) "Matterya" else "@${post.authorUsername}",
-                    color = if (isOfficial) MatteryaColors.ink else MatteryaColors.inkMuted,
-                    fontSize = 14.sp,
-                    fontWeight = if (isOfficial) FontWeight.SemiBold else FontWeight.Normal,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .weight(1f, fill = false)
-                        .clickable(enabled = onOpenAuthor != null) { onOpenAuthor?.invoke() },
-                )
+                if (isOfficial) {
+                    Text(
+                        "Matterya",
+                        color = MatteryaColors.ink,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    MatteryaVerifiedBadge(size = 13.dp)
+                } else {
+                    Text(
+                        "@${post.authorUsername}",
+                        color = MatteryaColors.inkMuted,
+                        fontSize = 14.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .clickable(enabled = onOpenAuthor != null) { onOpenAuthor?.invoke() },
+                    )
+                }
                 Spacer(Modifier.weight(1f))
                 if (post.createdAt.isNotBlank()) {
                     Text(
@@ -384,8 +437,14 @@ fun AnonymousPostCard(
             post = post,
             style = style,
             corner = corner,
+            photoAspect = photoAspect,
             onPinchingChanged = { pinching = it },
             onOpenLightbox = { photoLightbox = true },
+            onImageSize = { w, h ->
+                if (w > 1 && h > 1 && photoPixelSize != (w to h)) {
+                    photoPixelSize = w to h
+                }
+            },
         )
 
         // Hearts · score · comments — not Reddit up/down arrows.
@@ -457,6 +516,41 @@ fun AnonymousPostCard(
         }
 
         if (style == AnonymousPostCardStyle.Feed) {
+            teasedComment?.let { tease ->
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = MatteryaDimens.pagePadding)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MatteryaColors.canvasMuted.copy(alpha = 0.85f))
+                        .clickable(onClick = onOpen)
+                        .padding(12.dp),
+                ) {
+                    Box(
+                        Modifier
+                            .width(3.dp)
+                            .height(36.dp)
+                            .background(MatteryaColors.ink.copy(alpha = 0.18f), RoundedCornerShape(1.5.dp)),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "@${tease.authorUsername}",
+                            color = MatteryaColors.inkMuted,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            tease.displayBody,
+                            color = MatteryaColors.inkSecondary,
+                            fontSize = 14.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
             Spacer(Modifier.height(16.dp))
             Box(
                 Modifier
@@ -522,8 +616,10 @@ private fun AnonymousPostMediaBlock(
     post: AnonymousPost,
     style: AnonymousPostCardStyle,
     corner: androidx.compose.ui.unit.Dp,
+    photoAspect: Float,
     onPinchingChanged: (Boolean) -> Unit,
     onOpenLightbox: () -> Unit,
+    onImageSize: (Int, Int) -> Unit,
 ) {
     val mediaUrl = post.usableMediaUrl
     val thumbUrl = post.usableThumbUrl
@@ -535,7 +631,7 @@ private fun AnonymousPostMediaBlock(
                 Modifier
                     .fillMaxWidth()
                     .then(if (feedBleed) Modifier else Modifier.padding(horizontal = MatteryaDimens.pagePadding))
-                    .aspectRatio(4f / 3f)
+                    .aspectRatio(photoAspect)
                     .clip(RoundedCornerShape(corner))
                     .background(MatteryaColors.canvasMuted)
                     .then(
@@ -548,6 +644,7 @@ private fun AnonymousPostMediaBlock(
                     contentScale = ContentScale.Crop,
                     onTap = onOpenLightbox,
                     onZoomingChanged = onPinchingChanged,
+                    onImageSize = onImageSize,
                     modifier = Modifier.fillMaxSize(),
                 )
             }

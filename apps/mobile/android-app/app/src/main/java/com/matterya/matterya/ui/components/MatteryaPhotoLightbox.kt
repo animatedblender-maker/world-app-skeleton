@@ -174,10 +174,13 @@ fun FeedPinchZoomPhoto(
     contentScale: ContentScale = ContentScale.Crop,
     onTap: () -> Unit,
     onZoomingChanged: ((Boolean) -> Unit)? = null,
+    /** Decoded bitmap size — sizes Masquerade/feed frames to real aspect (iOS onImageSize). */
+    onImageSize: ((width: Int, height: Int) -> Unit)? = null,
 ) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     var zooming by remember { mutableStateOf(false) }
+    var reportedSize by remember(url) { mutableStateOf(false) }
 
     val transformState = rememberTransformableState { zoomChange, panChange, _ ->
         val next = (scale * zoomChange).coerceIn(1f, 4f)
@@ -224,6 +227,14 @@ fun FeedPinchZoomPhoto(
             contentDescription = null,
             contentScale = contentScale,
             modifier = Modifier.fillMaxSize(),
+            onSuccess = { state ->
+                if (reportedSize || onImageSize == null) return@AsyncImage
+                val size = state.painter.intrinsicSize
+                if (size.width > 1f && size.height > 1f && size.width.isFinite() && size.height.isFinite()) {
+                    reportedSize = true
+                    onImageSize(size.width.toInt(), size.height.toInt())
+                }
+            },
         )
     }
 }

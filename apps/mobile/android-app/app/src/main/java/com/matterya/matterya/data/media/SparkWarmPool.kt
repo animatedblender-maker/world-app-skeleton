@@ -30,6 +30,8 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
     private val inUse = mutableSetOf<String>()
     /** Mid-clip Feed→Sparks/Hubs handoff — muted but keep decoding. */
     private val continuingIds = mutableSetOf<String>()
+    /** Playheads (seconds) for Feed→Sparks continue without seek-to-0. */
+    private val playheadsSec = mutableMapOf<String, Double>()
     private val maxSlots = 20
 
     fun prepare(
@@ -181,11 +183,29 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
     }
 
     fun clearContinuingHandoff(postId: String? = null) {
-        if (postId == null) continuingIds.clear()
-        else continuingIds.remove(postId)
+        if (postId == null) {
+            continuingIds.clear()
+            playheadsSec.clear()
+        } else {
+            continuingIds.remove(postId)
+            playheadsSec.remove(postId)
+        }
     }
 
     fun shouldContinueFromCurrentTime(postId: String): Boolean = postId in continuingIds
+
+    /** Remember mid-clip playhead before Feed player tears down (t > ~0.45s). */
+    fun rememberPlayhead(postId: String, seconds: Double) {
+        if (postId.isBlank()) return
+        if (!seconds.isFinite() || seconds < 0.45) return
+        playheadsSec[postId] = seconds
+        continuingIds.add(postId)
+    }
+
+    fun peekPlayheadSeconds(postId: String): Double? = playheadsSec[postId]
+
+    /** Consume saved playhead for first Sparks paint (or null). */
+    fun takePlayheadSeconds(postId: String): Double? = playheadsSec.remove(postId)
 
     fun warmSingle(postId: String, url: String) {
         if (slots.containsKey(postId) || postId in inUse) return

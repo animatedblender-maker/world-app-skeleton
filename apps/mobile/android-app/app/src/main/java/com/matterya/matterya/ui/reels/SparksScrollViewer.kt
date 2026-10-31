@@ -51,6 +51,10 @@ fun SparksScrollViewer(
     onOpenProfile: (CountryPost) -> Unit = {},
     onOpenPost: (CountryPost) -> Unit = {},
     onToggleFollow: (suspend (String) -> Unit)? = null,
+    onNotInterested: (CountryPost) -> Unit = {},
+    onHide: (CountryPost) -> Unit = {},
+    onBlockAuthor: (CountryPost) -> Unit = {},
+    onReport: (CountryPost, String) -> Unit = { _, _ -> },
 ) {
     val postsService = remember { PostsService() }
     val scope = rememberCoroutineScope()
@@ -289,6 +293,7 @@ fun SparksScrollViewer(
                 feedVideosMuted = feedVideosMuted,
                 onFeedVideosMutedChange = onFeedVideosMutedChange,
                 startIndex = activeIndex,
+                // iOS global Sparks omits Open; Keep / Chat / Send / ⋯ remain.
                 showsOpenPostAction = false,
                 showsProgressRail = false,
                 bottomInsetDp = 28,
@@ -299,6 +304,10 @@ fun SparksScrollViewer(
                         scope.launch { loadMoreReels() }
                     }
                 },
+                onNotInterested = onNotInterested,
+                onHide = onHide,
+                onBlockAuthor = onBlockAuthor,
+                onReport = onReport,
             )
         }
     }

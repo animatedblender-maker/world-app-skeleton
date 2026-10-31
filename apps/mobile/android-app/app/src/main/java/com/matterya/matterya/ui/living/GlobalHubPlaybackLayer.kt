@@ -1,5 +1,11 @@
 package com.matterya.matterya.ui.living
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -77,7 +83,12 @@ fun GlobalHubPlaybackLayer(
             )
         }
 
-        if (!expanded) {
+        AnimatedVisibility(
+            visible = !expanded,
+            enter = fadeIn(tween(180)) + slideInVertically(tween(220)) { it / 3 },
+            exit = fadeOut(tween(140)) + slideOutVertically(tween(180)) { it / 4 },
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
             YouTubeMiniPlayerBar(
                 post = post,
                 isPlaying = isPlaying,
@@ -85,7 +96,6 @@ fun GlobalHubPlaybackLayer(
                 onExpand = onExpand,
                 onClose = onClose,
                 onTogglePlay = onTogglePlay,
-                modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
     }

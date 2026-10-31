@@ -31,6 +31,7 @@ import androidx.compose.material.icons.automirrored.outlined.Reply
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.NorthEast
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.VolumeOff
@@ -39,6 +40,8 @@ import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -67,11 +70,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.matterya.matterya.data.media.SparkWarmPool
 import com.matterya.matterya.data.reels.SparkDiscoveryEngine
 import com.matterya.matterya.model.CountryPost
 import com.matterya.matterya.theme.MatteryaColors
 import com.matterya.matterya.theme.MatteryaCopy
 import com.matterya.matterya.theme.MatteryaDimens
+import com.matterya.matterya.theme.MatteryaReportCategories
+import com.matterya.matterya.ui.anonymous.MatteryaReportDialog
 import com.matterya.matterya.ui.components.AvatarView
 import com.matterya.matterya.ui.components.FollowButton
 import com.matterya.matterya.ui.components.VideoPlayerView
@@ -117,8 +123,15 @@ fun ReelsView(
     useOverPlayerComments: Boolean = true,
     /** Notify owner when pager settles (iOS ReelsScrollViewer activeIndex). */
     onActiveIndexChange: (Int) -> Unit = {},
+    onNotInterested: (CountryPost) -> Unit = {},
+    onHide: (CountryPost) -> Unit = {},
+    onBlockAuthor: (CountryPost) -> Unit = {},
+    onReport: (CountryPost, String) -> Unit = { _, _ -> },
 ) {
     var commentsPost by remember { mutableStateOf<CountryPost?>(null) }
+    var chromeActivePost by remember(posts, startIndex) {
+        mutableStateOf(posts.getOrNull(startIndex.coerceIn(0, (posts.size - 1).coerceAtLeast(0))))
+    }
 
     Box(
         Modifier
@@ -173,7 +186,8 @@ fun ReelsView(
                     initialPage = safeStart,
                     pageCount = { posts.size.coerceAtLeast(1) },
                 )
-                LaunchedEffect(pagerState.currentPage) {
+                LaunchedEffect(pagerState.currentPage, posts) {
+                    chromeActivePost = posts.getOrNull(pagerState.currentPage)
                     onActiveIndexChange(pagerState.currentPage)
                 }
                 // One neighbor for seamless swipe (iOS warms ahead; 1 keeps memory sane on emulator).
@@ -222,10 +236,15 @@ fun ReelsView(
             }
         }
 
-        // iOS SparksTopChrome — close (X) + SPARKS badge
+        // iOS SparksTopChrome — close (X) + SPARKS badge + ⋯
         SparksTopChrome(
             title = title.ifBlank { MatteryaCopy.sparks },
+            post = chromeActivePost,
             onClose = onBack,
+            onNotInterested = { chromeActivePost?.let(onNotInterested) },
+            onHide = { chromeActivePost?.let(onHide) },
+            onBlockAuthor = { chromeActivePost?.let(onBlockAuthor) },
+            onReport = { reason -> chromeActivePost?.let { onReport(it, reason) } },
             modifier = Modifier.align(Alignment.TopCenter),
         )
 
@@ -293,14 +312,22 @@ fun ReelsVerticalFeed(
     bottomInsetDp = bottomInsetDp,
 )
 
-/** iOS `SparksTopChrome` — close top-leading + SPARKS wordmark centered. */
+/** iOS `SparksTopChrome` — close top-leading + SPARKS wordmark + ⋯ more menu. */
 @Composable
 fun SparksTopChrome(
     title: String = MatteryaCopy.sparks,
+    post: CountryPost? = null,
     onClose: () -> Unit,
+    onNotInterested: () -> Unit = {},
+    onHide: () -> Unit = {},
+    onBlockAuthor: () -> Unit = {},
+    onReport: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val word = title.uppercase()
+    var menuOpen by remember { mutableStateOf(false) }
+    var showReport by remember { mutableStateOf(false) }
+
     Box(
         modifier
             .fillMaxWidth()
@@ -338,6 +365,63 @@ fun SparksTopChrome(
                 )
             }
         }
+        Box(Modifier.align(Alignment.CenterEnd)) {
+            IconButton(
+                onClick = { menuOpen = true },
+                enabled = post != null,
+                modifier = Modifier.size(44.dp),
+            ) {
+                Icon(
+                    Icons.Default.MoreHoriz,
+                    contentDescription = "More options",
+                    tint = Color.White.copy(alpha = 0.92f),
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("Not interested") },
+                    onClick = {
+                        menuOpen = false
+                        onNotInterested()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("Hide ${MatteryaCopy.spark.lowercase()}") },
+                    onClick = {
+                        menuOpen = false
+                        onHide()
+                    },
+                )
+                DropdownMenuItem(
+                    text = {
+                        Text("Block ${post?.authorDisplayName ?: "author"}")
+                    },
+                    onClick = {
+                        menuOpen = false
+                        onBlockAuthor()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("Report", color = MatteryaColors.danger) },
+                    onClick = {
+                        menuOpen = false
+                        showReport = true
+                    },
+                )
+            }
+        }
+    }
+
+    if (showReport) {
+        MatteryaReportDialog(
+            title = "Report this ${MatteryaCopy.spark.lowercase()}",
+            onDismiss = { showReport = false },
+            onReason = { label ->
+                showReport = false
+                onReport(MatteryaReportCategories.slugForLabel(label))
+            },
+        )
     }
 }
 
@@ -399,6 +483,12 @@ private fun ReelsPagerCard(
     var isScrubbing by remember(post.id) { mutableStateOf(false) }
     // Bump once per focus — not every recompose (old page+1 token caused restart/poster blink).
     var focusGeneration by remember(post.id) { mutableIntStateOf(0) }
+    var hasFocusedOnce by remember(post.id) { mutableStateOf(false) }
+    val handoffStartSec = remember(post.id) {
+        if (SparkWarmPool.shared.shouldContinueFromCurrentTime(post.id)) {
+            SparkWarmPool.shared.peekPlayheadSeconds(post.id)
+        } else null
+    }
     val scope = rememberCoroutineScope()
 
     val muteIcon = if (feedVideosMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp
@@ -448,12 +538,29 @@ private fun ReelsPagerCard(
             seekTo = null
             isScrubbing = false
         } else {
-            focusGeneration += 1
             pausedByUser = false
             showPauseGlyph = false
-            currentSec = 0.0
-            seekTo = null
             isScrubbing = false
+            if (!hasFocusedOnce) {
+                hasFocusedOnce = true
+                val head = handoffStartSec
+                if (head != null && head > 0.45) {
+                    // Mid-clip Feed→Sparks: resume without seek-to-0 thrash.
+                    currentSec = head
+                    seekTo = head
+                    SparkWarmPool.shared.takePlayheadSeconds(post.id)
+                    SparkWarmPool.shared.clearContinuingHandoff(post.id)
+                } else {
+                    currentSec = 0.0
+                    seekTo = null
+                    SparkWarmPool.shared.clearContinuingHandoff(post.id)
+                }
+            } else {
+                // Swipe away and back — restart from beginning (iOS page settle).
+                focusGeneration += 1
+                currentSec = 0.0
+                seekTo = null
+            }
             // iOS marks watched on page settle so discovery never re-serves early.
             SparkDiscoveryEngine.markWatched(post.id)
         }
@@ -489,7 +596,8 @@ private fun ReelsPagerCard(
             muted = feedVideosMuted,
             showsControls = false,
             fillsFrame = true,
-            restartFromBeginningToken = if (isActive) focusGeneration else 0,
+            restartFromBeginningToken = if (isActive && focusGeneration > 0) focusGeneration else 0,
+            startTime = handoffStartSec?.takeIf { it > 0.45 },
             seekToSeconds = seekTo,
             onSeekConsumed = { seekTo = null },
             onProgress = { cur, dur ->
@@ -792,7 +900,7 @@ private fun SparkDock(
             )
             SparkActionChip(
                 icon = if (isSaved) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
-                label = "Keep",
+                label = if (isSaved) "Kept" else "Keep",
                 accent = if (isSaved) MatteryaColors.reelsAccent else paper,
                 onClick = onSave,
                 modifier = Modifier.weight(1f),

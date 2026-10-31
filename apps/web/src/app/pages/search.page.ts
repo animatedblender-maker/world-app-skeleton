@@ -161,14 +161,14 @@ type SearchScope = 'top' | 'people' | 'content';
 
         <section class="results-section" *ngIf="showPosts">
           <div class="section-title">{{ scope === 'top' ? 'Content' : 'Posts' }}</div>
-          <div class="posts-state" *ngIf="!searchBusy && searchTerm && !postResults.length">
+          <div class="posts-state" *ngIf="!searchBusy && searchTerm && !visiblePosts.length">
             No posts found.
           </div>
-          <div class="posts-list" *ngIf="postResults.length">
+          <div class="posts-list" *ngIf="visiblePosts.length">
             <div
               class="post-card"
               [class.media]="!!post.media_url && post.media_type !== 'none'"
-              *ngFor="let post of postResults; trackBy: trackPostById"
+              *ngFor="let post of visiblePosts; trackBy: trackPostById"
               (click)="openPost(post, $event)"
             >
               <div class="post-author">
@@ -192,11 +192,10 @@ type SearchScope = 'top' | 'people' | 'content';
                   <div class="author-info">
                     <div class="author-name">{{ post.author?.display_name || post.author?.username || 'Member' }}</div>
                     <div class="author-meta">
-                      @{{ post.author?.username || 'user' }} - {{ post.created_at | date: 'mediumDate' }}
+                      @{{ post.author?.username || 'user' }} · {{ post.created_at | date: 'mediumDate' }}
                       <span class="post-visibility" *ngIf="post.visibility !== 'public' && post.visibility !== 'country'">
-                        - {{ visibilityLabel(post.visibility) }}
+                        · {{ visibilityLabel(post.visibility) }}
                       </span>
-                      <span *ngIf="post.country_name || post.country_code"> - {{ post.country_name || post.country_code }}</span>
                     </div>
                   </div>
                 </div>
@@ -212,19 +211,20 @@ type SearchScope = 'top' | 'people' | 'content';
                 </button>
               </div>
 
-              <div class="post-body">
-                <div class="post-title" *ngIf="post.title">{{ post.title }}</div>
+              <div
+                class="post-body"
+                *ngIf="(!post.media_url || post.media_type === 'none') && postCaptionText(post) as caption"
+              >
                 <p
                   class="post-text"
-                  *ngIf="post.body && (!post.media_url || post.media_type === 'none' || !postHasVideo(post))"
-                  [class.clamped]="!isPostExpanded(post.id) && isTextExpandable(post.body)"
+                  [class.clamped]="!isPostExpanded(post.id) && isTextExpandable(caption)"
                   (click)="onPostTextClick(post.id, $event)"
                 >
-                  <span>{{ isPostExpanded(post.id) ? post.body : postPreview(post.body) }}</span>
+                  <span>{{ isPostExpanded(post.id) ? caption : postPreview(caption) }}</span>
                   <button
                     class="see-more inline"
                     type="button"
-                    *ngIf="!isPostExpanded(post.id) && isTextExpandable(post.body)"
+                    *ngIf="!isPostExpanded(post.id) && isTextExpandable(caption)"
                     (click)="togglePostExpanded(post.id, $event)"
                   >
                     See more
@@ -252,7 +252,7 @@ type SearchScope = 'top' | 'people' | 'content';
                       <div class="shared-name">{{ shared.author?.display_name || shared.author?.username || 'Member' }}</div>
                       <div class="shared-meta">
                         @{{ shared.author?.username || 'user' }} · {{ shared.created_at | date: 'mediumDate' }}
-                        <span *ngIf="shared.country_name || shared.country_code"> - {{ shared.country_name || shared.country_code }}</span>
+
                       </div>
                     </div>
                   </div>
@@ -529,14 +529,15 @@ type SearchScope = 'top' | 'people' | 'content';
         display: block;
         min-height: 100dvh;
         height: 100dvh;
-        background: #f5f7fa;
-        color: #0b0f18;
+        background: var(--m-paper, #f8f6f2);
+        color: var(--m-ink, #2c2825);
         overflow: hidden;
       }
       .search-shell {
         min-height: 100dvh;
         display: flex;
         flex-direction: column;
+        background: var(--m-paper, #f8f6f2);
       }
       .search-header {
         position: sticky;
@@ -544,37 +545,102 @@ type SearchScope = 'top' | 'people' | 'content';
         z-index: 5;
         display: flex;
         align-items: center;
-        gap: 14px;
-        padding: calc(14px + env(safe-area-inset-top)) 16px 12px;
-        background: #fff;
-        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.08);
-      }
-      .logo-btn {
-        width: 44px;
-        height: 44px;
-        border-radius: 14px;
-        border: 1px solid rgba(0, 0, 0, 0.08);
-        background: transparent;
-        display: grid;
-        place-items: center;
-        cursor: pointer;
-        padding: 0;
-      }
-      .logo-btn img {
-        width: 34px;
-        height: 34px;
+        gap: 10px;
+        padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
+        background: var(--m-surface, #fefdfb);
+        border-bottom: 0.5px solid var(--m-divider, #e2ded8);
       }
       .search-field {
         flex: 1;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border-radius: 999px;
+        background: var(--m-canvas-muted, #f2f0ec);
+      }
+      .search-icon {
+        color: var(--m-ink-muted, #948b82);
+        font-size: 15px;
+        line-height: 1;
       }
       .search-field input {
+        flex: 1;
         width: 100%;
-        border-radius: 14px;
-        border: 1px solid rgba(0, 0, 0, 0.12);
-        padding: 12px 14px;
-        font-size: 14px;
-        background: rgba(248, 249, 251, 0.95);
+        border: 0;
+        padding: 0;
+        font-size: 16px;
+        background: transparent;
+        color: var(--m-ink, #2c2825);
         outline: none;
+      }
+      .clear-btn,
+      .cancel-btn {
+        border: 0;
+        background: transparent;
+        color: var(--m-ink, #2c2825);
+        cursor: pointer;
+        font-size: 16px;
+        padding: 0;
+      }
+      .clear-btn {
+        width: 28px;
+        height: 28px;
+        color: var(--m-ink-muted, #948b82);
+        font-size: 20px;
+        line-height: 1;
+      }
+      .cancel-btn {
+        font-weight: 400;
+        padding: 6px 2px;
+      }
+      .scope-picker {
+        display: flex;
+        background: var(--m-surface, #fefdfb);
+        border-bottom: 0.5px solid var(--m-divider, #e2ded8);
+      }
+      .scope-tab {
+        flex: 1;
+        border: 0;
+        background: transparent;
+        padding: 12px 8px 10px;
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--m-ink-muted, #948b82);
+        cursor: pointer;
+        position: relative;
+      }
+      .scope-tab.active {
+        font-weight: 650;
+        color: var(--m-ink, #2c2825);
+      }
+      .scope-tab.active::after {
+        content: '';
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 2px;
+        background: var(--m-ink, #2c2825);
+      }
+      .idle {
+        padding: 48px 32px;
+        text-align: center;
+        color: var(--m-ink-muted, #948b82);
+      }
+      .idle-icon {
+        font-size: 36px;
+        opacity: 0.55;
+        margin-bottom: 14px;
+      }
+      .idle-title {
+        font-size: 18px;
+        font-weight: 650;
+        color: var(--m-ink, #2c2825);
+      }
+      .idle-sub {
+        margin-top: 6px;
+        font-size: 14px;
       }
       .search-body {
         flex: 1;
@@ -582,78 +648,87 @@ type SearchScope = 'top' | 'people' | 'content';
         padding: 16px 16px calc(24px + var(--tabs-safe, 64px));
       }
       .search-state {
-        font-size: 12px;
-        font-weight: 700;
-        opacity: 0.7;
+        font-size: 13px;
+        color: var(--m-ink-muted, #948b82);
         margin-bottom: 12px;
       }
       .search-state.error {
-        color: #c33;
-        opacity: 0.9;
+        color: var(--m-danger, #ea000b);
       }
       .results-section {
         margin-bottom: 20px;
       }
       .section-title {
-        font-size: 11px;
-        letter-spacing: 0.16em;
-        font-weight: 800;
-        text-transform: uppercase;
-        color: rgba(10, 12, 18, 0.6);
+        font-size: 13px;
+        font-weight: 650;
+        color: var(--m-ink-muted, #948b82);
         margin-bottom: 10px;
       }
       .country-list,
       .people-list {
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 8px;
       }
       .country-row {
         display: flex;
         justify-content: space-between;
         align-items: center;
         padding: 12px 14px;
-        border-radius: 14px;
-        border: 1px solid rgba(0, 0, 0, 0.08);
-        background: #fff;
+        border-radius: 12px;
+        border: 0.5px solid var(--m-border, #ddd8d1);
+        background: var(--m-surface, #fefdfb);
         font-size: 14px;
+        color: var(--m-ink, #2c2825);
         cursor: pointer;
       }
       .country-row small {
         font-size: 11px;
-        opacity: 0.6;
+        color: var(--m-ink-muted, #948b82);
         text-transform: uppercase;
-        letter-spacing: 0.08em;
+        letter-spacing: 0.06em;
       }
       .person-card {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        padding: 12px 14px;
-        border-radius: 16px;
-        border: 1px solid rgba(0, 0, 0, 0.08);
-        background: #fff;
+        padding: 8px 0;
       }
       .person-card .author-core {
         flex: 1;
         border: 0;
         background: transparent;
         padding: 0;
+        min-width: 0;
+      }
+      .author-name-row {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .see-all {
+        border: 0;
+        background: transparent;
+        color: var(--m-ink, #2c2825);
+        font-size: 14px;
+        font-weight: 650;
+        padding: 8px 0;
+        cursor: pointer;
       }
 
-      .posts-state { font-size: 13px; font-weight: 700; opacity: 0.7; }
-      .posts-state.error { color: #ff6b81; }
+      .posts-state { font-size: 13px; color: var(--m-ink-muted, #948b82); }
+      .posts-state.error { color: var(--m-danger, #ea000b); }
       .posts-list { display: flex; flex-direction: column; gap: 10px; box-sizing: border-box; padding-bottom: 10px; overflow-x: hidden; }
-      .posts-empty { text-align: center; font-size: 13px; opacity: 0.65; }
+      .posts-empty { text-align: center; font-size: 13px; color: var(--m-ink-muted, #948b82); }
       .post-card {
         position: relative;
-        border-radius: 20px;
-        border: 1px solid rgba(0, 0, 0, 0.06);
-        background: rgba(255, 255, 255, 0.98);
+        border-radius: var(--m-card-radius, 12px);
+        border: 0.5px solid var(--m-border, #ddd8d1);
+        background: var(--m-surface, #fefdfb);
         --post-pad-x: 16px;
         padding: var(--post-pad-x);
-        box-shadow: 0 18px 60px rgba(0, 0, 0, 0.15);
+        box-shadow: 0 16px 40px color-mix(in srgb, var(--m-ink, #2c2825) 4%, transparent);
         box-sizing: border-box;
         overflow-x: hidden;
       }
@@ -672,53 +747,47 @@ type SearchScope = 'top' | 'people' | 'content';
       }
       .author-core.clickable { cursor: pointer; }
       .author-avatar {
-        width: 42px;
-        height: 42px;
+        width: 52px;
+        height: 52px;
         border-radius: 999px;
         overflow: hidden;
-        background: rgba(245, 247, 250, 0.95);
-        border: 1px solid rgba(0, 0, 0, 0.08);
-        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+        background: var(--m-canvas-deep, #edeae5);
+        border: 0.5px solid var(--m-border, #ddd8d1);
         display: grid;
         place-items: center;
-        color: rgba(10, 12, 18, 0.8);
-        font-weight: 900;
-        letter-spacing: 0.08em;
+        color: var(--m-ink, #2c2825);
+        font-weight: 700;
       }
       .author-avatar img { width: 100%; height: 100%; object-fit: cover; }
       .author-info { flex: 1; min-width: 0; }
-      .author-name { font-weight: 900; font-size: 13px; letter-spacing: 0.04em; }
-      .author-meta { font-size: 12px; opacity: 0.7; }
+      .author-name { font-weight: 650; font-size: 14px; color: var(--m-ink, #2c2825); }
+      .author-meta { font-size: 12px; color: var(--m-ink-muted, #948b82); }
       .follow-chip {
-        border: 1px solid rgba(0, 0, 0, 0.18);
+        border: 0;
         border-radius: 999px;
-        padding: 6px 14px;
-        background: transparent;
-        color: rgba(0, 0, 0, 0.75);
-        font-size: 11px;
-        font-weight: 900;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
+        padding: 7px 14px;
+        background: var(--m-ink, #2c2825);
+        color: var(--m-paper, #f8f6f2);
+        font-size: 12px;
+        font-weight: 700;
         cursor: pointer;
+        flex-shrink: 0;
       }
       .follow-chip.following {
-        background: rgba(10, 12, 18, 0.06);
-        color: rgba(10, 12, 18, 0.78);
-        border-color: rgba(0, 0, 0, 0.12);
-        box-shadow: none;
+        background: var(--m-surface-muted, var(--m-canvas-muted, #f2f0ec));
+        color: var(--m-ink-secondary, #6b645d);
+        border: 0.5px solid var(--m-border, #ddd8d1);
       }
-      .follow-chip:disabled { opacity: 0.6; cursor: not-allowed; }
+      .follow-chip:disabled { opacity: 0.55; cursor: not-allowed; }
       .load-more-btn {
         margin-top: 12px;
-        border: 1px solid rgba(0, 0, 0, 0.12);
-        border-radius: 999px;
+        border: 0.5px solid var(--m-border, #ddd8d1);
+        border-radius: var(--m-control-radius, 8px);
         padding: 10px 16px;
-        background: rgba(255, 255, 255, 0.96);
-        color: rgba(10, 12, 18, 0.82);
-        font-size: 12px;
-        font-weight: 900;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
+        background: var(--m-matte, #f6f3ef);
+        color: var(--m-ink, #2c2825);
+        font-size: 13px;
+        font-weight: 650;
         cursor: pointer;
       }
       .post-body { margin-top: 12px; font-size: 14px; line-height: 1.4; color: rgba(10, 12, 18, 0.85); }
@@ -1106,6 +1175,12 @@ export class SearchPageComponent implements OnInit, OnDestroy {
   browsePeopleMode = false;
   loadingMorePeople = false;
   hasMorePeople = false;
+  scope: SearchScope = 'top';
+  readonly scopes: { id: SearchScope; title: string }[] = [
+    { id: 'top', title: 'Top' },
+    { id: 'people', title: 'People' },
+    { id: 'content', title: 'Content' },
+  ];
   countries: CountryModel[] = [];
   countryResults: CountryModel[] = [];
   peopleResults: Profile[] = [];
@@ -1309,8 +1384,56 @@ export class SearchPageComponent implements OnInit, OnDestroy {
     return next;
   }
 
+  get normalizedQuery(): string {
+    return String(this.searchTerm || '').trim();
+  }
+
+  get visiblePeople(): Profile[] {
+    if (this.scope === 'content' && this.normalizedQuery) return [];
+    if (this.scope === 'top' && this.normalizedQuery) return this.peopleResults.slice(0, 6);
+    return this.peopleResults;
+  }
+
+  get visiblePosts(): CountryPost[] {
+    if (this.scope === 'people' && this.normalizedQuery) return [];
+    if (this.scope === 'top' && this.normalizedQuery) return this.postResults.slice(0, 24);
+    return this.postResults;
+  }
+
+  get showCountries(): boolean {
+    return (
+      this.countryResults.length > 0 &&
+      (!this.normalizedQuery || this.scope === 'top' || this.scope === 'content')
+    );
+  }
+
+  get showPeople(): boolean {
+    if (this.browsePeopleMode && !this.normalizedQuery) return this.peopleResults.length > 0;
+    if (!this.normalizedQuery) return false;
+    if (this.scope === 'content') return false;
+    return this.visiblePeople.length > 0;
+  }
+
+  get showPosts(): boolean {
+    if (this.browsePeopleMode && !this.normalizedQuery) return false;
+    if (!this.normalizedQuery && !this.postResults.length) return false;
+    if (this.scope === 'people') return false;
+    return true;
+  }
+
+  get peopleSectionTitle(): string {
+    if (this.scope === 'people') return `${this.peopleResults.length} people`;
+    return 'People';
+  }
+
+  clearQuery(): void {
+    this.searchTerm = '';
+    this.onSearchInput('');
+  }
+
   goHome(): void {
-    void this.router.navigate(['/anonymous']);
+    if (window.history.length > 1) window.history.back();
+    else void this.router.navigate(['/feed']);
   }
 
   focusCountry(country: CountryModel): void {
@@ -1325,9 +1448,7 @@ export class SearchPageComponent implements OnInit, OnDestroy {
     if (target && (target.closest('button') || target.closest('input') || target.closest('textarea'))) {
       return;
     }
-    void this.router.navigate(['/anonymous'], {
-      queryParams: { post: post.id, tab: 'posts', panel: null },
-    });
+    void this.router.navigate(['/post', post.id]);
   }
 
   openUserProfile(profile: Profile): void {
@@ -1335,6 +1456,14 @@ export class SearchPageComponent implements OnInit, OnDestroy {
     const slug = profile.username?.trim() || profile.user_id;
     if (!slug) return;
     void this.router.navigate(['/user', slug]);
+  }
+
+  avatarFor(person: Profile): string {
+    return resolveAvatarUrl(person.avatar_url, person.username || person.user_id) || '';
+  }
+
+  isVerified(person: Profile): boolean {
+    return showsVerifiedBadge(person);
   }
 
   openAuthorProfile(author: CountryPost['author'] | null | undefined, fallbackId?: string | null): void {
@@ -1419,14 +1548,12 @@ export class SearchPageComponent implements OnInit, OnDestroy {
     return types.includes('video');
   }
 
+  /** Body when present; headline only when body empty — never both. */
   postCaptionText(post: CountryPost): string {
     if (!post) return '';
-    const caption = String(post.media_caption || '').trim();
-    if (caption) return caption;
-    if (this.postHasVideo(post)) {
-      return String(post.body || '').trim();
-    }
-    return '';
+    const body = String(post.body || '').trim();
+    if (body) return body;
+    return String(post.title || '').trim();
   }
 
   postMediaUrls(post: CountryPost): string[] {

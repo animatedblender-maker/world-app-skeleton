@@ -72,6 +72,12 @@ fun AnonymousFeedView(store: AnonymousStore) {
                             onBlockAuthor = {
                                 scope.launch { store.block(post.authorProfileId) }
                             },
+                            warmComments = state.commentsByPostId[post.id].orEmpty(),
+                            onWarmComments = {
+                                if ((post.commentCount ?: 0) > 0) {
+                                    scope.launch { store.loadComments(post.id, force = false) }
+                                }
+                            },
                         )
                         LaunchedEffect(post.id) {
                             store.markFeedPostSeen(post.id)

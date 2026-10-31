@@ -34,8 +34,10 @@ import com.matterya.matterya.data.calls.TelecomCallManager
 import com.matterya.matterya.data.media.NowPlayingService
 import com.matterya.matterya.data.messages.ConversationInboxStore
 import com.matterya.matterya.data.messages.MessagesService
+import com.matterya.matterya.data.posts.PostsService
 import com.matterya.matterya.data.push.PushNotificationService
 import com.matterya.matterya.data.push.VoIPPushService
+import com.matterya.matterya.data.reels.SparkDiscoveryEngine
 import com.matterya.matterya.data.social.BlockService
 import com.matterya.matterya.model.AppTab
 import com.matterya.matterya.model.Conversation
@@ -1315,6 +1317,34 @@ fun MainTabView(
                     navigate(NavRoutes.post(post.id))
                 },
                 onToggleFollow = { userId -> vm.toggleFollow(userId) },
+                onNotInterested = { post ->
+                    SparkDiscoveryEngine.markWatched(post.id)
+                    vm.appState.showToast("We’ll show fewer like this.", ToastStyle.Info)
+                },
+                onHide = { post ->
+                    SparkDiscoveryEngine.markWatched(post.id)
+                    vm.appState.showToast("Hidden.", ToastStyle.Info)
+                },
+                onBlockAuthor = { post ->
+                    vm.appState.blockUser(
+                        post.authorId,
+                        username = post.author?.username,
+                        displayName = post.author?.displayName,
+                    )
+                    vm.appState.showToast("Blocked ${post.authorDisplayName}.", ToastStyle.Info)
+                },
+                onReport = { post, reason ->
+                    scope.launch {
+                        val ok = runCatching {
+                            PostsService().reportPost(post.id, reason)
+                        }.getOrDefault(false)
+                        vm.appState.showToast(
+                            if (ok) "Reported. Thank you." else "Could not report.",
+                            if (ok) ToastStyle.Info else ToastStyle.Error,
+                        )
+                        if (ok) SparkDiscoveryEngine.markWatched(post.id)
+                    }
+                },
             )
         }
 

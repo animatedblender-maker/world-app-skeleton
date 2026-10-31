@@ -11,9 +11,14 @@ import { MediaSessionService } from '../core/services/media-session.service';
 import { PostsService } from '../core/services/posts.service';
 import { R2PlaybackService } from '../core/services/r2-playback.service';
 import { SurfacePageService } from '../core/services/surface-page.service';
+import { HubsCatalogService } from '../hubs/hubs-catalog.service';
 import { HubsPlaybackService } from '../hubs/hubs-playback.service';
 import { CountryPost, PostComment } from '../core/models/post.model';
 import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util';
+
+/** iOS FeedFeedbackStore — suppress Not interested / Hide across Sparks session. */
+const SPARKS_FEEDBACK_KEY = 'matterya.sparks.feedback.v1';
+const SPARKS_BLOCKED_KEY = 'matterya.sparks.blocked_authors.v1';
 
 @Component({
   selector: 'app-reels-page',
@@ -52,12 +57,51 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
               <line x1="21" y1="8" x2="16" y2="13"></line>
             </svg>
           </button>
-          <button type="button" class="chrome-btn" (click)="goGlobe()" aria-label="Open globe">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7">
-              <circle cx="12" cy="12" r="9" />
-              <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" stroke-linecap="round" />
-            </svg>
-          </button>
+          <!-- iOS SparksTopChrome ⋯ — Not interested / Hide / Block / Report -->
+          <div class="overflow-wrap" *ngIf="activePost as post">
+            <button
+              type="button"
+              class="chrome-btn"
+              (click)="toggleOverflow($event)"
+              [attr.aria-expanded]="overflowOpen"
+              aria-label="More options"
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+                <circle cx="5" cy="12" r="1.6" />
+                <circle cx="12" cy="12" r="1.6" />
+                <circle cx="19" cy="12" r="1.6" />
+              </svg>
+            </button>
+            <div class="overflow-menu" *ngIf="overflowOpen" (click)="$event.stopPropagation()">
+              <button
+                type="button"
+                class="overflow-item"
+                *ngIf="!isOwnPost(post)"
+                (click)="notInterested(post)"
+              >
+                Not interested
+              </button>
+              <button
+                type="button"
+                class="overflow-item"
+                *ngIf="!isOwnPost(post)"
+                (click)="hideSpark(post)"
+              >
+                Hide {{ copy.spark.toLowerCase() }}
+              </button>
+              <button
+                type="button"
+                class="overflow-item"
+                *ngIf="!isOwnPost(post)"
+                (click)="blockAuthor(post)"
+              >
+                Block {{ displayName(post) }}
+              </button>
+              <button type="button" class="overflow-item danger" (click)="reportSpark(post)">
+                Report
+              </button>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -138,6 +182,7 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
                 </button>
               </div>
 
+              <!-- iOS sparkActionsRow: Like / Chat / Keep / Send / Open -->
               <div class="reel-actions" (click)="$event.stopPropagation()">
                 <button
                   type="button"
@@ -155,7 +200,7 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
                       d="M12 21s-6.7-4.4-9.2-7.4C.9 11.4 1.5 7.6 4.6 6 6.6 5 9 5.6 10.5 7.4L12 9l1.5-1.6C15 5.6 17.4 5 19.4 6c3.1 1.6 3.7 5.4 1.8 7.6C18.7 16.6 12 21 12 21z"
                     ></path>
                   </svg>
-                  <span class="rail-label">{{ post.like_count || 0 }}</span>
+                  <span class="rail-label">{{ post.like_count ? compactCount(post.like_count) : 'Like' }}</span>
                 </button>
 
                 <button
@@ -163,20 +208,43 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
                   class="rail-btn"
                   [class.active]="commentOpenPostId === post.id"
                   (click)="toggleComments(post)"
-                  aria-label="Comments"
+                  aria-label="Chat"
                 >
                   <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
                     <path d="M4 5h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"></path>
                   </svg>
-                  <span class="rail-label">{{ post.comment_count || 0 }}</span>
+                  <span class="rail-label">{{ post.comment_count ? compactCount(post.comment_count) : 'Chat' }}</span>
                 </button>
 
-                <button type="button" class="rail-btn" (click)="sharePost(post)" aria-label="Share">
+                <button
+                  type="button"
+                  class="rail-btn"
+                  [class.kept]="isKept(post)"
+                  (click)="toggleKeep(post)"
+                  [attr.aria-label]="isKept(post) ? 'Kept' : 'Keep'"
+                >
+                  <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                    <path
+                      [attr.fill]="isKept(post) ? 'currentColor' : 'none'"
+                      d="M6 4h12a1 1 0 0 1 1 1v16l-7-4-7 4V5a1 1 0 0 1 1-1z"
+                    />
+                  </svg>
+                  <span class="rail-label">{{ isKept(post) ? 'Kept' : 'Keep' }}</span>
+                </button>
+
+                <button type="button" class="rail-btn" (click)="sharePost(post)" aria-label="Send">
                   <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
                     <path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7" stroke-linecap="round" />
                     <path d="M12 16V4M8 8l4-4 4 4" stroke-linecap="round" stroke-linejoin="round" />
                   </svg>
-                  <span class="rail-label">Share</span>
+                  <span class="rail-label">Send</span>
+                </button>
+
+                <button type="button" class="rail-btn" (click)="openPost(post)" aria-label="Open">
+                  <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                    <path d="M7 17L17 7M9 7h8v8" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                  <span class="rail-label">Open</span>
                 </button>
               </div>
             </div>
@@ -541,7 +609,7 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 18px;
+        gap: 12px;
         pointer-events: auto;
         padding-right: 4px;
         padding-bottom: 2px;
@@ -565,6 +633,12 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
       .rail-btn.liked {
         color: #ff4d6a;
       }
+      .rail-btn.kept {
+        color: var(--m-accent-bright, #f6f3ef);
+      }
+      .rail-btn.active {
+        color: var(--m-accent-bright, #f6f3ef);
+      }
       .rail-icon {
         width: 28px;
         height: 28px;
@@ -575,6 +649,44 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
         font-weight: 650;
         color: rgba(255, 255, 255, 0.9);
         text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+      }
+      .overflow-wrap {
+        position: relative;
+      }
+      .overflow-menu {
+        position: absolute;
+        top: calc(100% + 6px);
+        right: 0;
+        min-width: 180px;
+        padding: 6px;
+        border-radius: 14px;
+        background: rgba(20, 18, 16, 0.94);
+        border: 0.5px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        z-index: 40;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .overflow-item {
+        border: 0;
+        background: transparent;
+        color: rgba(255, 255, 255, 0.92);
+        text-align: left;
+        font-size: 13px;
+        font-weight: 600;
+        padding: 10px 12px;
+        border-radius: 10px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .overflow-item:hover {
+        background: rgba(255, 255, 255, 0.08);
+      }
+      .overflow-item.danger {
+        color: #ff6b6b;
       }
       .reel-error {
         position: absolute;
@@ -733,7 +845,7 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
         align-items: center;
       }
       .comment-reply span {
-        color: #8bdcff;
+        color: var(--m-accent-bright, #f6f3ef);
       }
       .ghost-link {
         border: 0;
@@ -780,6 +892,17 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
       @media (min-width: 900px) {
         :host {
           background: #0a0908;
+        }
+        /* Denser Keep/Open rail on phone-sized stage. */
+        .reel-actions {
+          gap: 10px;
+        }
+        .rail-icon {
+          width: 24px;
+          height: 24px;
+        }
+        .rail-label {
+          font-size: 10px;
         }
         .reels-root {
           display: flex;
@@ -899,6 +1022,12 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
   commentReplyTarget: Record<string, { commentId: string; authorName: string } | null> = {};
   commentLikeBusy: Record<string, Record<string, boolean>> = {};
 
+  overflowOpen = false;
+  private keptTick = 0;
+  private suppressedIds = new Set<string>();
+  private blockedAuthorIds = new Set<string>();
+  private docClickCloser?: (event: Event) => void;
+
   /** iOS SparkWarmPool.MediaBudget — do not retune daily. */
   private static readonly WARM_AHEAD = 5;
   private static readonly DEEP_AHEAD = 2;
@@ -927,8 +1056,13 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
     private playback: R2PlaybackService,
     private mediaSession: MediaSessionService,
     private hubsPlayback: HubsPlaybackService,
+    private catalog: HubsCatalogService,
     private cdr: ChangeDetectorRef
   ) {}
+
+  get activePost(): CountryPost | null {
+    return this.videoPosts[this.activeIndex] || null;
+  }
 
   private paint(): void {
     try {
@@ -947,6 +1081,7 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
     if (this.hubsPlayback.isActive) this.hubsPlayback.setPlaying(false);
     this.mediaSession.claimSparks();
     this.reelMuted = this.readGlobalMute();
+    this.loadFeedbackState();
     this.muteListener = (event: Event) => {
       this.reelMuted = !!(event as CustomEvent<boolean>).detail;
       this.paint();
@@ -961,11 +1096,18 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
       this.resumeActiveReelVideo();
     };
     document.addEventListener('visibilitychange', this.visibilityListener);
+    this.docClickCloser = () => {
+      if (!this.overflowOpen) return;
+      this.overflowOpen = false;
+      this.paint();
+    };
+    document.addEventListener('click', this.docClickCloser);
     void this.loadMe();
     this.routeSub = this.route.paramMap.subscribe((params) => {
       this.countryCode = (params.get('country') || '').toUpperCase();
       this.commentOpenPostId = null;
       this.commentPost = null;
+      this.overflowOpen = false;
       this.activeIndex = 0;
       this.seeded = this.applySeedFromState();
       if (!this.seeded) {
@@ -992,6 +1134,10 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
     if (this.visibilityListener) {
       document.removeEventListener('visibilitychange', this.visibilityListener);
       this.visibilityListener = undefined;
+    }
+    if (this.docClickCloser) {
+      document.removeEventListener('click', this.docClickCloser);
+      this.docClickCloser = undefined;
     }
     this.mediaSession.releaseSparks();
     // If hubs mini is still alive, restore exclusive hubs ownership (paused).
@@ -1125,6 +1271,132 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
     const code = (post.country_code || this.countryCode || '').trim().toUpperCase();
     if (!code || code === this.countryCode) return;
     void this.router.navigate(['/sparks', code]);
+  }
+
+  isKept(post: CountryPost): boolean {
+    void this.keptTick;
+    return this.catalog.isSaved(post.id);
+  }
+
+  toggleKeep(post: CountryPost): void {
+    if (!post?.id) return;
+    this.catalog.toggleSave(post.id);
+    this.keptTick++;
+    this.paint();
+  }
+
+  compactCount(n: number): string {
+    const v = Math.abs(n || 0);
+    if (v >= 1_000_000) {
+      const m = v / 1_000_000;
+      return m >= 10 ? `${Math.round(m)}M` : `${m.toFixed(1)}M`;
+    }
+    if (v >= 1_000) {
+      const k = v / 1_000;
+      return k >= 10 ? `${Math.round(k)}K` : `${k.toFixed(1)}K`;
+    }
+    return String(v);
+  }
+
+  isOwnPost(post: CountryPost): boolean {
+    if (!this.meId || !post) return false;
+    return post.author_id === this.meId || post.author?.user_id === this.meId;
+  }
+
+  toggleOverflow(event: Event): void {
+    event.stopPropagation();
+    this.overflowOpen = !this.overflowOpen;
+    this.paint();
+  }
+
+  notInterested(post: CountryPost): void {
+    this.overflowOpen = false;
+    this.suppressPost(post, 'not_interested');
+  }
+
+  hideSpark(post: CountryPost): void {
+    this.overflowOpen = false;
+    this.suppressPost(post, 'hide');
+  }
+
+  blockAuthor(post: CountryPost): void {
+    this.overflowOpen = false;
+    const authorId = post.author_id || post.author?.user_id;
+    if (authorId) {
+      this.blockedAuthorIds.add(authorId);
+      this.persistBlockedAuthors();
+    }
+    this.suppressPost(post, 'not_interested');
+  }
+
+  async reportSpark(post: CountryPost): Promise<void> {
+    this.overflowOpen = false;
+    const reason = window.prompt(`Report this ${this.copy.spark.toLowerCase()}`, 'spam')?.trim();
+    if (!reason || !post?.id) return;
+    try {
+      await this.postsService.reportPost(post.id, reason);
+      this.suppressPost(post, 'hide');
+    } catch {
+      this.postActionError[post.id] = 'Couldn’t report right now.';
+      this.paint();
+    }
+  }
+
+  private suppressPost(post: CountryPost, _kind: 'not_interested' | 'hide'): void {
+    if (!post?.id) return;
+    this.suppressedIds.add(post.id);
+    this.persistSuppressed();
+    const idx = this.videoPosts.findIndex((p) => p.id === post.id);
+    this.videoPosts = this.videoPosts.filter((p) => p.id !== post.id);
+    this.posts = this.posts.filter((p) => p.id !== post.id);
+    if (idx >= 0) {
+      this.activeIndex = Math.min(idx, Math.max(0, this.videoPosts.length - 1));
+    }
+    const next = this.videoPosts[this.activeIndex];
+    if (next) this.mediaSession.claimSparks(next.id);
+    this.warmPlaybackWindow(this.activeIndex);
+    this.paint();
+  }
+
+  private loadFeedbackState(): void {
+    try {
+      const raw = localStorage.getItem(SPARKS_FEEDBACK_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      this.suppressedIds = new Set(Array.isArray(parsed) ? parsed.map(String) : []);
+    } catch {
+      this.suppressedIds = new Set();
+    }
+    try {
+      const raw = localStorage.getItem(SPARKS_BLOCKED_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      this.blockedAuthorIds = new Set(Array.isArray(parsed) ? parsed.map(String) : []);
+    } catch {
+      this.blockedAuthorIds = new Set();
+    }
+  }
+
+  private persistSuppressed(): void {
+    try {
+      localStorage.setItem(SPARKS_FEEDBACK_KEY, JSON.stringify([...this.suppressedIds].slice(-2000)));
+    } catch {
+      // ignore
+    }
+  }
+
+  private persistBlockedAuthors(): void {
+    try {
+      localStorage.setItem(SPARKS_BLOCKED_KEY, JSON.stringify([...this.blockedAuthorIds].slice(-500)));
+    } catch {
+      // ignore
+    }
+  }
+
+  private passesFeedback(post: CountryPost): boolean {
+    if (!post?.id) return false;
+    if (this.suppressedIds.has(post.id)) return false;
+    const authorId = post.author_id || post.author?.user_id;
+    if (authorId && this.blockedAuthorIds.has(authorId)) return false;
+    return true;
   }
 
   async sharePost(post: CountryPost): Promise<void> {
@@ -1370,7 +1642,9 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
       }
 
       this.posts = pool;
-      const playable = pool.filter((p) => !!this.reelMediaSrc(p));
+      const playable = pool.filter(
+        (p) => !!this.reelMediaSrc(p) && this.passesFeedback(p)
+      );
       this.videoPosts = this.orderUnwatchedFirst(playable);
       if (!this.countryName) {
         this.countryName =
@@ -1423,6 +1697,7 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
     const added: CountryPost[] = [];
     for (const post of batch) {
       if (!post?.id || seen.has(post.id)) continue;
+      if (!this.passesFeedback(post)) continue;
       const src = this.playback.resolvedSrc(post) || this.rawVideoUrl(post);
       if (!src) continue;
       this.resolvedSrc.set(post.id, src);
@@ -1487,7 +1762,10 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
       return false;
     }
     const seedPosts = Array.isArray(state.seedPosts) ? state.seedPosts : [];
-    const videos = seedPosts.filter((post) => !!this.rawVideoUrl(post) || !!post.media_url);
+    const videos = seedPosts.filter(
+      (post) =>
+        (!!this.rawVideoUrl(post) || !!post.media_url) && this.passesFeedback(post)
+    );
     if (!videos.length) return false;
     // Keep first seed (opened clip) first; prefer unwatched in the rest — iOS feed→Sparks.
     const [head, ...rest] = videos;

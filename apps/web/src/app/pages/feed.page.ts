@@ -102,7 +102,7 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
             <app-matterya-post-card
               [post]="post"
               [edgeToEdge]="false"
-              [playGate]="focusPostId === post.id && isVideoPost(post)"
+              [playGate]="autoplayUnlocked && focusPostId === post.id && isVideoPost(post)"
               (changed)="onPostChanged($event)"
               (requestPlay)="onRequestPlay($event)"
             ></app-matterya-post-card>
@@ -460,6 +460,11 @@ export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
   myInitials = 'ME';
   /** Single feed focus winner — only this card mounts AV (iOS playGate). */
   focusPostId: string | null = null;
+  /**
+   * iOS FeedVideoFocus.autoplayUnlocked — cold open stays silent ~100ms after first paint
+   * so splash/bootstrap cards are not audible before the surface settles.
+   */
+  autoplayUnlocked = false;
   readonly copy = MatteryaCopy;
 
   /** iOS FeedVideoFocus thresholds — play ~12%, keep ~8%, steal epsilon. */
@@ -467,6 +472,7 @@ export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
   private static readonly MIN_VISIBLE_TO_KEEP = 0.08;
   private static readonly STEAL_EPSILON = 0.015;
   private static readonly EMPTY_SILENCE_MS = 450;
+  private static readonly AUTOPLAY_UNLOCK_MS = 100;
 
   private focusObserver: IntersectionObserver | null = null;
   private observedIds = new Set<string>();
@@ -476,6 +482,7 @@ export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
   private hubsSub?: Subscription;
   private focusRaf = 0;
   private emptySilenceTimer: ReturnType<typeof setTimeout> | null = null;
+  private autoplayUnlockTimer: ReturnType<typeof setTimeout> | null = null;
   private visibilityListener?: () => void;
   /** Session-viewed video ids — never silently reshuffle these to the front. */
   private viewedVideoIds = new Set<string>();
@@ -535,11 +542,31 @@ export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
       clearTimeout(this.emptySilenceTimer);
       this.emptySilenceTimer = null;
     }
+    if (this.autoplayUnlockTimer) {
+      clearTimeout(this.autoplayUnlockTimer);
+      this.autoplayUnlockTimer = null;
+    }
     if (this.visibilityListener) {
       document.removeEventListener('visibilitychange', this.visibilityListener);
       this.visibilityListener = undefined;
     }
     this.mediaSession.releaseFeed(this.focusPostId);
+  }
+
+  /** iOS FeedVideoFocus.unlockAutoplayAfterFirstPaint(delayMs: 100). */
+  private scheduleAutoplayUnlock(): void {
+    if (this.autoplayUnlocked) return;
+    if (this.autoplayUnlockTimer) {
+      clearTimeout(this.autoplayUnlockTimer);
+      this.autoplayUnlockTimer = null;
+    }
+    this.autoplayUnlockTimer = setTimeout(() => {
+      this.autoplayUnlockTimer = null;
+      if (this.autoplayUnlocked) return;
+      this.autoplayUnlocked = true;
+      this.paint();
+      this.scheduleFocusPick();
+    }, FeedPageComponent.AUTOPLAY_UNLOCK_MS);
   }
 
   private paint(): void {
@@ -561,6 +588,7 @@ export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
 
   onRequestPlay(post: CountryPost): void {
     if (!post?.id || this.hubsPlayback.isActive) return;
+    if (!this.autoplayUnlocked) return;
     this.setFocus(post.id);
   }
 
@@ -640,6 +668,8 @@ export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
       this.silenceFeedForHiddenTab();
       return;
     }
+    // Cold open: never elect AV until unlock fires (~100ms after first paint).
+    if (!this.autoplayUnlocked) return;
     if (this.hubsPlayback.isActive || this.mediaSession.sparksOwns) {
       if (this.focusPostId) {
         this.clearFocusImmediate();
@@ -1052,12 +1082,15 @@ export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
       ).slice(0, 12);
       this.rebuildRailPeople();
       this.focusPostId = null;
+      this.autoplayUnlocked = false;
       this.ratios.clear();
       this.observedIds.clear();
       this.focusObserver?.disconnect();
       this.focusObserver = null;
       this.loading = false;
       this.paint();
+      // iOS WorldAppApp → unlockAutoplayAfterFirstPaint(100) after splash settle.
+      this.scheduleAutoplayUnlock();
 
       // After first paint: Frame0 thumbs only, then optional secondary top-up.
       // Playback freshen happens for the focus winner in setFocus (no AV storm).

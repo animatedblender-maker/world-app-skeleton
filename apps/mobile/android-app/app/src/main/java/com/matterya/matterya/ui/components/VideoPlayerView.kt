@@ -54,6 +54,7 @@ import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.matterya.matterya.data.media.MediaPlaybackCoordinator
+import com.matterya.matterya.data.media.SparkWarmPool
 import com.matterya.matterya.theme.MatteryaColors
 import com.matterya.matterya.ui.ads.AdPrerollView
 import kotlinx.coroutines.delay
@@ -146,7 +147,7 @@ fun VideoPlayerView(
         }
     }
 
-    DisposableEffect(player, protectAsContinuous) {
+    DisposableEffect(player, protectAsContinuous, postId) {
         val p = player
         if (p != null) {
             MediaPlaybackCoordinator.shared.register(p)
@@ -156,6 +157,12 @@ fun VideoPlayerView(
         }
         onDispose {
             try {
+                // Capture mid-clip playhead before tear-down for Feed→Sparks handoff.
+                val id = postId
+                if (id != null && p != null) {
+                    val sec = p.currentPosition / 1000.0
+                    if (sec > 0.45) SparkWarmPool.shared.rememberPlayhead(id, sec)
+                }
                 if (protectAsContinuous && p != null &&
                     MediaPlaybackCoordinator.shared.continuousHubPlayer === p
                 ) {
@@ -170,14 +177,22 @@ fun VideoPlayerView(
         }
     }
 
-    LaunchedEffect(isActive, isPausedByUser, player, shouldShowAd) {
+    LaunchedEffect(isActive, isPausedByUser, player, shouldShowAd, postId) {
         val p = player ?: return@LaunchedEffect
         if (shouldShowAd) {
             p.pause()
             return@LaunchedEffect
         }
         when {
-            !isActive -> p.pause()
+            !isActive -> {
+                // Park playhead while still alive (reelsOpen pauses feed before dispose).
+                val id = postId
+                if (id != null) {
+                    val sec = p.currentPosition / 1000.0
+                    if (sec > 0.45) SparkWarmPool.shared.rememberPlayhead(id, sec)
+                }
+                p.pause()
+            }
             isPausedByUser -> p.pause()
             else -> p.play()
         }
@@ -188,8 +203,26 @@ fun VideoPlayerView(
     }
 
     // Restart seek only — do NOT re-show poster (that caused Sparks blinking).
-    LaunchedEffect(restartFromBeginningToken, player) {
+    // Skip seek-to-0 when this clip is a mid-clip Feed→Sparks handoff.
+    LaunchedEffect(restartFromBeginningToken, player, postId) {
         if (restartFromBeginningToken > 0) {
+            val continuing = postId != null &&
+                SparkWarmPool.shared.shouldContinueFromCurrentTime(postId)
+            if (continuing) {
+                val head = postId?.let { SparkWarmPool.shared.peekPlayheadSeconds(it) }
+                if (head != null && head > 0.45) {
+                    runCatching {
+                        player?.seekTo((head * 1000).toLong())
+                        if (isActive && !isPausedByUser && !shouldShowAd) player?.play()
+                    }
+                    return@LaunchedEffect
+                }
+                // Marked continuing but near 0 — just play without rewind thrash.
+                if (isActive && !isPausedByUser && !shouldShowAd) {
+                    runCatching { player?.play() }
+                }
+                return@LaunchedEffect
+            }
             runCatching {
                 player?.seekTo(0)
                 if (isActive && !isPausedByUser && !shouldShowAd) player?.play()

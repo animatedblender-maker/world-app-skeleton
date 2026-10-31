@@ -79,6 +79,7 @@ fun AnonymousRootView(
     var shellTab by remember { mutableStateOf(AnonymousShellTab.Feed) }
     var searchQuery by remember { mutableStateOf("") }
     var showCreateSpace by remember { mutableStateOf(false) }
+    var showCreatePostPicker by remember { mutableStateOf(false) }
     var showHeaderCreateMenu by remember { mutableStateOf(false) }
     var showNotificationsMenu by remember { mutableStateOf(false) }
     var toast by remember { mutableStateOf<String?>(null) }
@@ -114,6 +115,18 @@ fun AnonymousRootView(
                         onCreated = { slug ->
                             showCreateSpace = false
                             store.pushSpace(slug)
+                        },
+                    )
+                }
+            }
+            showCreatePostPicker -> {
+                Column(Modifier.fillMaxSize().statusBarsPadding()) {
+                    AnonymousPostSpacePickerView(
+                        store = store,
+                        onBack = { showCreatePostPicker = false },
+                        onRequestCreateSpace = {
+                            showCreatePostPicker = false
+                            showCreateSpace = true
                         },
                     )
                 }
@@ -386,7 +399,7 @@ fun AnonymousRootView(
                             }
                             TextButton(onClick = {
                                 showHeaderCreateMenu = false
-                                shellTab = AnonymousShellTab.Spaces
+                                showCreatePostPicker = true
                             }) {
                                 Text(MatteryaCopy.anonymousCreatePost, color = MatteryaColors.ink)
                             }

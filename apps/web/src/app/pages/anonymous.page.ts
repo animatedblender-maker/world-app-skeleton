@@ -29,6 +29,8 @@ type Phase =
   | 'missing_birthdate'
   | 'need_attest'
   | 'need_username'
+  | 'welcomeLetter'
+  | 'pickSpaces'
   | 'suspended'
   | 'offline'
   | 'ready';
@@ -50,6 +52,10 @@ const SPACE_FILTERS: Array<{ id: AnonymousSpaceFilter; title: string }> = [
   { id: 'free', title: 'Free' },
   { id: 'paid', title: 'Paid' },
 ];
+
+/** iOS AnonymousStore welcomeLetterSeenKey / spacesOnboardingSeenKey */
+const WELCOME_LETTER_SEEN_KEY = 'matterya.anonymous.welcomeLetterSeen.v1';
+const SPACES_ONBOARDING_SEEN_KEY = 'matterya.anonymous.spacesOnboardingSeen.v1';
 
 @Component({
   selector: 'app-anonymous-page',
@@ -186,6 +192,66 @@ const SPACE_FILTERS: Array<{ id: AnonymousSpaceFilter; title: string }> = [
         <p>{{ copy.anonymousOfflineBody }}</p>
         <button type="button" class="btn primary" (click)="bootstrap()">Try again</button>
         <p class="error" *ngIf="error">{{ error }}</p>
+      </main>
+
+      <!-- iOS AnonymousWelcomeLetterView — once after claiming a name -->
+      <main class="anon-body welcome-letter" *ngIf="phase === 'welcomeLetter'">
+        <div class="letter-scroll">
+          <h1>{{ copy.anonymousWelcomeLetterTitle }}</h1>
+          <div class="letter-body">
+            <p *ngFor="let block of welcomeLetterBlocks" [class.letter-strong]="block.strong">
+              {{ block.text }}
+            </p>
+          </div>
+          <p class="wilde-quote letter-quote">{{ copy.anonymousWildeQuote }}</p>
+          <p class="wilde-attr">{{ copy.anonymousWildeAttribution }}</p>
+        </div>
+        <div class="letter-footer">
+          <button type="button" class="btn primary" (click)="completeWelcomeLetter()">Continue</button>
+        </div>
+      </main>
+
+      <!-- iOS AnonymousSpacesOnboardingView — pick Spaces or Skip -->
+      <main class="anon-body spaces-onboarding" *ngIf="phase === 'pickSpaces'">
+        <div class="onboard-header">
+          <h1>{{ copy.anonymousSpacesOnboardingTitle }}</h1>
+          <p>{{ copy.anonymousSpacesOnboardingBody }}</p>
+        </div>
+        <div class="onboard-scroll">
+          <div class="skeleton" *ngIf="onboardingLoading && !onboardingSpaces.length"></div>
+          <div class="skeleton" *ngIf="onboardingLoading && !onboardingSpaces.length"></div>
+          <div class="state" *ngIf="!onboardingLoading && !onboardingSpaces.length">
+            <strong>{{ copy.anonymousNoSpaces }}</strong>
+            <p>{{ copy.anonymousNoSpacesBody }}</p>
+          </div>
+          <div class="onboard-card" *ngFor="let s of onboardingSpaces; trackBy: trackSpace">
+            <div class="space-card onboard-space">
+              <div class="space-card-top">
+                <div class="space-title">{{ s.title }}</div>
+                <span class="pill soft" *ngIf="s.joined">Joined</span>
+              </div>
+              <div class="space-slug">a/{{ s.slug }}</div>
+              <p class="space-desc" *ngIf="s.description">{{ s.description }}</p>
+              <div class="space-meta">
+                <span>{{ s.member_count || 0 }} members</span>
+                <span>·</span>
+                <span>{{ s.post_count || 0 }} posts</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              class="btn primary onboard-join"
+              [class.joined]="s.joined"
+              [disabled]="s.joined || joiningIds[s.id]"
+              (click)="joinOnboardingSpace(s)"
+            >
+              {{ s.joined ? 'Joined' : joiningIds[s.id] ? 'Joining…' : 'Join' }}
+            </button>
+          </div>
+        </div>
+        <div class="onboard-footer">
+          <button type="button" class="btn ghost skip" (click)="completeSpacesOnboarding()">Skip</button>
+        </div>
       </main>
 
       <!-- Ready: Spaces directory -->
@@ -851,6 +917,74 @@ const SPACE_FILTERS: Array<{ id: AnonymousSpaceFilter; title: string }> = [
       .anon-body.gate {
         padding-top: 36px;
       }
+      .anon-body.welcome-letter,
+      .anon-body.spaces-onboarding {
+        display: flex;
+        flex-direction: column;
+        min-height: calc(100vh - 120px);
+        padding-top: 28px;
+        padding-bottom: 0;
+        max-width: 560px;
+      }
+      .letter-scroll,
+      .onboard-scroll {
+        flex: 1 1 auto;
+        overflow-y: auto;
+        padding-bottom: 16px;
+      }
+      .letter-body p {
+        color: var(--m-ink-secondary, #6b645d);
+        line-height: 1.55;
+        margin: 0 0 14px;
+        white-space: pre-wrap;
+      }
+      .letter-body p.letter-strong {
+        color: var(--m-ink, #2c2825);
+        font-weight: 700;
+      }
+      .letter-quote {
+        margin-top: 8px !important;
+        font-family: 'Iowan Old Style', Palatino, Georgia, serif;
+        font-size: 15px;
+        font-style: italic;
+        color: var(--m-ink-secondary, #6b645d) !important;
+      }
+      .letter-footer,
+      .onboard-footer {
+        flex: 0 0 auto;
+        padding: 12px 0 24px;
+        background: color-mix(in srgb, var(--m-paper, #f8f6f2) 96%, transparent);
+        border-top: 0.5px solid var(--m-divider, #e2ded8);
+      }
+      .onboard-header {
+        flex: 0 0 auto;
+        margin-bottom: 8px;
+      }
+      .onboard-card {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+      .onboard-space {
+        margin: 0;
+        cursor: default;
+      }
+      .onboard-join {
+        margin: 0;
+      }
+      .onboard-join.joined {
+        background: var(--m-matte-deep, #f0ede8);
+        color: var(--m-ink-muted, #948b82);
+        border: 0.5px solid var(--m-border, #ddd8d1);
+      }
+      .onboard-footer .btn.skip {
+        width: auto;
+        margin-left: auto;
+        display: block;
+        border: 0;
+        font-weight: 650;
+      }
       .anon-body.gate h1,
       .anon-body h1 {
         font-family: 'Iowan Old Style', Palatino, Georgia, serif;
@@ -1403,6 +1537,14 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
 
   skeletonSlots = [0, 1, 2, 3, 4];
 
+  /** iOS AnonymousSpacesOnboardingView candidates */
+  onboardingSpaces: AnonymousSpace[] = [];
+  onboardingLoading = false;
+  joiningIds: Record<string, boolean> = {};
+  readonly welcomeLetterBlocks = AnonymousPageComponent.parseWelcomeLetter(
+    MatteryaCopy.anonymousWelcomeLetterBody
+  );
+
   private destroyed = false;
 
   constructor(
@@ -1434,6 +1576,34 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
   /** Wilde quote is onboarding-only (attest / claim), matching iOS. */
   get showWildeEpigraph(): boolean {
     return this.phase === 'need_attest' || this.phase === 'need_username';
+  }
+
+  private static parseWelcomeLetter(body: string): Array<{ text: string; strong: boolean }> {
+    return String(body || '')
+      .split(/\n\n+/)
+      .map((chunk) => chunk.trim())
+      .filter(Boolean)
+      .map((chunk) => {
+        const m = /^\*\*(.+)\*\*$/s.exec(chunk);
+        if (m) return { text: m[1].trim(), strong: true };
+        return { text: chunk.replace(/\*\*/g, ''), strong: false };
+      });
+  }
+
+  private hasCompletedWelcomeLetter(): boolean {
+    try {
+      return localStorage.getItem(WELCOME_LETTER_SEEN_KEY) === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  private hasCompletedSpacesOnboarding(): boolean {
+    try {
+      return localStorage.getItem(SPACES_ONBOARDING_SEEN_KEY) === '1';
+    } catch {
+      return false;
+    }
   }
 
   toastMePlaceholder(message: string): void {
@@ -1519,10 +1689,97 @@ export class AnonymousPageComponent implements OnInit, OnDestroy {
       this.paint();
       return;
     }
+    // iOS: new name → welcome letter → Space picker → Feed.
+    if (!this.hasCompletedWelcomeLetter()) {
+      this.phase = 'welcomeLetter';
+      this.paint();
+      return;
+    }
+    if (!this.hasCompletedSpacesOnboarding()) {
+      this.phase = 'pickSpaces';
+      this.paint();
+      void this.loadOnboardingSpaces();
+      return;
+    }
     this.phase = 'ready';
     this.paint();
     void this.loadSpaces(true);
     void this.loadFeed(true);
+  }
+
+  completeWelcomeLetter(): void {
+    try {
+      localStorage.setItem(WELCOME_LETTER_SEEN_KEY, '1');
+    } catch {
+      // ignore
+    }
+    if (!this.hasCompletedSpacesOnboarding()) {
+      this.phase = 'pickSpaces';
+      this.paint();
+      void this.loadOnboardingSpaces();
+      return;
+    }
+    this.completeSpacesOnboarding();
+  }
+
+  completeSpacesOnboarding(): void {
+    try {
+      localStorage.setItem(SPACES_ONBOARDING_SEEN_KEY, '1');
+    } catch {
+      // ignore
+    }
+    this.phase = 'ready';
+    this.shellTab = 'feed';
+    this.paint();
+    void this.loadFeed(true);
+    void this.loadSpaces(true);
+  }
+
+  async loadOnboardingSpaces(): Promise<void> {
+    if (this.onboardingLoading) return;
+    this.onboardingLoading = true;
+    this.paint();
+    try {
+      const [forYou, popular] = await Promise.all([
+        this.anon.listSpaces('for_you', null, 24),
+        this.anon.listSpaces('popular', null, 24),
+      ]);
+      if (this.destroyed) return;
+      const merged: AnonymousSpace[] = [];
+      const seen = new Set<string>();
+      const packs = [forYou, popular];
+      for (const res of packs) {
+        if ((res as AnonymousApiError).ok === false) continue;
+        for (const space of (res as { spaces: AnonymousSpace[] }).spaces || []) {
+          if (!this.isFreeSpace(space)) continue;
+          if (seen.has(space.id)) continue;
+          seen.add(space.id);
+          merged.push(space);
+          if (merged.length >= 24) break;
+        }
+        if (merged.length >= 24) break;
+      }
+      this.onboardingSpaces = merged;
+    } finally {
+      this.onboardingLoading = false;
+      this.paint();
+    }
+  }
+
+  async joinOnboardingSpace(space: AnonymousSpace): Promise<void> {
+    if (!space || space.joined || this.joiningIds[space.id]) return;
+    this.joiningIds = { ...this.joiningIds, [space.id]: true };
+    this.paint();
+    const res = await this.anon.join(space.id);
+    this.joiningIds = { ...this.joiningIds, [space.id]: false };
+    if ((res as AnonymousApiError).ok === false) {
+      this.paint();
+      return;
+    }
+    this.onboardingSpaces = this.onboardingSpaces.map((s) =>
+      s.id === space.id ? { ...s, joined: true } : s
+    );
+    this.paint();
   }
 
   async attest(): Promise<void> {
