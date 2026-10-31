@@ -355,9 +355,7 @@ class AppState(private val app: Application) {
     fun noteSelectedTabChanged(from: AppTab, to: AppTab) {
         if (from == AppTab.Feed && to != AppTab.Feed) {
             feedLeftAt = System.currentTimeMillis()
-            return
-        }
-        if (to == AppTab.Feed && from != AppTab.Feed) {
+        } else if (to == AppTab.Feed && from != AppTab.Feed) {
             val left = feedLeftAt
             if (left != null && System.currentTimeMillis() - left >= feedStaleAwayIntervalMs) {
                 requestFreshFeedSession("away_3m")
@@ -367,6 +365,7 @@ class AppState(private val app: Application) {
         if (to == AppTab.Hubs && from != AppTab.Hubs) {
             _snapshot.update { it.copy(hubsFreshSessionToken = it.hubsFreshSessionToken + 1) }
         }
+        // Always minimize expanded Hubs when leaving the Hubs tab (iOS MainTabView).
         ensureHubPlaybackMinimizedIfNeeded()
     }
 
