@@ -8,6 +8,8 @@ export type PostAuthor = {
   country_name: string | null;
   country_code: string | null;
   last_read_at?: string | null;
+  /** Official / admin — iOS `showsVerifiedBadge`. */
+  is_verified?: boolean | null;
 };
 
 export type CountryPost = {
