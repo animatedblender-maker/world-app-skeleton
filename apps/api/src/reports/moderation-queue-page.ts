@@ -828,48 +828,41 @@ function renderTicketCard(ticket: TicketDisplay): string {
     </div>`
     : '';
 
+  const authorBlock = `
+    <div class="author">
+      <img src="${escapeHtml(avatar)}" alt="" width="44" height="44" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='${escapeHtml(
+        dicebearAvatar(username)
+      )}'"/>
+      <div class="who">
+        <div class="name">@${escapeHtml(username)}${
+          displayName && displayName !== username
+            ? ` <span class="muted">· ${escapeHtml(displayName)}</span>`
+            : ''
+        }</div>
+        <div class="sub">${
+          isComment ? 'comment author' : `${escapeHtml(ticket.platform)} · ${escapeHtml(ticket.target_kind)}`
+        }</div>
+      </div>
+    </div>`;
+
   return `
   <article class="card">
     <div class="card-top">
-      <div class="author">
-        <img src="${escapeHtml(avatar)}" alt="" width="44" height="44" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='${escapeHtml(
-          dicebearAvatar(username)
-        )}'"/>
-        <div class="who">
-          <div class="name">@${escapeHtml(username)}${
-            displayName && displayName !== username
-              ? ` <span class="muted">· ${escapeHtml(displayName)}</span>`
-              : ''
-          }</div>
-          <div class="sub">${escapeHtml(ticket.platform)} · ${escapeHtml(ticket.target_kind)}</div>
-        </div>
+      <div class="meta" style="margin:0">
+        <span class="pill">${escapeHtml(cat)}</span>
+        ${sourcePill}
+        ${matchPill}
+        <span class="muted">×${ticket.report_count} reports</span>
+        <span class="muted">${escapeHtml(ticket.platform)} · ${escapeHtml(ticket.target_kind)}</span>
       </div>
       <button type="button" class="copy-link" id="copy-ticket-link" data-link="${escapeHtml(queueAbs)}" title="Copy ticket link">Copy link</button>
     </div>
     ${reporter}
-    <div class="meta">
-      <span class="pill">${escapeHtml(cat)}</span>
-      ${sourcePill}
-      ${matchPill}
-      <span class="muted">×${ticket.report_count} reports</span>
-    </div>
     <div class="card-stack">
       ${parentBlock}
       <div class="reported">
         <div class="reported-label">${reportedLabel}</div>
-        ${
-          isComment
-            ? `<div class="author">
-          <img src="${escapeHtml(avatar)}" alt="" width="44" height="44" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='${escapeHtml(
-              dicebearAvatar(username)
-            )}'"/>
-          <div class="who">
-            <div class="name">@${escapeHtml(username)}</div>
-            <div class="sub">comment author</div>
-          </div>
-        </div>`
-            : ''
-        }
+        ${authorBlock}
         ${reportedInner}
       </div>
       ${commentsUnderPost}
