@@ -26,6 +26,8 @@ Client JSON from `policyTreeForClient()` never includes outcomes.
 
 ## Escalation (specific cases only)
 
+**Baseline:** Meta + TikTok for Claim-next. YouTube/EDSA → separate longform-video queue (not this tree).
+
 Step 2 includes standalone **CSAM**, **Terrorism**, **Servitude / domestic helpers**, and **Adult solicitation** kinds.  
 Step 2 options are ordered by **harm priority** (CSAM → Self-harm → Terrorism → Violence → Servitude → Harassment → Hate → Doxxing → Scam → Misinfo → Adult solicitation → Mature → Spam → Other).
 

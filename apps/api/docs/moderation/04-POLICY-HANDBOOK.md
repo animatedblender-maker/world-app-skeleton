@@ -8,19 +8,27 @@ This handbook trains *how* to answer the decision tree and *why*. Moderators nev
 
 ---
 
-## 1. Principles (industry-aligned)
+## 1. Principles (follow platforms with more experience)
 
-Drawn from Meta Community Standards (Safety / Dignity / Privacy / Authenticity), YouTube Community Guidelines (incl. EDSA exceptions), TikTok Community Guidelines (remove / age-restrict / FYF-ineligible), X Rules, Reddit Content Policy, Discord Guidelines, and Snap Community Guidelines.
+**Default baseline for this queue (Claim-next):** **Meta Community Standards** + **TikTok Community Guidelines**.
 
-| Principle | Matterya meaning |
+When Meta and TikTok agree, Matterya does the same. When they disagree, prefer the **stricter remove / escalate** rule unless a Matterya product exception is listed below.
+
+**YouTube is not the baseline here.** YouTube’s EDSA / longform age-restrict patterns belong in a **separate longform-video moderation queue** (not this tree). Do not keep graphic or violative longform “because YouTube would age-restrict it” on Claim-next.
+
+Also consulted for edge cases: X Rules, Discord, Reddit, Snap — never to loosen Meta/TikTok on CSAM, specific threats, or trafficking.
+
+| Principle | Matterya meaning (Meta + TikTok) |
 |---|---|
-| **Safety** | Prefer removing content that raises real-world physical harm risk (threats, incitement, CSAM, self-harm instructions, scams that steal money). |
-| **Dignity** | Target people for abuse, hate, or humiliation → remove. Critique of ideas / public figures can stay when not a personal attack. |
-| **Privacy** | Hard PII, NCII, workplace doxxing → remove + severe account path. Public-record info alone is usually OK. |
-| **Expression** | Satire, recovery stories, news/documentary graphic (labeled), artistic nudity, reclaimed in-group speech → dismiss or mark, not remove. |
-| **Authenticity** | Phishing, brand impersonation, fake engagement, malware → remove; malware/phishing escalate accounts. |
+| **Safety** | Remove content that raises real-world physical harm risk (specific threats with place/time/target, incitement, CSAM, self-harm instructions, scams, forced labor). Escalate when platforms escalate. |
+| **Dignity** | Hate / harassment targeting people → remove. Critique of ideas / public figures can stay when not a personal attack. |
+| **Privacy** | Hard PII, NCII, workplace doxxing → remove + severe. Public-record info alone is usually OK. |
+| **Expression** | Satire, recovery stories, clear condemnation, reclaimed in-group speech → dismiss or mark. News/graphic: **mark** (TikTok-like age-gate analogue), not YouTube EDSA keep. |
+| **Authenticity** | Phishing, brand impersonation, malware → remove; malware/phishing → severe / escalate accounts. |
 
-**Matterya product note:** Masquerade is adult-oriented. Labeled mature content in an adult Space may be **marked** rather than removed. Unlabeled porn in general feed / non-adult contexts is **removed**.
+**Matterya product exceptions (intentional):**
+- Masquerade labeled adult Spaces: consensual adult porn/nudity may be **marked** (TikTok would often remove or age-restrict platform-wide; Matterya allows adult Spaces).
+- Unlabeled porn in general feed → **remove** (Meta/TikTok-aligned).
 
 ---
 
@@ -141,8 +149,7 @@ Protected characteristics (Matterya practice, Meta/X/TikTok-aligned): race, ethn
 
 | Leaf | Pick when | Outcome |
 |---|---|---|
-| `escalation.child_safety` | Confirmed CSAM, grooming, minor NCII, or suspected CSAM | remove · **severe** + escalate |
-| `csam.sexualization` | Sexualization of a minor without explicit imagery | remove · **severe** |
+| `escalation.child_safety` | Confirmed CSAM, grooming, minor NCII, sexualization, or suspected CSAM | remove · **severe** + escalate |
 | `csam.child_endangerment` | Non-sexual endangerment of minors | remove · **severe** |
 
 ### Adult solicitation (standalone)
@@ -152,7 +159,8 @@ Protected characteristics (Matterya practice, Meta/X/TikTok-aligned): race, ethn
 | `solicitation.services` | Offering paid sex / escort / sexual services | remove · mild |
 | `solicitation.seeking` | Requesting adult sexual services | remove · mild |
 | `solicitation.unsolicited` | Unsolicited sexual advances to an adult | remove · mild |
-| `solicitation.sextortion` | Adult sextortion / sexual blackmail | remove · **severe** |
+| → **escalate** | Adult sextortion with concrete demand | `escalation.sextortion` · **severe** |
+| `solicitation.sextortion` | Sexual blackmail language without concrete demand | remove · **severe** |
 | → CSAM escalate | Anything involving a minor | `escalation.child_safety` |
 
 ### Servitude / domestic helpers (standalone)
@@ -201,8 +209,8 @@ Terrorism / violent extremist orgs are a **standalone Step-2 category** (not und
 |---|---|---|
 | `terrorism.ops` | Recruitment, fundraising, or operational planning | remove · **severe** |
 | `terrorism.praise` | Praise / propaganda for a terrorist org or attack | remove · **severe** |
-| `terrorism.threat` | Threat to commit a terrorist attack (not clearly imminent) | remove · **severe** |
-| → escalate imminent | Specific + imminent terror threat | `escalation.imminent_violence` |
+| → **escalate** | Terror threat with **place / time / target / method** | `escalation.imminent_violence` · **severe** |
+| `terrorism.threat` | Vague terror threat only (no place, time, target, or method) | remove · **severe** |
 | `terrorism.news` | News / documentary / clear condemnation | mark |
 | `terrorism.historical` | Historical or educational, no glorification | dismiss |
 
@@ -274,17 +282,24 @@ Never tell the content-queue flash what account action you took.
 
 ## 6. Sources consulted (external)
 
-Official / primary pages used for alignment (2024–2026):
-
+**Primary (this queue):**
 - Meta Community Standards — https://transparency.meta.com/policies/community-standards/
-- YouTube Community Guidelines — https://support.google.com/youtube/answer/9288567
 - TikTok Community Guidelines — https://www.tiktok.com/community-guidelines
+
+**Secondary (edge cases only):**
 - X Rules — https://help.x.com/en/rules-and-policies/x-rules
-- Reddit Content Policy — https://www.reddit.com/help/contentpolicy
 - Discord Community Guidelines — https://discord.com/guidelines/
+- Reddit Content Policy — https://www.reddit.com/help/contentpolicy
 - Snap Community Guidelines — https://www.snap.com/community-guidelines
 
-Matterya is not a copy of any one platform. We borrow **decision patterns** (remove vs age-gate/mark vs allow; severe vs accumulate; child safety zero-tolerance; EDSA/news exceptions) and encode them in our tree.
+**Not used for Claim-next:**
+- YouTube Community Guidelines / EDSA — reserved for the **longform video** moderation queue.
+
+## 6b. Longform video queue (YouTube-shaped — separate)
+
+Longform videos get their own queue later. That queue may use YouTube-like patterns: EDSA (educational/documentary/scientific/artistic) exceptions, age-restrict vs remove, and public-interest keeps that Claim-next must not apply to short posts/clips.
+
+Until that queue exists, treat longform the same as any other ticket in Claim-next under Meta + TikTok rules.
 
 ---
 

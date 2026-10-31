@@ -1,12 +1,17 @@
 /**
- * Matterya moderation policy decision tree.
+ * Matterya moderation policy decision tree (Claim-next / short-form + posts).
+ *
+ * Baseline: Meta Community Standards + TikTok Community Guidelines.
+ * YouTube-style EDSA / age-restrict-for-longform rules belong in a separate
+ * longform-video queue — do not bend this tree toward YouTube exceptions.
  *
  * Moderators only answer questions (keyboard shortcuts). They never choose
- * Remove vs Mark — each leaf has a policy outcome we can tune together later.
+ * Remove vs Mark — each leaf has a policy outcome.
  *
  * outcome:
  *   remove  — take content down / archive
- *   mark    — keep live, tagged for mature/sensitive surfaces
+ *   mark    — keep live, tagged for mature/sensitive surfaces (TikTok-like
+ *             age-gate / reduced distribution analogue)
  *   dismiss — false positive / allowed; clear flags
  */
 import type { ModerationCategorySlug } from './categories.js';
@@ -139,6 +144,20 @@ function escalationRootTree(): PolicyNode {
     },
     {
       key: '5',
+      label: 'Adult sextortion with concrete demand',
+      node: leaf(
+        'escalation.sextortion',
+        'Escalate — adult sextortion',
+        'solicitation',
+        'remove',
+        {
+          severity: 'severe',
+          rationale: 'Meta adult sexual exploitation / TikTok — escalate confirmed sextortion',
+        }
+      ),
+    },
+    {
+      key: '6',
       label: 'Specialist second look (high-stakes, outcome unclear)',
       node: escalationSecondLook(),
     },
@@ -634,16 +653,8 @@ function csamTree(): PolicyNode {
     {
       key: '4',
       label: 'Sexualization of a minor (no explicit imagery)',
-      node: leaf(
-        'csam.sexualization',
-        'Sexualization of a minor',
-        'csam',
-        'remove',
-        {
-          severity: 'severe',
-          rationale: 'Always severe; escalate if imagery or grooming is confirmed',
-        }
-      ),
+      // Meta CSEAN / TikTok youth sexual abuse — escalate all minor-sexual paths.
+      node: escalationChildSafety('csam'),
     },
     {
       key: '5',
@@ -704,15 +715,36 @@ function solicitationTree(): PolicyNode {
     {
       key: '4',
       label: 'Adult sextortion / sexual blackmail',
-      node: leaf(
-        'solicitation.sextortion',
-        'Adult sextortion / sexual blackmail',
-        'solicitation',
-        'remove',
-        {
-          severity: 'severe',
-          rationale: 'Severe adult exploitation — instant account path',
-        }
+      node: branch(
+        'solicitation.sextortion_gate',
+        'Is there a concrete demand (money, images) with a threat to publish?',
+        [
+          {
+            key: '1',
+            label: 'Yes — concrete extortion → escalate',
+            node: leaf(
+              'escalation.sextortion',
+              'Escalate — adult sextortion',
+              'solicitation',
+              'remove',
+              {
+                severity: 'severe',
+                rationale: 'Meta adult sexual exploitation / TikTok — escalate confirmed sextortion',
+              }
+            ),
+          },
+          {
+            key: '2',
+            label: 'Sexual blackmail language without a concrete demand',
+            node: leaf(
+              'solicitation.sextortion',
+              'Adult sextortion / sexual blackmail',
+              'solicitation',
+              'remove',
+              { severity: 'severe' }
+            ),
+          },
+        ]
       ),
     },
     {

@@ -29,13 +29,13 @@ const LINKS: HubLink[] = [
     group: 'Moderation',
     href: '/management/policy',
     title: 'Policy handbook',
-    blurb: 'Train mods: principles, leaf guides, strikes, industry alignment.',
+    blurb: 'Meta + TikTok baseline for Claim-next. YouTube reserved for longform.',
   },
   {
     group: 'Moderation',
     href: '/reports',
     title: 'Content queue',
-    blurb: 'Claim-next review for posts and comments.',
+    blurb: 'Claim-next for posts and short-form (Meta + TikTok rules).',
   },
   {
     group: 'Moderation',
@@ -48,6 +48,12 @@ const LINKS: HubLink[] = [
     href: '/reports/masquerade',
     title: 'Masquerade queue',
     blurb: 'Legacy Remove / Flag / Skip for anonymous posts.',
+  },
+  {
+    group: 'Moderation',
+    href: '/management/policy#6b-longform-video-queue-youtube-shaped--separate',
+    title: 'Longform video queue (planned)',
+    blurb: 'YouTube-shaped EDSA / age-restrict rules — not built yet; handbook section only.',
   },
   {
     group: 'Analytics',
