@@ -1,316 +1,425 @@
-# Matterya Moderator Policy Handbook
+# Matterya Content Moderator Handbook
 
-**Audience:** human moderators on Claim-next (`/reports`) and Account review (`/reports/accounts`)  
-**Live page:** https://api.matterya.com/management/policy  
-**Version:** 2026-10-31 · aligned with `policy-tree.ts` leaves
+**Who this is for:** new moderators with no prior experience  
+**Where you work:** https://api.matterya.com/reports  
+**Accounts queue:** https://api.matterya.com/reports/accounts  
+**This handbook:** https://api.matterya.com/management/policy  
+**PDF:** download from Management → Policy handbook (or `/moderation/Matterya-Moderator-Handbook.pdf`)
 
-This handbook trains *how* to answer the decision tree and *why*. Moderators never pick Remove / Mark / Dismiss in the UI — policy maps each leaf to an outcome and severity.
+You do **not** decide “Remove” or “Keep” yourself. You answer simple questions. Matterya policy applies the result.
 
 ---
 
-## 1. Principles (follow platforms with more experience)
+## Chapter 0 — Your first day
 
-**Default baseline for this queue (Claim-next):** **Meta Community Standards** + **TikTok Community Guidelines**.
+### What is your job?
 
-When Meta and TikTok agree, Matterya does the same. When they disagree, prefer the **stricter remove / escalate** rule unless a Matterya product exception is listed below.
+People report posts (or our systems flag them). You open one ticket at a time, look at the content, and answer the questions on the right. That is Claim-next.
 
-**YouTube is not the baseline here.** YouTube’s EDSA / longform age-restrict patterns belong in a **separate longform-video moderation queue** (not this tree). Do not keep graphic or violative longform “because YouTube would age-restrict it” on Claim-next.
+### How a ticket works (step by step)
 
-Also consulted for edge cases: X Rules, Discord, Reddit, Snap — never to loosen Meta/TikTok on CSAM, specific threats, or trafficking.
+1. Open **Content queue** and log in with the shared password.
+2. You see one post (or comment): author, text, media, sometimes reporters.
+3. On the right, answer the questions with number keys (`1`, `2`, …) or by clicking.
+4. `Backspace` goes back a step. `Enter` confirms the final answer.
+5. `P` **passes** the ticket to another moderator if you are stuck or conflicted.
+6. The screen says **“Decision recorded”** and gives you the next ticket. You will not see whether content was removed — that is intentional.
 
-| Principle | Matterya meaning (Meta + TikTok) |
+### What happens after you answer
+
+| Policy result (hidden from you) | What it means for users |
 |---|---|
-| **Safety** | Remove content that raises real-world physical harm risk (specific threats with place/time/target, incitement, CSAM, self-harm instructions, scams, forced labor). Escalate when platforms escalate. |
-| **Dignity** | Hate / harassment targeting people → remove. Critique of ideas / public figures can stay when not a personal attack. |
-| **Privacy** | Hard PII, NCII, workplace doxxing → remove + severe. Public-record info alone is usually OK. |
-| **Expression** | Satire, recovery stories, clear condemnation, reclaimed in-group speech → dismiss or mark. News/graphic: **mark** (TikTok-like age-gate analogue), not YouTube EDSA keep. |
-| **Authenticity** | Phishing, brand impersonation, malware → remove; malware/phishing → severe / escalate accounts. |
+| Remove | Content is taken down. Author is notified. A strike may be added. |
+| Mark | Content stays, but is treated as sensitive / mature. |
+| Dismiss | No violation (or false alarm). Flags cleared. |
 
-**Matterya product exceptions (intentional):**
-- Masquerade labeled adult Spaces: consensual adult porn/nudity may be **marked** (TikTok would often remove or age-restrict platform-wide; Matterya allows adult Spaces).
-- Unlabeled porn in general feed → **remove** (Meta/TikTok-aligned).
+**Severe** removals open an **Account review** ticket right away. **Mild** removals add a strike; at **3** open strikes the account goes to Account review.
+
+### Golden rules (memorize these)
+
+1. **Anyone under 18 + sexual content** → always choose **CSAM** (Chapter 1). Never “art,” never Mature.
+2. **Threat with a place, time, target, or method** → choose the path that says **escalate**.
+3. If you are unsure on a normal ticket → press **`P`** (Pass). Do not guess.
+4. If it is high-stakes and still unclear after reading → **Escalate → Specialist second look**.
+5. Be kind to survivors describing their own harm. Prefer recovery / help paths, not punishment of the victim’s post.
+
+### Rules we follow
+
+Claim-next follows **Meta** and **TikTok** style safety rules (they have the most experience). YouTube-style “keep for documentary” rules are for a **different longform-video queue**, not this one.
 
 ---
 
-## 2. How Matterya enforcement works
+## Chapter 0b — Words you’ll hear (short glossary)
 
-### Content queue (`/reports`)
-
-1. Answer questions with keyboard shortcuts (1–9, letters).
-2. Confirm the leaf. Policy applies **remove**, **mark**, or **dismiss** invisibly.
-3. Flash always says “Decision recorded” — never leak Remove/Mark to the mod UI.
-
-| Outcome | Effect |
+| Word | Plain meaning |
 |---|---|
-| **remove** | Content archived / taken down. Author + reporters notified. Strike recorded. |
-| **mark** | Content stays; tagged for mature/sensitive surfaces. No strike. |
-| **dismiss** | False positive / allowed. Clear auto flags. No strike. |
+| **CSAM** | Child Sexual Abuse Material — any sexual content involving someone under 18 |
+| **NCII** | Non-Consensual Intimate Imagery — private nude/sex images shared without permission |
+| **Doxxing** | Publishing someone’s private info (address, phone, ID) to harm or expose them |
+| **Escalate** | Special safety path: remove + send the account for urgent review |
+| **Strike** | A mark against an account after a remove |
+| **Masquerade** | Matterya’s anonymous / adult-friendly area (Spaces can be labeled adult) |
+| **Claim-next** | One-ticket-at-a-time review screen |
+| **Pass (`P`)** | Give this ticket to another moderator |
 
-### Severity → account queue (`/reports/accounts`)
+---
 
-| Severity | On remove |
+## Chapter 1 — CSAM
+
+### Definition
+
+**CSAM** means any sexual content involving a person under 18 — photos, video, drawings, AI, or text — including grooming (trying to get a minor into sexual chat or meetings).
+
+### Why it is #1
+
+Zero tolerance. Same idea as Meta and TikTok. Always treated as **severe**. Confirmed or suspected cases **escalate**.
+
+### How to click
+
+Step 2 → **1 CSAM**, then pick the closest option. If a minor is involved sexually, you are in the right chapter.
+
+### Examples
+
+| Example | What you choose |
 |---|---|
-| **severe** | Instant account-review ticket |
-| **mild** | +1 open strike; at **3** open strikes → account ticket |
+| Training: “post asks a 15-year-old for nudes” | CSAM → Grooming → **escalate** |
+| Training: “AI image of a child in a sexual pose” | CSAM → Confirmed CSAM → **escalate** |
+| Training: “adult jokes about teens sexually” | CSAM → Sexualization → **escalate** |
+| Real-style adult Masquerade caption (“Getting all the cum out”) with **no minor** | **Not CSAM** → Mature or Adult solicitation (later chapters) |
 
-Account actions: clear strikes · warn · restrict · suspend · pass.
+### Do not
 
-### Pass
-
-`P` hands the ticket to another moderator (`passed_by`). Use when unsure or conflicted on an ordinary ticket.
-
-### Escalation (decision-tree leaves — specific cases only)
-
-Like Meta / Discord / TikTok / X, escalation is **not** a general “I’m unsure of the category” button. It appears only for special safety cases:
-
-| Leaf | When | Outcome |
-|---|---|---|
-| `escalation.child_safety` | Sexual content involving a minor (incl. AI/drawn), grooming, minor NCII / sextortion | remove · **severe** |
-| `escalation.imminent_violence` | Credible threat with **place, time, target, and/or method** (terror attack threat, swatting, ops planning) | remove · **severe** |
-| `escalation.suicide_crisis` | Active suicide/self-harm crisis with a concrete plan | remove · **severe** |
-| `escalation.second_look` | High-stakes but outcome still unclear after reading the content | mark |
-
-**Where the tree asks:**
-
-- Root → **Escalate — special safety case** (lists the four above)
-- CSAM category → confirmed/suspected cases escalate  
-- Mature → gate redirects minors to CSAM escalate, solicitation to Adult solicitation
-- Harassment threats / stalking → imminent?
-- Sexual blackmail → minor involved?
-- Self-harm → active crisis with plan?
-- Violence extremist → active recruitment/ops?
-- Doxxing hard PII / NCII → imminent harm or minor?
-
-Ordinary uncertainty inside a category: pick the best fitting leaf, or Pass (`P`). Do **not** use escalation for spam vs promo debates.
+- Do not pick Mature for anything involving a minor.
+- Do not dismiss as “cartoon” or “fiction” if the character is a child.
 
 ---
 
-## 3. Cross-cutting rules (read before category guides)
+## Chapter 2 — Self-harm / suicide
 
-1. **Minors always win.** Anything sexual involving anyone under 18 → Step 2 **CSAM** (always severe). Confirmed CSAM / grooming / minor NCII → `escalation.child_safety`. Do not mark. Do not dismiss as “art.”
-2. **News / documentary / EDSA.** Graphic violence or sensitive imagery with clear public-interest framing → `violence.news` (mark) or artistic/educational leaves — not gore-remove — unless it glorifies or recruits.
-3. **Satire / clearly labeled fiction.** Prefer dismiss (`misinfo.satire`, `violence.fictional`) when intent is obvious.
-4. **Reclaimed speech.** In-group reclaimed slurs without attacking others → `hate.reclaimed` (dismiss). Out-group weaponization → hate remove leaves.
-5. **Survivors.** People describing their own assault/self-harm for support → prefer mark/dismiss recovery paths, never pile-on remove for the survivor’s own post.
-6. **Hyperbole vs threat.** “I’m gonna kill this exam” → not a threat. “I’m going to your house at 9 with a knife” → `harassment.threats.credible` (severe).
-7. **When torn.** Pass (`P`) for ordinary doubt. Use `escalation.second_look` only when stakes are high and the outcome is still unclear after reading. Do not invent a leaf that doesn’t fit.
+### Definition
 
----
+Content about hurting yourself or ending your life — including instructions, graphic images, crisis posts, or recovery stories.
 
-## 4. Category decision guides
+### How to click
 
-### Spam
+Step 2 → **2 Self-harm / suicide**. First question: is there an **active crisis with a concrete plan**? If yes → **escalate**.
 
-| Leaf | Pick when | Outcome |
-|---|---|---|
-| `spam.commercial` | Unsolicited ads, crypto pumps, “DM for deals” | remove · mild |
-| `spam.flooding` | Same post/comment pasted repeatedly | remove · mild |
-| `spam.engagement_bait` | “Like for secret,” clickfarms, fake giveaways as bait | remove · mild |
-| `spam.malware` | Phishing links, credential stealers, malware | remove · **severe** |
-| `spam.borderline_promo` | Self-promo that fits community norms | mark |
+### Examples
 
-**Industry note:** Discord/YouTube treat phishing and platform manipulation as high severity — Matterya escalates malware/phishing to the account queue immediately.
-
-### Harassment / bullying
-
-| Leaf | Pick when | Outcome |
-|---|---|---|
-| `…targeted_cursing` | Insults aimed at a specific person | remove · mild |
-| `…slurs` | Slurs used to bully a person (not group-hate) | remove · mild |
-| `…humiliation` | Shame campaigns, body mockery of a private person | remove · mild |
-| `…pile_on` | Calling others to flood/abuse someone | remove · mild |
-| `…mild_rude` | Rude but not targeted harassment | dismiss |
-| `…threats.credible` | Specific, believable plan to harm | remove · **severe** |
-| `…threats.hyperbolic` | Rage jokes with no plan/capability | mark |
-| `…threats.wish_harm` | “Hope you die / get cancer” | remove · **severe** |
-| `…sexual.unsolicited` | Unwanted sexual DMs/comments to a person | remove · mild |
-| `…sexual.blackmail` | Sextortion / coerce with intimate media | remove · **severe** |
-| `…sexual.creepy` | Persistent non-explicit interest after no | mark |
-| `harassment.stalking` | Repeated unwanted contact across posts | remove · **severe** |
-| `harassment.impersonation` | Fake identity used to harass | remove · mild |
-
-Aligns with Meta bullying tiers, X abuse/harassment, Reddit Rule 1, Discord §§1–2.
-
-### Hate
-
-Protected characteristics (Matterya practice, Meta/X/TikTok-aligned): race, ethnicity, national origin, religion, caste, sex, gender identity, sexual orientation, disability, serious disease.
-
-| Leaf | Pick when | Outcome |
-|---|---|---|
-| `hate.protected.dehumanizing` | Calling a group animals/subhuman | remove · **severe** |
-| `hate.protected.slurs` | Slurs attacking a protected group | remove · **severe** |
-| `hate.protected.exclusion` | Segregation / “go back” / deny rights | remove · **severe** |
-| `hate.protected.stereotype` | Demeaning stereotypes of a protected group | remove · mild |
-| `hate.praise` | Praise of hate groups / atrocities | remove · **severe** |
-| `hate.conspiracy` | Blood libel–style group conspiracies | remove · mild |
-| `hate.reclaimed` | In-group reclaimed usage | dismiss |
-
-### CSAM (standalone Step-2 #1 — always severe)
-
-| Leaf | Pick when | Outcome |
-|---|---|---|
-| `escalation.child_safety` | Confirmed CSAM, grooming, minor NCII, sexualization, or suspected CSAM | remove · **severe** + escalate |
-| `csam.child_endangerment` | Non-sexual endangerment of minors | remove · **severe** |
-
-### Adult solicitation (standalone)
-
-| Leaf | Pick when | Outcome |
-|---|---|---|
-| `solicitation.services` | Offering paid sex / escort / sexual services | remove · mild |
-| `solicitation.seeking` | Requesting adult sexual services | remove · mild |
-| `solicitation.unsolicited` | Unsolicited sexual advances to an adult | remove · mild |
-| → **escalate** | Adult sextortion with concrete demand | `escalation.sextortion` · **severe** |
-| `solicitation.sextortion` | Sexual blackmail language without concrete demand | remove · **severe** |
-| → CSAM escalate | Anything involving a minor | `escalation.child_safety` |
-
-### Servitude / domestic helpers (standalone)
-
-| Leaf | Pick when | Outcome |
-|---|---|---|
-| `servitude.forced` | Forced domestic servitude / forced labor | remove · **severe** |
-| `escalation.trafficking` | Confirmed / organized trafficking of helpers | remove · **severe** + escalate |
-| `servitude.trafficking` | Strong trafficking indicators | remove · **severe** |
-| `servitude.debt_bondage` | Debt bondage / passport confiscation / coercive wage theft | remove · **severe** |
-| `servitude.recruitment` | Deceptive domestic-helper recruitment | remove · mild |
-| `servitude.legit_job` | Ordinary helper job ad, no coercion | dismiss |
-| → CSAM escalate | Minor used as worker / helper | `escalation.child_safety` |
-
-### Mature / sexual (adult media only)
-
-| Leaf | Pick when | Outcome |
-|---|---|---|
-| `mature.porn.unlabeled` | Explicit sex outside expected adult context | remove · mild |
-| `mature.porn.labeled_space` | Explicit in clearly adult Masquerade Space | mark |
-| `mature.porn.animated` | Animated/drawn adult porn (adults only) | mark |
-| `mature.nudity.sexualized` | Sexualized adult nudity | mark |
-| `mature.nudity.artistic` | Art / medical / educational | dismiss |
-| `mature.nudity.shock` | Unwanted flash / shock nudity | remove · mild |
-| `mature.fetish` | Consensual adult fetish | mark |
-| `mature.suggestive` | Suggestive, not explicit | mark |
-| `mature.false_positive` | Auto NSFW wrong | dismiss |
-
-**Adult NCII** → `doxxing.intimate` (severe). **Minor NCII** → CSAM escalate.
-
-### Violence
-
-| Leaf | Pick when | Outcome |
-|---|---|---|
-| `violence.gore` | Real gore for shock | remove · **severe** |
-| `violence.animal` | Animal cruelty | remove · **severe** |
-| `violence.incitement` | Calls to commit violent crime (non-terror) | remove · **severe** |
-| `violence.fictional` | Games / movies clearly fiction | dismiss |
-| `violence.news` | Newsworthy graphic with context | mark |
-
-Terrorism / violent extremist orgs are a **standalone Step-2 category** (not under Violence).
-
-### Terrorism
-
-| Leaf | Pick when | Outcome |
-|---|---|---|
-| `terrorism.ops` | Recruitment, fundraising, or operational planning | remove · **severe** |
-| `terrorism.praise` | Praise / propaganda for a terrorist org or attack | remove · **severe** |
-| → **escalate** | Terror threat with **place / time / target / method** | `escalation.imminent_violence` · **severe** |
-| `terrorism.threat` | Vague terror threat only (no place, time, target, or method) | remove · **severe** |
-| `terrorism.news` | News / documentary / clear condemnation | mark |
-| `terrorism.historical` | Historical or educational, no glorification | dismiss |
-
-### Self-harm
-
-| Leaf | Pick when | Outcome |
-|---|---|---|
-| `self_harm.promotion` | Instructions / encouragement to self-harm or suicide | remove · **severe** |
-| `self_harm.graphic` | Graphic self-injury imagery | remove · mild |
-| `self_harm.ideation_help` | Person in crisis asking for help | mark |
-| `self_harm.recovery` | Recovery / awareness, non-graphic | dismiss |
-| `self_harm.eating_disorder` | Tips/praise for disordered eating or dangerous weight methods | remove · mild |
-
-### Misinformation
-
-| Leaf | Pick when | Outcome |
-|---|---|---|
-| `misinfo.health_harm` | False medical claims with serious harm risk | remove · mild |
-| `misinfo.civic` | Election / voting process falsehoods | mark |
-| `misinfo.manipulated` | Deepfake / doctored media presented as real | remove · mild |
-| `misinfo.satire` | Clearly labeled satire | dismiss |
-| `misinfo.low_harm` | Unverified rumor, low stakes | mark |
-| `misinfo.crisis_panic` | Fake disaster / resource hoax that can cause panic | remove · mild |
-
-### Scam / fraud / regulated goods
-
-| Leaf | Pick when | Outcome |
-|---|---|---|
-| `scam.financial` | Fake giveaways, investment fraud | remove · **severe** |
-| `scam.impersonation` | Fake Matterya / brand support | remove · **severe** |
-| `scam.romance` | Romance / social-engineering scams | remove · **severe** |
-| `scam.unclear` | Fishy but not proven | mark |
-| `scam.regulated_goods` | Selling weapons, drugs, other regulated/dangerous goods | remove · **severe** |
-
-### Doxxing / privacy
-
-| Leaf | Pick when | Outcome |
-|---|---|---|
-| `doxxing.pii_hard` | Home address, phone, gov ID, financial accounts | remove · **severe** |
-| `doxxing.intimate` | NCII / private messages shared without consent | remove · **severe** |
-| `doxxing.workplace` | School/work identifiers used to harass | remove · **severe** |
-| `doxxing.public_record` | Already public official pages / news | dismiss |
-
-### Other
-
-| Leaf | Pick when | Outcome |
-|---|---|---|
-| `other.unlisted` | Real violation, no better leaf yet | mark |
-| `allowed.false_positive` | No violation | dismiss |
-| `escalation.second_look` | High-stakes specialist review (see Escalation section) | mark |
-
----
-
-## 5. Account review training
-
-Open when severe remove fires or mild strikes hit 3.
-
-| Action | Use when |
+| Example | What you choose |
 |---|---|
-| **Clear strikes** | Content action was enough; account looks OK |
-| **Warn** | Pattern starting; educate |
-| **Restrict** | Repeat mild abuse; temporary friction |
-| **Suspend** | Severe pattern, malware/scam rings, child safety, credible threats |
-| **Pass** | Another mod should decide |
-
-Never tell the content-queue flash what account action you took.
+| “Here’s exactly how to cut deeper — try this tonight” | Promotion / instruction → remove (severe) |
+| “I have pills ready at midnight, this is it” | Active crisis with plan → **escalate** |
+| “I’ve been struggling; does anyone have a hotline?” | Ideation seeking help → mark (keep for help) |
+| “One year clean — sharing my recovery story” (no graphic method) | Recovery → dismiss |
+| “Pro-ana tips to stay under 80 lbs” | Disordered eating promo → remove |
 
 ---
 
-## 6. Sources consulted (external)
+## Chapter 3 — Terrorism
 
-**Primary (this queue):**
-- Meta Community Standards — https://transparency.meta.com/policies/community-standards/
-- TikTok Community Guidelines — https://www.tiktok.com/community-guidelines
+### Definition
 
-**Secondary (edge cases only):**
-- X Rules — https://help.x.com/en/rules-and-policies/x-rules
-- Discord Community Guidelines — https://discord.com/guidelines/
-- Reddit Content Policy — https://www.reddit.com/help/contentpolicy
-- Snap Community Guidelines — https://www.snap.com/community-guidelines
+Content that supports terrorist groups, helps plan attacks, threatens attacks, or glorifies terrorist violence. News that clearly condemns an attack is different.
 
-**Not used for Claim-next:**
-- YouTube Community Guidelines / EDSA — reserved for the **longform video** moderation queue.
+### How to click
 
-## 6b. Longform video queue (YouTube-shaped — separate)
+Step 2 → **3 Terrorism**.
 
-Longform videos get their own queue later. That queue may use YouTube-like patterns: EDSA (educational/documentary/scientific/artistic) exceptions, age-restrict vs remove, and public-interest keeps that Claim-next must not apply to short posts/clips.
+### Examples
 
-Until that queue exists, treat longform the same as any other ticket in Claim-next under Meta + TikTok rules.
-
----
-
-## 7. Changelog
-
-| Date | Change |
+| Example | What you choose |
 |---|---|
-| 2026-10-31 | First handbook. Tree adds: `violence.extremist`, `mature.grooming`, `mature.child_endangerment`, `self_harm.eating_disorder`, `misinfo.crisis_panic`, `scam.regulated_goods`. Severity flips: `spam.malware`, `hate.protected.exclusion`, `scam.romance` → severe. NCII label clarified on `doxxing.intimate`. |
-| 2026-10-31 | Escalation leaves for specific cases only: `escalation.child_safety`, `escalation.imminent_violence`, `escalation.suicide_crisis`, `escalation.second_look`. Wired into mature/threats/stalking/blackmail/self-harm/extremist/doxxing gates. |
-| 2026-10-31 | Step-2 standalone **Terrorism** category (`terrorism.ops` / `praise` / `threat` / `news` / `historical`). Removed `violence.extremist` in favor of this path. |
-| 2026-10-31 | Step-2 ordered by harm priority: Self-harm → Terrorism → Violence → Harassment → Hate → Doxxing → Scam → Misinfo → Mature → Spam → Other. |
-| 2026-10-31 | Standalone **CSAM** (#1, always severe, escalate on confirmed/suspected) and **Adult solicitation**. Mature is adult media only. |
-| 2026-10-31 | Standalone **Servitude / domestic helpers** (forced labor, trafficking escalate, debt bondage, recruitment, legit job dismiss). |
-| 2026-10-31 | Claim-next baseline = **Meta + TikTok** only. YouTube/EDSA deferred to a separate longform-video queue. Hate stereotypes → remove; CSAM sexualization → escalate; concrete sextortion → escalate. |
+| “Join [terror group], here’s how to donate / train” | Recruitment / ops → remove (severe) |
+| “That bombing was glorious, more please” | Praise / propaganda → remove (severe) |
+| “I’ll bomb [named building] at 3pm Friday” | Threat with **place + time** → **escalate** |
+| “Someone should bomb something someday” (no place/time/target) | Vague threat → remove (severe), not escalate |
+| News clip: “Attack condemned; victims remembered” | News / condemnation → mark |
+| History class post about a past event, no praise | Historical / educational → dismiss |
+
+**Remember:** place, time, target, or method → **escalate** (same idea Meta / TikTok use for actionable threats).
+
+---
+
+## Chapter 4 — Violence / graphic harm
+
+### Definition
+
+Real gore, animal cruelty, calls to commit violent crime, or graphic clips. Movie/game violence that is clearly fiction is usually OK. News graphic can stay with a sensitive mark.
+
+### How to click
+
+Step 2 → **4 Violence / graphic harm**.
+
+### Examples
+
+| Example | What you choose |
+|---|---|
+| Shock clip of real mutilation posted for likes | Gore → remove (severe) |
+| Video of someone hurting an animal for fun | Animal cruelty → remove (severe) |
+| “Go beat up the people at that protest tonight” | Incitement → remove (severe) |
+| Clear gameplay / movie fight scene | Fictional → dismiss |
+| **From our queue:** NSFW news report of an attacked man with facial injuries, framed as news from Peru | News / documentary graphic → **mark** |
+
+---
+
+## Chapter 5 — Servitude / domestic helpers
+
+### Definition
+
+Forced labor, trafficking of domestic workers (“helpers” / maids), debt bondage, or deceptive job ads that trap people. A normal “hiring a nanny” ad is fine.
+
+### How to click
+
+Step 2 → **5 Servitude / domestic helpers**.
+
+### Examples
+
+| Example | What you choose |
+|---|---|
+| “We keep her passport; she works off the debt” | Debt bondage → remove (severe) |
+| Organized ring moving domestic workers under false contracts | Trafficking confirmed → **escalate** |
+| “$50/month live-in maid, no days off, we take papers” | Forced servitude → remove (severe) |
+| “Hiring live-in helper, legal contract, fair wage” (no coercion) | Legitimate job → dismiss |
+| Minor forced to work as a helper | → CSAM escalate |
+
+---
+
+## Chapter 6 — Harassment / bullying
+
+### Definition
+
+Targeting a real person to insult, humiliate, threaten, stalk, or sexually pressure them.
+
+### How to click
+
+Step 2 → **6 Harassment / bullying**.
+
+### Examples
+
+| Example | What you choose |
+|---|---|
+| “@username you’re a worthless idiot, kms” aimed at one person | Targeted cursing / bullying → remove |
+| “I’ll be at your apartment at 9 with a bat” | Credible threat with place/time → **escalate** |
+| “I’m gonna kill this exam lol” | Hyperbole → mark / not a real threat |
+| “Hope you get cancer and die” | Death wish → remove (severe) |
+| Repeated unwanted DMs after being told to stop | Stalking → remove (severe); escalate if swatting / showing up |
+| Unwanted sexual comments to a person | Unsolicited sexual → remove |
+| Sextortion of an adult with “pay or I post your nudes” | Sexual blackmail → remove (severe); if minor → CSAM |
+
+---
+
+## Chapter 7 — Hate speech
+
+### Definition
+
+Attacking people because of who they are: race, ethnicity, religion, gender, sexual orientation, disability, and similar protected traits. Insulting a politician’s *ideas* is usually not hate.
+
+### How to click
+
+Step 2 → **7 Hate speech**.
+
+### Examples
+
+| Example | What you choose |
+|---|---|
+| Calling a racial group “animals” or “subhuman” | Dehumanizing → remove (severe) |
+| Slurs aimed at a protected group | Slurs → remove (severe) |
+| “Those people shouldn’t be allowed here / should be segregated” | Exclusion → remove (severe) |
+| Lazy demeaning stereotype of a protected group | Stereotype → remove |
+| Praise of a hate group or atrocity | Praise → remove (severe) |
+| Friend group reclaiming a slur about themselves, no attack on others | Reclaimed → dismiss |
+| **From our queue:** “Downtown Miami…” tourism clip wrongly tagged hate | Likely **false positive** → Step 1 “No — allow” or hate reclaimed/dismiss path after checking |
+
+---
+
+## Chapter 8 — Doxxing / privacy (includes adult NCII)
+
+### Definition
+
+Sharing private personal data without consent to harm someone. **NCII** = intimate images or private sexual messages shared without consent.
+
+### How to click
+
+Step 2 → **8 Doxxing / privacy**.
+
+### Examples
+
+| Example | What you choose |
+|---|---|
+| Posting someone’s home address and phone to “teach them a lesson” | Hard PII → remove (severe); if “we’re coming at 8” → **escalate** |
+| Sharing an ex’s nudes without permission (adults) | Adult NCII → remove (severe) |
+| Same, but the person is under 18 | → **CSAM escalate** |
+| Posting a coworker’s desk location + shift to get them harassed | Workplace doxx → remove (severe) |
+| Linking a public news article or official company page | Public record → dismiss |
+
+---
+
+## Chapter 9 — Scam / fraud
+
+### Definition
+
+Tricks to steal money or accounts: fake giveaways, fake “Matterya Support,” romance scams, malware links, selling weapons/drugs.
+
+### How to click
+
+Step 2 → **9 Scam / fraud** (malware also lives under Spam).
+
+### Examples
+
+| Example | What you choose |
+|---|---|
+| “Send crypto, I’ll double it” | Financial scam → remove (severe) |
+| Fake “Matterya Support” asking for your password | Impersonation → remove (severe) |
+| Romance chat steering someone to wire money | Romance scam → remove (severe) |
+| “Buy this rifle / pills, DM me” | Regulated goods → remove (severe) |
+| Fishy promo but unclear | Suspicious unclear → mark |
+| **From our queue:** sports celebration clip wrongly tagged scam | Check content — if no ask for money, likely dismiss / wrong category |
+
+---
+
+## Chapter 10 — Misinformation
+
+### Definition
+
+False claims that can cause real harm (dangerous medical advice, crisis panic) or confuse civic processes. Satire that is clearly a joke is OK. Low-harm rumors can be marked.
+
+### How to click
+
+Step 2 → **I Misinformation**.
+
+### Examples
+
+| Example | What you choose |
+|---|---|
+| “Drink bleach to cure infection” | Health harm → remove |
+| Fake “polling place moved” on election day | Civic → mark |
+| Deepfake video of a mayor “confessing,” presented as real | Manipulated → remove |
+| Onion-style clearly labeled parody | Satire → dismiss |
+| “I heard the mall might close?” with no panic claim | Low harm → mark |
+| Fake “tsunami hits city tonight, evacuate now” during calm weather | Crisis panic → remove |
+
+---
+
+## Chapter 11 — Adult solicitation
+
+### Definition
+
+Adults offering or seeking paid sex, escort services, or pushing unwanted sexual advances. **Not** for minors (that is CSAM). **Not** the same as posting consensual adult porn in a labeled Space (that is Mature).
+
+### How to click
+
+Step 2 → **A Adult solicitation**.
+
+### Examples
+
+| Example | What you choose |
+|---|---|
+| “Escort available tonight, rates in bio” | Offering services → remove |
+| “Looking for paid meetup, women only” | Seeking services → remove |
+| Random sexual pickup lines to a stranger who didn’t ask | Unsolicited advances → remove |
+| “Pay $500 or I post your video” (adults) | Concrete sextortion → **escalate** |
+| Any of the above with a minor | → CSAM escalate |
+
+---
+
+## Chapter 12 — Mature / sexual content (adults only)
+
+### Definition
+
+Adult porn, nudity, fetish, or suggestive content **with no minors**. Matterya allows labeled adult Spaces (Masquerade) — those are often **marked**, not removed. Unlabeled explicit content in the general feed is usually **removed**.
+
+### How to click
+
+Step 2 → **M Mature / sexual content**. If a minor is involved, the first question sends you to CSAM. If it is paid sex / solicitation, it sends you to Adult solicitation.
+
+### Examples (many match real queue captions)
+
+| Example | What you choose |
+|---|---|
+| Explicit adult caption in a clearly adult Masquerade Space (“Getting all the cum out”, “from slow & passionate…”) | Labeled adult space porn → **mark** |
+| Same explicit media dropped unlabeled into a general / all-ages feed | Unlabeled pornography → remove |
+| Artistic nude statue photo for an art Space | Artistic nudity → dismiss |
+| Unwanted flash of genitals in a non-adult Space | Shock nudity → remove |
+| Auto NSFW flag on a cake photo (“Cakes for breakfast”) | False positive → dismiss |
+| Horse nature clip / fireworks B-roll wrongly auto-flagged | False positive → dismiss |
+
+---
+
+## Chapter 13 — Spam
+
+### Definition
+
+Unwanted ads, floods of the same post, engagement bait, or phishing / malware links.
+
+### How to click
+
+Step 2 → **S Spam**.
+
+### Examples
+
+| Example | What you choose |
+|---|---|
+| Same “buy followers” comment pasted 40 times | Flooding → remove |
+| “Click to claim free iPhone” phishing link | Malware / phishing → remove (**severe**) |
+| Mild self-promo that fits the Space | Borderline promo → mark |
+| Challenge hashtag clip with no scam ask (“big bank challenge #matteryachallenge”) | Often OK / dismiss unless it’s bait or malware |
+
+---
+
+## Chapter 14 — Escalate (special safety only)
+
+### Definition
+
+Escalate is **not** “I’m unsure of the category.” It is for rare, high-stakes safety cases — same idea as big platforms.
+
+### When to use it
+
+| Situation | Path |
+|---|---|
+| CSAM / grooming / minor NCII / suspected CSAM | Escalate → CSAM |
+| Threat with place / time / target / method (terror or other) | Escalate → specific threat |
+| Suicide crisis with a concrete plan | Escalate → suicide crisis |
+| Confirmed labor / domestic trafficking | Escalate → trafficking |
+| Concrete adult sextortion demand | Escalate → sextortion |
+| High-stakes but still unclear | Escalate → specialist second look |
+
+For ordinary doubt (spam vs promo, rude vs harassment) → press **`P`**.
+
+---
+
+## Chapter 15 — Account review queue
+
+### Definition
+
+A second queue for **accounts**, not posts. You land here after a **severe** remove or after **3 mild** strikes.
+
+### What you can do
+
+| Action | Plain meaning |
+|---|---|
+| Clear strikes | Content action was enough; account OK |
+| Warn | Notify the user; clear strikes |
+| Restrict | Record a temporary restriction + notify |
+| Suspend | Deactivate the account (serious / repeat harm) |
+| Pass | Another moderator should decide |
+
+---
+
+## Chapter 16 — Quick practice
+
+Try these mentally before your first real ticket:
+
+1. Adult explicit caption in Masquerade adult Space → **Mature → labeled → mark**  
+2. “I’ll bomb the station at noon” → **Terrorism → threat → place/time → escalate**  
+3. Peru news report of a violent assault, labeled news → **Violence → news → mark**  
+4. Cake photo auto-flagged NSFW → **Mature → false positive → dismiss** or **No violation**  
+5. Unsure if rude comment is harassment → **`P` Pass**
+
+---
+
+## Appendix — Where rules come from
+
+Claim-next follows **Meta Community Standards** and **TikTok Community Guidelines**. YouTube-style longform exceptions are for a **separate longform video queue** (not built for Claim-next).
+
+Live leaf list (technical) is generated at the bottom of the web handbook page for ops.

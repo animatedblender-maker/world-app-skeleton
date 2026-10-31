@@ -45,6 +45,7 @@ Optional Docker worker (`Dockerfile.media-worker`) is only if you later want a s
 |--|--|
 | **Management hub** | https://api.matterya.com/management |
 | **Policy handbook** | https://api.matterya.com/management/policy |
+| **Handbook PDF** | https://api.matterya.com/management/policy.pdf |
 | **Content moderation** | https://api.matterya.com/reports |
 | **Account review** | https://api.matterya.com/reports/accounts |
 | **Insights** | https://api.matterya.com/reports/analytics · also `/insights` |

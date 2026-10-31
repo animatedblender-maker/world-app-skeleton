@@ -93,7 +93,10 @@ import {
   handleAccountQueueAction,
 } from './reports/account-queue-page.js';
 import { handleManagementGet } from './reports/management-page.js';
-import { handlePolicyHandbookGet } from './reports/policy-handbook-page.js';
+import {
+  handlePolicyHandbookGet,
+  handlePolicyHandbookPdfGet,
+} from './reports/policy-handbook-page.js';
 import {
   authMailStatus,
   confirmEmailWithToken,
@@ -291,6 +294,12 @@ app.get('/management/policy', (req, res) => {
   void handlePolicyHandbookGet(req, res).catch((err) => {
     console.error('[management/policy]', err?.message ?? err);
     res.status(500).send('policy handbook failed');
+  });
+});
+app.get('/management/policy.pdf', (req, res) => {
+  void handlePolicyHandbookPdfGet(req, res).catch((err) => {
+    console.error('[management/policy.pdf]', err?.message ?? err);
+    res.status(500).send('policy handbook pdf failed');
   });
 });
 app.get('/reports', (req, res) => {

@@ -263,6 +263,7 @@ function renderHandbookHtml(bodyHtml: string): string {
   </div>
   <span class="muted">Moderator training</span>
   <span style="flex:1"></span>
+  <a class="nav" href="/management/policy.pdf">Download PDF</a>
   <a class="nav" href="/management">Management</a>
   <a class="nav" href="/reports">Content queue</a>
   <a class="nav" href="/reports/logout">Log out</a>
@@ -275,6 +276,22 @@ function renderHandbookHtml(bodyHtml: string): string {
 </main>
 </body>
 </html>`;
+}
+
+function findHandbookPdf(): string | null {
+  const candidates = [
+    path.resolve(__dirname, '../../public/moderation/Matterya-Moderator-Handbook.pdf'),
+    path.resolve(process.cwd(), 'public/moderation/Matterya-Moderator-Handbook.pdf'),
+    path.resolve(process.cwd(), '../../docs/moderation/Matterya-Moderator-Handbook.pdf'),
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch {
+      /* try next */
+    }
+  }
+  return null;
 }
 
 export async function handlePolicyHandbookGet(req: Request, res: Response): Promise<void> {
@@ -292,4 +309,28 @@ export async function handlePolicyHandbookGet(req: Request, res: Response): Prom
   const stripped = md.replace(/^# [^\n]+\n+/, '');
   const body = markdownToHtml(stripped);
   res.type('html').send(renderHandbookHtml(body));
+}
+
+/** Password-gated PDF download for offline / print training. */
+export async function handlePolicyHandbookPdfGet(req: Request, res: Response): Promise<void> {
+  if (!hasReportsAccess(req)) {
+    res.status(401).send(
+      renderReportsLoginHtml({
+        next: '/management/policy.pdf',
+        titleMode: 'management',
+      })
+    );
+    return;
+  }
+  const pdfPath = findHandbookPdf();
+  if (!pdfPath) {
+    res.status(404).type('text').send('Handbook PDF not found on this deploy.');
+    return;
+  }
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader(
+    'Content-Disposition',
+    'inline; filename="Matterya-Moderator-Handbook.pdf"'
+  );
+  fs.createReadStream(pdfPath).pipe(res);
 }

@@ -29,7 +29,13 @@ const LINKS: HubLink[] = [
     group: 'Moderation',
     href: '/management/policy',
     title: 'Policy handbook',
-    blurb: 'Meta + TikTok baseline for Claim-next. YouTube reserved for longform.',
+    blurb: 'Beginner training: chapters, definitions, examples. PDF download on the page.',
+  },
+  {
+    group: 'Moderation',
+    href: '/management/policy.pdf',
+    title: 'Handbook PDF',
+    blurb: 'Printable / offline Matterya Moderator Handbook.',
   },
   {
     group: 'Moderation',
