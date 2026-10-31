@@ -883,7 +883,7 @@ function renderEmpty(openCount: number, opts?: { waitingForOther?: boolean }): s
     return `
   <div class="card empty" style="grid-column:1/-1">
     <h2>Passed to another moderator</h2>
-    <p class="muted">${openCount} still open for others. Your queue has nothing left you haven’t passed.</p>
+    <p class="muted">${openCount} still open. Refresh to restart your pass loop (solo testing recycles the queue).</p>
   </div>`;
   }
   return `
@@ -891,7 +891,7 @@ function renderEmpty(openCount: number, opts?: { waitingForOther?: boolean }): s
     <h2>Queue clear</h2>
     <p class="muted">${
       openCount > 0
-        ? `${openCount} open, but none could be claimed right now. Refresh shortly.`
+        ? `${openCount} open, but none could be claimed right now. Refresh to retry.`
         : 'No open tickets. Auto-detected and user reports will appear here.'
     }</p>
   </div>`;

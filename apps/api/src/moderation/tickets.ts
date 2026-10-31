@@ -233,7 +233,20 @@ export async function upsertTicketFromReport(input: UpsertTicketInput): Promise<
   }
 }
 
-/** Claim the next open unassigned ticket (one-at-a-time). */
+const CLAIM_RETURNING = `
+  t.id, t.platform, t.target_kind, t.target_id, t.category, t.status, t.source,
+  t.report_count, t.last_report_at::text, t.preview_title, t.preview_body,
+  t.preview_media_url, t.assigned_to, t.claimed_at::text, t.mod_action, t.mod_category,
+  t.created_at::text,
+  t.reporter_user_id::text, t.reporter_profile_id::text,
+  coalesce(t.queue, 'content') as queue
+`;
+
+/**
+ * Claim the next open unassigned ticket (one-at-a-time).
+ * Skips tickets this actor already Passed. If every open ticket was Passed by
+ * this actor (solo testing), clear those passes and start the queue over.
+ */
 export async function claimNextTicket(
   actor: string,
   opts?: {
@@ -253,9 +266,8 @@ export async function claimNextTicket(
   const client = await pool.connect();
   try {
     await client.query('begin');
-    // Skip tickets this actor already Passed — those wait for another moderator.
-    const { rows } = await client.query<TicketRow>(
-      `
+
+    const claimSql = `
       with next as (
         select id
         from public.moderation_tickets
@@ -278,17 +290,42 @@ export async function claimNextTicket(
           updated_at = now()
       from next
       where t.id = next.id
-      returning
-        t.id, t.platform, t.target_kind, t.target_id, t.category, t.status, t.source,
-        t.report_count, t.last_report_at::text, t.preview_title, t.preview_body,
-        t.preview_media_url, t.assigned_to, t.claimed_at::text, t.mod_action, t.mod_category,
-        t.created_at::text,
-        t.reporter_user_id::text, t.reporter_profile_id::text,
-        coalesce(t.queue, 'content') as queue
-      `,
-      [actor, excludeIds, queue]
-    );
-    const ticket = rows[0] ?? null;
+      returning ${CLAIM_RETURNING}
+    `;
+
+    let { rows } = await client.query<TicketRow>(claimSql, [
+      actor,
+      excludeIds,
+      queue,
+    ]);
+    let ticket = rows[0] ?? null;
+
+    // Solo / testing recycle: nothing left except tickets this actor Passed.
+    // Clear this actor from passed_by and claim again (including the just-passed
+    // ticket so a one-item queue can loop).
+    if (!ticket) {
+      const cleared = await client.query(
+        `
+        update public.moderation_tickets
+        set passed_by = array_remove(coalesce(passed_by, '{}'::text[]), $1::text),
+            updated_at = now()
+        where status = 'open'
+          and assigned_to is null
+          and coalesce(queue, 'content') = $2
+          and $1 = any(coalesce(passed_by, '{}'::text[]))
+        `,
+        [actor, queue]
+      );
+      if ((cleared.rowCount ?? 0) > 0) {
+        ({ rows } = await client.query<TicketRow>(claimSql, [
+          actor,
+          [] as string[],
+          queue,
+        ]));
+        ticket = rows[0] ?? null;
+      }
+    }
+
     if (ticket) {
       await logAction(client, {
         ticketId: ticket.id,
