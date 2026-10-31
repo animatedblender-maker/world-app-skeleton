@@ -24,6 +24,19 @@ Client JSON from `policyTreeForClient()` never includes outcomes.
 - `Enter` — confirm leaf  
 - `P` — pass ticket to another mod  
 
+## Escalation (specific cases only)
+
+Root option **Escalate — special safety case**, plus gates inside mature / threats / stalking / blackmail / self-harm / extremist / doxxing:
+
+| Leaf | Outcome |
+|------|---------|
+| `escalation.child_safety` | remove · severe |
+| `escalation.imminent_violence` | remove · severe |
+| `escalation.suicide_crisis` | remove · severe |
+| `escalation.second_look` | mark |
+
+Not a general uncertainty shortcut — use Pass (`P`) or the best category leaf for ordinary doubt.
+
 ## Training
 
 Moderator handbook (principles, leaf guides, industry alignment):  

@@ -43,6 +43,93 @@ export type PolicyOption = {
 
 export type PolicyNode = PolicyBranch | PolicyLeaf;
 
+/**
+ * Escalation leaves — only for platform-style special cases
+ * (child safety, imminent violence, suicide crisis, specialist second look).
+ * Not offered as a general “I’m unsure of the category” shortcut everywhere.
+ */
+function escalationChildSafety(root: ModerationCategorySlug = 'mature'): PolicyLeaf {
+  return leaf(
+    'escalation.child_safety',
+    'Escalate — child sexual exploitation / grooming',
+    root,
+    'remove',
+    {
+      severity: 'severe',
+      rationale:
+        'Zero-tolerance child safety (Meta CSEAN / Discord / Snap / X). Remove + account queue; preserve archive for reporting.',
+    }
+  );
+}
+
+function escalationImminentViolence(
+  root: ModerationCategorySlug = 'harassment'
+): PolicyLeaf {
+  return leaf(
+    'escalation.imminent_violence',
+    'Escalate — imminent real-world violence',
+    root,
+    'remove',
+    {
+      severity: 'severe',
+      rationale:
+        'Credible + imminent threat (Meta / TikTok / Discord). Remove + instant account review.',
+    }
+  );
+}
+
+function escalationSuicideCrisis(): PolicyLeaf {
+  return leaf(
+    'escalation.suicide_crisis',
+    'Escalate — active suicide crisis with plan',
+    'self_harm',
+    'remove',
+    {
+      severity: 'severe',
+      rationale:
+        'Imminent self-harm plan (X / Meta / TikTok). Remove instructional/crisis-plan content + account review; ideation seeking help stays on the normal path.',
+    }
+  );
+}
+
+function escalationSecondLook(): PolicyLeaf {
+  return leaf(
+    'escalation.second_look',
+    'Escalate — needs specialist second look',
+    'other',
+    'mark',
+    {
+      rationale:
+        'High-stakes but outcome unclear. Keep tagged for senior review — do not use for ordinary uncertainty.',
+    }
+  );
+}
+
+function escalationRootTree(): PolicyNode {
+  return branch('escalation', 'What special case needs escalation?', [
+    {
+      key: '1',
+      label: 'Child sexual exploitation / grooming (minor involved)',
+      node: escalationChildSafety('mature'),
+    },
+    {
+      key: '2',
+      label: 'Imminent real-world violence / swatting',
+      node: escalationImminentViolence('violence'),
+    },
+    {
+      key: '3',
+      label: 'Active suicide crisis with a concrete plan',
+      node: escalationSuicideCrisis(),
+    },
+    {
+      key: '4',
+      label: 'Specialist second look (high-stakes, outcome unclear)',
+      node: escalationSecondLook(),
+    },
+  ]);
+}
+
 /** Root of the live decision tree. */
 export const POLICY_TREE: PolicyBranch = {
   kind: 'branch',
@@ -89,14 +176,8 @@ export const POLICY_TREE: PolicyBranch = {
     },
     {
       key: '3',
-      label: 'Not sure — needs second look',
-      node: leaf(
-        'escalation.second_look',
-        'Needs second look',
-        'other',
-        'mark',
-        { rationale: 'Keep live tagged until policy/ops review' }
-      ),
+      label: 'Escalate — special safety case',
+      node: escalationRootTree(),
     },
   ],
 };
@@ -216,12 +297,27 @@ function harassmentTree(): PolicyNode {
         {
           key: '1',
           label: 'Credible / specific threat',
-          node: leaf(
-            'harassment.threats.credible',
-            'Credible threat of violence',
-            'harassment',
-            'remove',
-            { severity: 'severe' }
+          node: branch(
+            'harassment.threats.credible_gate',
+            'Is the harm imminent or ongoing (time, place, or swatting)?',
+            [
+              {
+                key: '1',
+                label: 'Yes — imminent / ongoing → escalate',
+                node: escalationImminentViolence('violence'),
+              },
+              {
+                key: '2',
+                label: 'Credible but not imminent',
+                node: leaf(
+                  'harassment.threats.credible',
+                  'Credible threat of violence',
+                  'harassment',
+                  'remove',
+                  { severity: 'severe' }
+                ),
+              },
+            ]
           ),
         },
         {
@@ -264,12 +360,27 @@ function harassmentTree(): PolicyNode {
         {
           key: '2',
           label: 'Sexual blackmail / coercion',
-          node: leaf(
-            'harassment.sexual.blackmail',
-            'Sexual blackmail',
-            'harassment',
-            'remove',
-            { severity: 'severe' }
+          node: branch(
+            'harassment.sexual.blackmail_gate',
+            'Does this involve a minor (sextortion of anyone under 18)?',
+            [
+              {
+                key: '1',
+                label: 'Yes — minor involved → escalate child safety',
+                node: escalationChildSafety('mature'),
+              },
+              {
+                key: '2',
+                label: 'Adults only',
+                node: leaf(
+                  'harassment.sexual.blackmail',
+                  'Sexual blackmail',
+                  'harassment',
+                  'remove',
+                  { severity: 'severe' }
+                ),
+              },
+            ]
           ),
         },
         {
@@ -287,12 +398,27 @@ function harassmentTree(): PolicyNode {
     {
       key: '4',
       label: 'Stalking / repeated unwanted contact',
-      node: leaf(
-        'harassment.stalking',
-        'Stalking / repeated unwanted contact',
-        'harassment',
-        'remove',
-        { severity: 'severe' }
+      node: branch(
+        'harassment.stalking_gate',
+        'Is there an imminent threat (swatting, showing up, weapons)?',
+        [
+          {
+            key: '1',
+            label: 'Yes — imminent → escalate',
+            node: escalationImminentViolence('violence'),
+          },
+          {
+            key: '2',
+            label: 'Repeated unwanted contact, not imminent',
+            node: leaf(
+              'harassment.stalking',
+              'Stalking / repeated unwanted contact',
+              'harassment',
+              'remove',
+              { severity: 'severe' }
+            ),
+          },
+        ]
       ),
     },
     {
@@ -363,7 +489,7 @@ function hateTree(): PolicyNode {
   ]);
 }
 
-function matureTree(): PolicyNode {
+function matureInnerTree(): PolicyNode {
   return branch('mature', 'What kind of mature content?', [
     {
       key: '1',
@@ -394,13 +520,8 @@ function matureTree(): PolicyNode {
     {
       key: '2',
       label: 'Sexualization of minors (any)',
-      node: leaf(
-        'mature.csam_adjacent',
-        'Sexualization of minors',
-        'mature',
-        'remove',
-        { rationale: 'Zero tolerance — remove immediately', severity: 'severe' }
-      ),
+      // Prefer escalation.child_safety so training + account path share one leaf.
+      node: escalationChildSafety('mature'),
     },
     {
       key: '3',
@@ -446,16 +567,7 @@ function matureTree(): PolicyNode {
     {
       key: '7',
       label: 'Grooming / sexual solicitation of a minor',
-      node: leaf(
-        'mature.grooming',
-        'Grooming or sexual solicitation of a minor',
-        'mature',
-        'remove',
-        {
-          severity: 'severe',
-          rationale: 'Discord/Snap/TikTok/YouTube zero-tolerance child safety',
-        }
-      ),
+      node: escalationChildSafety('mature'),
     },
     {
       key: '8',
@@ -472,6 +584,26 @@ function matureTree(): PolicyNode {
       ),
     },
   ]);
+}
+
+/** Mature path always asks the child-safety gate first (platform pattern). */
+function matureTree(): PolicyNode {
+  return branch(
+    'mature.gate',
+    'Does this involve sexual content with a minor (real, AI, drawn, or grooming)?',
+    [
+      {
+        key: '1',
+        label: 'Yes — child sexual exploitation → escalate',
+        node: escalationChildSafety('mature'),
+      },
+      {
+        key: '2',
+        label: 'No — adults only / non-sexual',
+        node: matureInnerTree(),
+      },
+    ]
+  );
 }
 
 function violenceTree(): PolicyNode {
@@ -510,64 +642,94 @@ function violenceTree(): PolicyNode {
     {
       key: '6',
       label: 'Violent extremist org praise / recruitment',
-      node: leaf(
-        'violence.extremist',
-        'Violent extremist praise or recruitment',
-        'violence',
-        'remove',
-        {
-          severity: 'severe',
-          rationale: 'Meta DOI / YouTube VCO / TikTok / Discord / X — zero tolerance',
-        }
+      node: branch(
+        'violence.extremist_gate',
+        'Is this active recruitment or operational planning (not just historical discussion)?',
+        [
+          {
+            key: '1',
+            label: 'Yes — recruitment / ops → escalate imminent path',
+            node: escalationImminentViolence('violence'),
+          },
+          {
+            key: '2',
+            label: 'Praise / propaganda without ops detail',
+            node: leaf(
+              'violence.extremist',
+              'Violent extremist praise or recruitment',
+              'violence',
+              'remove',
+              {
+                severity: 'severe',
+                rationale: 'Meta DOI / YouTube VCO / TikTok / Discord / X — zero tolerance',
+              }
+            ),
+          },
+        ]
       ),
     },
   ]);
 }
 
 function selfHarmTree(): PolicyNode {
-  return branch('self_harm', 'What kind of self-harm content?', [
-    {
-      key: '1',
-      label: 'Promotion / instruction',
-      node: leaf('self_harm.promotion', 'Self-harm promotion', 'self_harm', 'remove', {
-        severity: 'severe',
-      }),
-    },
-    {
-      key: '2',
-      label: 'Graphic self-harm imagery',
-      node: leaf('self_harm.graphic', 'Graphic self-harm imagery', 'self_harm', 'remove'),
-    },
-    {
-      key: '3',
-      label: 'Suicidal ideation seeking help',
-      node: leaf(
-        'self_harm.ideation_help',
-        'Ideation seeking help',
-        'self_harm',
-        'mark',
-        { rationale: 'Keep for help resources; do not amplify' }
-      ),
-    },
-    {
-      key: '4',
-      label: 'Recovery / awareness (non-graphic)',
-      node: leaf('self_harm.recovery', 'Recovery/awareness', 'self_harm', 'dismiss'),
-    },
-    {
-      key: '5',
-      label: 'Disordered eating / dangerous weight methods (promo)',
-      node: leaf(
-        'self_harm.eating_disorder',
-        'Disordered eating promotion',
-        'self_harm',
-        'remove',
-        {
-          rationale: 'TikTok / YouTube / Meta — tips or praise for disordered eating',
-        }
-      ),
-    },
-  ]);
+  return branch(
+    'self_harm.gate',
+    'Is this an active suicide / self-harm crisis with a concrete plan?',
+    [
+      {
+        key: '1',
+        label: 'Yes — imminent plan → escalate',
+        node: escalationSuicideCrisis(),
+      },
+      {
+        key: '2',
+        label: 'No — other self-harm content',
+        node: branch('self_harm', 'What kind of self-harm content?', [
+          {
+            key: '1',
+            label: 'Promotion / instruction',
+            node: leaf('self_harm.promotion', 'Self-harm promotion', 'self_harm', 'remove', {
+              severity: 'severe',
+            }),
+          },
+          {
+            key: '2',
+            label: 'Graphic self-harm imagery',
+            node: leaf('self_harm.graphic', 'Graphic self-harm imagery', 'self_harm', 'remove'),
+          },
+          {
+            key: '3',
+            label: 'Suicidal ideation seeking help',
+            node: leaf(
+              'self_harm.ideation_help',
+              'Ideation seeking help',
+              'self_harm',
+              'mark',
+              { rationale: 'Keep for help resources; do not amplify' }
+            ),
+          },
+          {
+            key: '4',
+            label: 'Recovery / awareness (non-graphic)',
+            node: leaf('self_harm.recovery', 'Recovery/awareness', 'self_harm', 'dismiss'),
+          },
+          {
+            key: '5',
+            label: 'Disordered eating / dangerous weight methods (promo)',
+            node: leaf(
+              'self_harm.eating_disorder',
+              'Disordered eating promotion',
+              'self_harm',
+              'remove',
+              {
+                rationale: 'TikTok / YouTube / Meta — tips or praise for disordered eating',
+              }
+            ),
+          },
+        ]),
+      },
+    ]
+  );
 }
 
 function misinfoTree(): PolicyNode {
@@ -664,17 +826,54 @@ function doxxingTree(): PolicyNode {
     {
       key: '1',
       label: 'Home address / phone / ID documents',
-      node: leaf('doxxing.pii_hard', 'Hard PII exposure', 'doxxing', 'remove', {
-        severity: 'severe',
-      }),
+      node: branch(
+        'doxxing.pii_gate',
+        'Is this tied to imminent harm (swatting, stalking, “I know where you live” with a plan)?',
+        [
+          {
+            key: '1',
+            label: 'Yes — imminent → escalate',
+            node: escalationImminentViolence('violence'),
+          },
+          {
+            key: '2',
+            label: 'PII exposure without imminent plan',
+            node: leaf('doxxing.pii_hard', 'Hard PII exposure', 'doxxing', 'remove', {
+              severity: 'severe',
+            }),
+          },
+        ]
+      ),
     },
     {
       key: '2',
       label: 'NCII — intimate images / private messages without consent',
-      node: leaf('doxxing.intimate', 'Non-consensual intimate imagery (NCII)', 'doxxing', 'remove', {
-        severity: 'severe',
-        rationale: 'X / Discord / Meta / Snap — NCII including AI-generated of real people',
-      }),
+      node: branch(
+        'doxxing.intimate_gate',
+        'Does the NCII involve a minor?',
+        [
+          {
+            key: '1',
+            label: 'Yes — minor → escalate child safety',
+            node: escalationChildSafety('mature'),
+          },
+          {
+            key: '2',
+            label: 'Adult NCII',
+            node: leaf(
+              'doxxing.intimate',
+              'Non-consensual intimate imagery (NCII)',
+              'doxxing',
+              'remove',
+              {
+                severity: 'severe',
+                rationale:
+                  'X / Discord / Meta / Snap — NCII including AI-generated of real people',
+              }
+            ),
+          },
+        ]
+      ),
     },
     {
       key: '3',

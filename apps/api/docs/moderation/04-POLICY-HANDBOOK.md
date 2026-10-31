@@ -49,13 +49,36 @@ Account actions: clear strikes · warn · restrict · suspend · pass.
 
 ### Pass
 
-`P` hands the ticket to another moderator (`passed_by`). Use when unsure, conflicted, or need second eyes — prefer **escalation.second_look** leaf when the content should stay tagged until review.
+`P` hands the ticket to another moderator (`passed_by`). Use when unsure or conflicted on an ordinary ticket.
+
+### Escalation (decision-tree leaves — specific cases only)
+
+Like Meta / Discord / TikTok / X, escalation is **not** a general “I’m unsure of the category” button. It appears only for special safety cases:
+
+| Leaf | When | Outcome |
+|---|---|---|
+| `escalation.child_safety` | Sexual content involving a minor (incl. AI/drawn), grooming, minor NCII / sextortion | remove · **severe** |
+| `escalation.imminent_violence` | Credible threat that is imminent/ongoing, swatting, extremist ops planning | remove · **severe** |
+| `escalation.suicide_crisis` | Active suicide/self-harm crisis with a concrete plan | remove · **severe** |
+| `escalation.second_look` | High-stakes but outcome still unclear after reading the content | mark |
+
+**Where the tree asks:**
+
+- Root → **Escalate — special safety case** (lists the four above)
+- Mature → first question: involves a minor sexually?
+- Harassment threats / stalking → imminent?
+- Sexual blackmail → minor involved?
+- Self-harm → active crisis with plan?
+- Violence extremist → active recruitment/ops?
+- Doxxing hard PII / NCII → imminent harm or minor?
+
+Ordinary uncertainty inside a category: pick the best fitting leaf, or Pass (`P`). Do **not** use escalation for spam vs promo debates.
 
 ---
 
 ## 3. Cross-cutting rules (read before category guides)
 
-1. **Minors always win.** Anything sexual involving anyone under 18 (real, AI, drawn, text solicitation, grooming) → `mature.csam_adjacent` or `mature.grooming` (severe). Do not mark. Do not dismiss as “art.”
+1. **Minors always win.** Anything sexual involving anyone under 18 (real, AI, drawn, text solicitation, grooming) → `escalation.child_safety` (severe). Do not mark. Do not dismiss as “art.”
 2. **News / documentary / EDSA.** Graphic violence or sensitive imagery with clear public-interest framing → `violence.news` (mark) or artistic/educational leaves — not gore-remove — unless it glorifies or recruits.
 3. **Satire / clearly labeled fiction.** Prefer dismiss (`misinfo.satire`, `violence.fictional`) when intent is obvious.
 4. **Reclaimed speech.** In-group reclaimed slurs without attacking others → `hate.reclaimed` (dismiss). Out-group weaponization → hate remove leaves.
@@ -120,8 +143,7 @@ Protected characteristics (Matterya practice, Meta/X/TikTok-aligned): race, ethn
 | `mature.porn.unlabeled` | Explicit sex outside expected adult context | remove · mild |
 | `mature.porn.labeled_space` | Explicit in clearly adult Masquerade Space | mark |
 | `mature.porn.animated` | Animated/drawn adult porn (no minors) | mark |
-| `mature.csam_adjacent` | Any sexual content involving minors (incl. AI/drawn) | remove · **severe** |
-| `mature.grooming` | Soliciting / grooming anyone under 18 | remove · **severe** |
+| `escalation.child_safety` | Any sexual content involving minors (incl. AI/drawn) or grooming — use escalate path | remove · **severe** |
 | `mature.child_endangerment` | Non-sexual endangerment of minors (dangerous challenges, trafficking facilitation, physical abuse) | remove · **severe** |
 | `mature.nudity.sexualized` | Sexualized adult nudity | mark |
 | `mature.nudity.artistic` | Art / medical / educational | dismiss |
@@ -230,3 +252,4 @@ Matterya is not a copy of any one platform. We borrow **decision patterns** (rem
 | Date | Change |
 |---|---|
 | 2026-10-31 | First handbook. Tree adds: `violence.extremist`, `mature.grooming`, `mature.child_endangerment`, `self_harm.eating_disorder`, `misinfo.crisis_panic`, `scam.regulated_goods`. Severity flips: `spam.malware`, `hate.protected.exclusion`, `scam.romance` → severe. NCII label clarified on `doxxing.intimate`. |
+| 2026-10-31 | Escalation leaves for specific cases only: `escalation.child_safety`, `escalation.imminent_violence`, `escalation.suicide_crisis`, `escalation.second_look`. Wired into mature/threats/stalking/blackmail/self-harm/extremist/doxxing gates. |
