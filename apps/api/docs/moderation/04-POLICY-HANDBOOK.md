@@ -160,10 +160,22 @@ Protected characteristics (Matterya practice, Meta/X/TikTok-aligned): race, ethn
 |---|---|---|
 | `violence.gore` | Real gore for shock | remove · **severe** |
 | `violence.animal` | Animal cruelty | remove · **severe** |
-| `violence.incitement` | Calls to commit violent crime | remove · **severe** |
-| `violence.extremist` | Praise / recruit for violent extremist orgs (Meta DOI / YouTube VCO style) | remove · **severe** |
+| `violence.incitement` | Calls to commit violent crime (non-terror) | remove · **severe** |
 | `violence.fictional` | Games / movies clearly fiction | dismiss |
 | `violence.news` | Newsworthy graphic with context | mark |
+
+Terrorism / violent extremist orgs are a **standalone Step-2 category** (not under Violence).
+
+### Terrorism
+
+| Leaf | Pick when | Outcome |
+|---|---|---|
+| `terrorism.ops` | Recruitment, fundraising, or operational planning | remove · **severe** |
+| `terrorism.praise` | Praise / propaganda for a terrorist org or attack | remove · **severe** |
+| `terrorism.threat` | Threat to commit a terrorist attack (not clearly imminent) | remove · **severe** |
+| → escalate imminent | Specific + imminent terror threat | `escalation.imminent_violence` |
+| `terrorism.news` | News / documentary / clear condemnation | mark |
+| `terrorism.historical` | Historical or educational, no glorification | dismiss |
 
 ### Self-harm
 
@@ -253,3 +265,4 @@ Matterya is not a copy of any one platform. We borrow **decision patterns** (rem
 |---|---|
 | 2026-10-31 | First handbook. Tree adds: `violence.extremist`, `mature.grooming`, `mature.child_endangerment`, `self_harm.eating_disorder`, `misinfo.crisis_panic`, `scam.regulated_goods`. Severity flips: `spam.malware`, `hate.protected.exclusion`, `scam.romance` → severe. NCII label clarified on `doxxing.intimate`. |
 | 2026-10-31 | Escalation leaves for specific cases only: `escalation.child_safety`, `escalation.imminent_violence`, `escalation.suicide_crisis`, `escalation.second_look`. Wired into mature/threats/stalking/blackmail/self-harm/extremist/doxxing gates. |
+| 2026-10-31 | Step-2 standalone **Terrorism** category (`terrorism.ops` / `praise` / `threat` / `news` / `historical`). Removed `violence.extremist` in favor of this path. |

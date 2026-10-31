@@ -9,6 +9,7 @@ export const MODERATION_CATEGORIES = [
   { slug: 'hate', label: 'Hate' },
   { slug: 'mature', label: 'Mature content' },
   { slug: 'violence', label: 'Violence' },
+  { slug: 'terrorism', label: 'Terrorism' },
   { slug: 'self_harm', label: 'Self-harm' },
   { slug: 'misinfo', label: 'Misinformation' },
   { slug: 'scam', label: 'Scam' },
@@ -49,6 +50,10 @@ const REASON_ALIASES: Record<string, ModerationCategorySlug> = {
   'doxxing / identity': 'doxxing',
   'doxxing / privacy': 'doxxing',
   privacy: 'doxxing',
+  terrorism: 'terrorism',
+  terrorist: 'terrorism',
+  'violent extremism': 'terrorism',
+  extremist: 'terrorism',
   other: 'other',
 };
 

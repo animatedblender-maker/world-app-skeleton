@@ -98,6 +98,25 @@ export async function ensureTicketsSchema(): Promise<void> {
       on public.account_strikes (subject_kind, subject_id, created_at desc)
       where cleared_at is null
   `);
+  // Keep mod_category check in sync with MODERATION_CATEGORIES (adds terrorism).
+  await pool.query(`
+    do $$
+    begin
+      alter table public.moderation_tickets
+        drop constraint if exists moderation_tickets_mod_category_check;
+      alter table public.moderation_tickets
+        add constraint moderation_tickets_mod_category_check
+        check (
+          mod_category is null
+          or mod_category in (
+            'spam', 'harassment', 'hate', 'mature', 'violence', 'terrorism',
+            'self_harm', 'misinfo', 'scam', 'doxxing', 'other'
+          )
+        );
+    exception when others then
+      raise notice 'mod_category check update skipped: %', sqlerrm;
+    end$$;
+  `);
   ticketsSchemaEnsured = true;
 }
 

@@ -149,10 +149,11 @@ export const POLICY_TREE: PolicyBranch = {
           { key: '3', label: 'Hate speech', node: hateTree() },
           { key: '4', label: 'Mature / sexual content', node: matureTree() },
           { key: '5', label: 'Violence / graphic harm', node: violenceTree() },
-          { key: '6', label: 'Self-harm / suicide', node: selfHarmTree() },
-          { key: '7', label: 'Misinformation', node: misinfoTree() },
-          { key: '8', label: 'Scam / fraud', node: scamTree() },
-          { key: '9', label: 'Doxxing / privacy', node: doxxingTree() },
+          { key: '6', label: 'Terrorism', node: terrorismTree() },
+          { key: '7', label: 'Self-harm / suicide', node: selfHarmTree() },
+          { key: '8', label: 'Misinformation', node: misinfoTree() },
+          { key: '9', label: 'Scam / fraud', node: scamTree() },
+          { key: 'D', label: 'Doxxing / privacy', node: doxxingTree() },
           {
             key: '0',
             label: 'Other / not listed',
@@ -639,33 +640,91 @@ function violenceTree(): PolicyNode {
       label: 'News / documentary graphic (labeled)',
       node: leaf('violence.news', 'News/documentary graphic', 'violence', 'mark'),
     },
+  ]);
+}
+
+/**
+ * Standalone Step-2 category (Meta DOI / YouTube VCO / TikTok / Discord / X).
+ * Graphic violence without a terror nexus stays under Violence.
+ */
+function terrorismTree(): PolicyNode {
+  return branch('terrorism', 'What kind of terrorism-related content?', [
     {
-      key: '6',
-      label: 'Violent extremist org praise / recruitment',
+      key: '1',
+      label: 'Recruitment / fundraising / operational planning',
+      node: leaf(
+        'terrorism.ops',
+        'Terrorist recruitment or operational planning',
+        'terrorism',
+        'remove',
+        {
+          severity: 'severe',
+          rationale: 'Active material support / ops — remove + instant account review',
+        }
+      ),
+    },
+    {
+      key: '2',
+      label: 'Praise / propaganda for a terrorist org or attack',
+      node: leaf(
+        'terrorism.praise',
+        'Terrorist praise or propaganda',
+        'terrorism',
+        'remove',
+        {
+          severity: 'severe',
+          rationale: 'Glorifying terrorist entities or attacks',
+        }
+      ),
+    },
+    {
+      key: '3',
+      label: 'Threat to commit a terrorist attack',
       node: branch(
-        'violence.extremist_gate',
-        'Is this active recruitment or operational planning (not just historical discussion)?',
+        'terrorism.threat_gate',
+        'Is the threat specific and imminent?',
         [
           {
             key: '1',
-            label: 'Yes — recruitment / ops → escalate imminent path',
-            node: escalationImminentViolence('violence'),
+            label: 'Yes — imminent → escalate',
+            node: escalationImminentViolence('terrorism'),
           },
           {
             key: '2',
-            label: 'Praise / propaganda without ops detail',
+            label: 'Threat without clear imminence',
             node: leaf(
-              'violence.extremist',
-              'Violent extremist praise or recruitment',
-              'violence',
+              'terrorism.threat',
+              'Terrorist attack threat',
+              'terrorism',
               'remove',
-              {
-                severity: 'severe',
-                rationale: 'Meta DOI / YouTube VCO / TikTok / Discord / X — zero tolerance',
-              }
+              { severity: 'severe' }
             ),
           },
         ]
+      ),
+    },
+    {
+      key: '4',
+      label: 'News / documentary / condemnation (no praise)',
+      node: leaf(
+        'terrorism.news',
+        'Terrorism news or condemnation',
+        'terrorism',
+        'mark',
+        {
+          rationale: 'Public-interest reporting or clear condemnation — mark, do not remove',
+        }
+      ),
+    },
+    {
+      key: '5',
+      label: 'Historical / educational without glorification',
+      node: leaf(
+        'terrorism.historical',
+        'Historical or educational terrorism discussion',
+        'terrorism',
+        'dismiss',
+        { rationale: 'Context is educational or historical, not praise' }
       ),
     },
   ]);

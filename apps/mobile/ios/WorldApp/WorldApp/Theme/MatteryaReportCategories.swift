@@ -16,6 +16,7 @@ enum MatteryaReportCategories {
         .init(slug: "hate", label: "Hate"),
         .init(slug: "mature", label: "Mature content"),
         .init(slug: "violence", label: "Violence"),
+        .init(slug: "terrorism", label: "Terrorism"),
         .init(slug: "self_harm", label: "Self-harm"),
         .init(slug: "misinfo", label: "Misinformation"),
         .init(slug: "scam", label: "Scam"),
@@ -36,6 +37,7 @@ enum MatteryaReportCategories {
         if t.contains("spam") { return "spam" }
         if t.contains("harass") { return "harassment" }
         if t.contains("misinfo") { return "misinfo" }
+        if t.contains("terror") || t.contains("extremist") { return "terrorism" }
         if t.contains("illegal") || t.contains("harm") { return "other" }
         return "other"
     }

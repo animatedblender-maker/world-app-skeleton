@@ -26,7 +26,9 @@ Client JSON from `policyTreeForClient()` never includes outcomes.
 
 ## Escalation (specific cases only)
 
-Root option **Escalate — special safety case**, plus gates inside mature / threats / stalking / blackmail / self-harm / extremist / doxxing:
+Step 2 includes a standalone **Terrorism** kind (separate from Violence).
+
+Root option **Escalate — special safety case**, plus gates inside mature / threats / stalking / blackmail / self-harm / terrorism threats / doxxing:
 
 | Leaf | Outcome |
 |------|---------|
