@@ -38,7 +38,9 @@ import com.matterya.matterya.theme.MatteryaDimens
 
 enum class CreateMenuAction { Post, HubsVideo, Spark }
 
-/** Mirrors iOS `CreateMenuOverlay` + `CreateMenuPanel`. */
+enum class MasqueradeCreateAction { CreateSpace, NewPost }
+
+/** Mirrors iOS `CreateMenuOverlay` + `CreateMenuPanel`. Title is Create only. */
 @Composable
 fun CreateMenuSheet(
     visible: Boolean,
@@ -75,15 +77,13 @@ fun CreateMenuSheet(
                     .padding(horizontal = 20.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "Create",
-                        fontFamily = FontFamily.Serif,
-                        fontSize = 24.sp,
-                        color = MatteryaColors.ink,
-                    )
-                    Text("Share with your country", fontSize = 12.sp, color = MatteryaColors.inkMuted)
-                }
+                Text(
+                    "Create",
+                    modifier = Modifier.weight(1f),
+                    fontFamily = FontFamily.Serif,
+                    fontSize = 24.sp,
+                    color = MatteryaColors.ink,
+                )
                 IconButton(onClick = onDismiss) {
                     Icon(Icons.Default.Close, contentDescription = "Close", tint = MatteryaColors.inkMuted)
                 }
@@ -103,6 +103,67 @@ fun CreateMenuSheet(
                 MatteryaCopy.sparksOnHubs,
                 Icons.Default.AutoAwesome,
             ) { onAction(CreateMenuAction.Spark) }
+            Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+/** Mirrors iOS `MasqueradeCreatePanel` — Space or New post. */
+@Composable
+fun MasqueradeCreateSheet(
+    visible: Boolean,
+    onDismiss: () -> Unit,
+    onAction: (MasqueradeCreateAction) -> Unit,
+) {
+    if (!visible) return
+    Box(Modifier.fillMaxSize()) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(MatteryaColors.ink.copy(alpha = 0.16f))
+                .clickable(onClick = onDismiss),
+        )
+        Column(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
+                .background(MatteryaColors.surface)
+                .navigationBarsPadding()
+                .padding(bottom = MatteryaDimens.tabBarHeight),
+        ) {
+            Box(
+                Modifier
+                    .padding(top = 10.dp, bottom = 12.dp)
+                    .size(width = 36.dp, height = 4.dp)
+                    .align(Alignment.CenterHorizontally)
+                    .background(MatteryaColors.border, RoundedCornerShape(2.dp)),
+            )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    MatteryaCopy.anonymousCreateMenuTitle,
+                    modifier = Modifier.weight(1f),
+                    fontFamily = FontFamily.Serif,
+                    fontSize = 22.sp,
+                    color = MatteryaColors.ink,
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, contentDescription = "Close", tint = MatteryaColors.inkMuted)
+                }
+            }
+            HorizontalDivider(thickness = 0.5.dp, color = MatteryaColors.divider)
+            Spacer(Modifier.height(6.dp))
+            CreateRow(MatteryaCopy.anonymousCreateSpace, "Start a free Space", Icons.Default.Edit) {
+                onAction(MasqueradeCreateAction.CreateSpace)
+            }
+            CreateRow(MatteryaCopy.anonymousCreatePost, "Post in a Space you joined", Icons.Default.AutoAwesome) {
+                onAction(MasqueradeCreateAction.NewPost)
+            }
             Spacer(Modifier.height(12.dp))
         }
     }

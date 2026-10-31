@@ -49,6 +49,7 @@ import com.matterya.matterya.model.Message
 import com.matterya.matterya.model.Profile
 import com.matterya.matterya.model.RelativeTime
 import com.matterya.matterya.theme.MatteryaColors
+import com.matterya.matterya.theme.MatteryaCopy
 import com.matterya.matterya.ui.ads.AdsView
 import com.matterya.matterya.model.GlobePanel
 import com.matterya.matterya.theme.YouTubeMiniPlayerBar
@@ -58,6 +59,9 @@ import com.matterya.matterya.ui.components.AppMenuOverlay
 import com.matterya.matterya.ui.components.BottomTabBar
 import com.matterya.matterya.ui.components.CreateMenuAction
 import com.matterya.matterya.ui.components.CreateMenuSheet
+import com.matterya.matterya.ui.components.MasqueradeCreateAction
+import com.matterya.matterya.ui.components.MasqueradeCreateSheet
+import com.matterya.matterya.ui.anonymous.AnonymousPostSpacePickerView
 import com.matterya.matterya.ui.components.PostComposerView
 import com.matterya.matterya.ui.components.ReelComposerView
 import com.matterya.matterya.ui.components.StoriesViewerView
@@ -117,6 +121,8 @@ fun MainTabView(
 
     var showAppMenu by remember { mutableStateOf(false) }
     var showCreateMenu by remember { mutableStateOf(false) }
+    var showMasqueradeCreateMenu by remember { mutableStateOf(false) }
+    var showMasqueradeSpacePicker by remember { mutableStateOf(false) }
     var toast by remember { mutableStateOf<String?>(null) }
 
     // Search
@@ -157,6 +163,8 @@ fun MainTabView(
     fun navigate(path: String) {
         showAppMenu = false
         showCreateMenu = false
+        showMasqueradeCreateMenu = false
+        showMasqueradeSpacePicker = false
         navController.navigate(path) { launchSingleTop = true }
     }
 
@@ -1265,7 +1273,13 @@ fun MainTabView(
                         vm.selectTab(tab)
                         navController.popBackStack(NavRoutes.tabs, inclusive = false)
                     },
-                    onCreate = { showCreateMenu = true },
+                    onCreate = {
+                        if (state.selectedTab == AppTab.Anonymous) {
+                            showMasqueradeCreateMenu = true
+                        } else {
+                            showCreateMenu = true
+                        }
+                    },
                 )
             }
         }
@@ -1454,6 +1468,40 @@ fun MainTabView(
                 }
             },
         )
+
+        MasqueradeCreateSheet(
+            visible = showMasqueradeCreateMenu,
+            onDismiss = { showMasqueradeCreateMenu = false },
+            onAction = { action ->
+                showMasqueradeCreateMenu = false
+                when (action) {
+                    MasqueradeCreateAction.CreateSpace -> {
+                        // Space create lives inside AnonymousRootView; hop to Masquerade ready + toast.
+                        vm.selectTab(AppTab.Anonymous)
+                        toast = MatteryaCopy.anonymousCreateSpace
+                    }
+                    MasqueradeCreateAction.NewPost -> {
+                        vm.selectTab(AppTab.Anonymous)
+                        showMasqueradeSpacePicker = true
+                    }
+                }
+            },
+        )
+
+        if (showMasqueradeSpacePicker) {
+            androidx.compose.ui.window.Dialog(
+                onDismissRequest = { showMasqueradeSpacePicker = false },
+            ) {
+                AnonymousPostSpacePickerView(
+                    store = AnonymousStore.get(context),
+                    onBack = { showMasqueradeSpacePicker = false },
+                    onRequestCreateSpace = {
+                        showMasqueradeSpacePicker = false
+                        toast = MatteryaCopy.anonymousCreateSpace
+                    },
+                )
+            }
+        }
 
         toast?.let { msg ->
             Box(
