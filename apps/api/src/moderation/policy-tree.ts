@@ -110,60 +110,6 @@ function escalationSecondLook(): PolicyLeaf {
   );
 }
 
-function escalationRootTree(): PolicyNode {
-  return branch('escalation', 'What special case needs escalation?', [
-    {
-      key: '1',
-      label: 'CSAM / grooming (minor involved)',
-      node: escalationChildSafety('csam'),
-    },
-    {
-      key: '2',
-      label: 'Specific threat with place / time / target (incl. terror or swatting)',
-      node: escalationImminentViolence('violence'),
-    },
-    {
-      key: '3',
-      label: 'Active suicide crisis with a concrete plan',
-      node: escalationSuicideCrisis(),
-    },
-    {
-      key: '4',
-      label: 'Labor / domestic trafficking (confirmed)',
-      node: leaf(
-        'escalation.trafficking',
-        'Escalate — labor / domestic trafficking',
-        'servitude',
-        'remove',
-        {
-          severity: 'severe',
-          rationale:
-            'Confirmed trafficking — remove + account queue; preserve for specialist review',
-        }
-      ),
-    },
-    {
-      key: '5',
-      label: 'Adult sextortion with concrete demand',
-      node: leaf(
-        'escalation.sextortion',
-        'Escalate — adult sextortion',
-        'solicitation',
-        'remove',
-        {
-          severity: 'severe',
-          rationale: 'Confirmed sextortion with a concrete demand — escalate',
-        }
-      ),
-    },
-    {
-      key: '6',
-      label: 'Specialist second look (high-stakes, outcome unclear)',
-      node: escalationSecondLook(),
-    },
-  ]);
-}
-
 /**
  * Root: actionable vs ignore only.
  * Content that *stays* for a policy reason (e.g. self-harm recovery, news graphic,
@@ -200,14 +146,20 @@ export const POLICY_TREE: PolicyBranch = {
           {
             key: '0',
             label: 'Other / not listed',
-            node: leaf('other.unlisted', 'Other unlisted violation', 'other', 'mark', {
-              rationale: 'Catch-all until policy refined',
-            }),
-          },
-          {
-            key: 'E',
-            label: 'Escalate — special safety case',
-            node: escalationRootTree(),
+            node: branch('other', 'What fits best?', [
+              {
+                key: '1',
+                label: 'Real issue, no better category yet',
+                node: leaf('other.unlisted', 'Other unlisted violation', 'other', 'mark', {
+                  rationale: 'Catch-all until policy refined',
+                }),
+              },
+              {
+                key: '2',
+                label: 'High-stakes — needs specialist second look',
+                node: escalationSecondLook(),
+              },
+            ]),
           },
         ],
       },

@@ -24,29 +24,30 @@ Client JSON from `policyTreeForClient()` never includes outcomes.
 - `Enter` — confirm leaf  
 - `P` — pass ticket to another mod  
 
-## Escalation (specific cases only)
-
-Claim-next policy tree for posts and short-form.
+## Flow
 
 **Step 1:** Is it actionable? → **Yes** | **Ignore**  
 - **Ignore** = clear false alarm / nothing wrong only.  
 - Content that stays for a policy reason (recovery, news mark, labeled mature, satire) = **Yes** → matching leaf.
 
-**Step 2** (after Yes): issue kinds ordered by harm priority (CSAM → Self-harm → Terrorism → Violence → Servitude → Harassment → Hate → Doxxing → Scam → Misinfo → Adult solicitation → Mature → Spam → Other → Escalate).
+**Step 2** (after Yes): issue kinds ordered by harm priority (CSAM → Self-harm → Terrorism → Violence → Servitude → Harassment → Hate → Doxxing → Scam → Misinfo → Adult solicitation → Mature → Spam → Other).
 
-Root option **Escalate — special safety case**, plus gates inside mature / threats / stalking / blackmail / self-harm / terrorism threats / doxxing:
+## Escalation (inside a violation only)
+
+Escalate is **not** its own Step 2 category. Follow-up questions inside CSAM, self-harm, terrorism threats, harassment threats/stalking, servitude trafficking, solicitation sextortion, and doxxing lead to escalate leaves when needed. Specialist second look lives under **Other**.
 
 | Leaf | Outcome |
 |------|---------|
 | `escalation.child_safety` | remove · severe |
 | `escalation.imminent_violence` | remove · severe |
 | `escalation.suicide_crisis` | remove · severe |
-| `escalation.second_look` | mark |
+| `escalation.trafficking` | remove · severe |
+| `escalation.sextortion` | remove · severe |
+| `escalation.second_look` | mark (via Other) |
 
-Not a general uncertainty shortcut — use Pass (`P`) or the best category leaf for ordinary doubt.
+Ordinary doubt → Pass (`P`).
 
 ## Training
 
-Moderator handbook (principles, leaf guides, industry alignment):  
+Moderator handbook:  
 https://api.matterya.com/management/policy · source `docs/moderation/04-POLICY-HANDBOOK.md`
-

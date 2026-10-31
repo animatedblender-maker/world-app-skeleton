@@ -378,24 +378,25 @@ Step 2 → **S Spam**.
 
 ---
 
-## Chapter 14 — Escalate (special safety only)
+## Chapter 14 — Escalate (inside a violation — not its own category)
 
 ### Definition
 
-After **Yes**, Step 2 includes **Escalate** (`E`). It is **not** “I’m unsure of the category,” and it is **not** Ignore. Use it only for rare, high-stakes safety cases.
+**Escalate is not a Step 2 category.** It appears as a follow-up question **inside** the violation you already chose, only when that case needs specialist / account urgency.
 
-### When to use it
+### Where it shows up
 
-| Situation | Path |
+| You chose (Step 2) | Escalate when |
 |---|---|
-| CSAM / grooming / minor NCII / suspected CSAM | Escalate → CSAM |
-| Threat with place / time / target / method (terror or other) | Escalate → specific threat |
-| Suicide crisis with a concrete plan | Escalate → suicide crisis |
-| Confirmed labor / domestic trafficking | Escalate → trafficking |
-| Concrete adult sextortion demand | Escalate → sextortion |
-| High-stakes but still unclear | Escalate → specialist second look |
+| **CSAM** | Confirmed / grooming / minor NCII / suspected |
+| **Self-harm** | Active crisis with a concrete plan |
+| **Terrorism** | Threat names place / time / target / method |
+| **Harassment** | Credible threat with place / time / target / method; imminent stalking |
+| **Servitude** | Confirmed / organized trafficking |
+| **Adult solicitation** | Concrete sextortion demand |
+| **Doxxing** | PII tied to imminent harm; NCII of a minor → CSAM escalate |
 
-For ordinary doubt (spam vs promo, rude vs harassment) → press **`P`**.
+For ordinary doubt (spam vs promo, rude vs harassment) → press **`P`**. Do not invent an escalate shortcut outside these paths.
 
 ---
 
