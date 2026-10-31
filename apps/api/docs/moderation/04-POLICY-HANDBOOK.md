@@ -1,12 +1,11 @@
 # Matterya Content Moderator Handbook
 
-**Who this is for:** new moderators with no prior experience  
-**Where you work:** https://api.matterya.com/reports  
-**Accounts queue:** https://api.matterya.com/reports/accounts  
-**This handbook:** https://api.matterya.com/management/policy  
-**PDF:** download from Management → Policy handbook (or `/moderation/Matterya-Moderator-Handbook.pdf`)
+**Content queue:** https://api.matterya.com/reports  
+**Account review:** https://api.matterya.com/reports/accounts  
+**Handbook:** https://api.matterya.com/management/policy  
+**PDF:** https://api.matterya.com/management/policy/pdf
 
-You do **not** decide “Remove” or “Keep” yourself. You answer simple questions. Matterya policy applies the result.
+You answer the questions on each ticket. Matterya policy applies the result.
 
 ---
 
@@ -43,10 +42,6 @@ People report posts (or our systems flag them). You open one ticket at a time, l
 4. If it is high-stakes and still unclear after reading → **Escalate → Specialist second look**.
 5. Be kind to survivors describing their own harm. Prefer recovery / help paths, not punishment of the victim’s post.
 
-### Rules we follow
-
-Claim-next follows **Meta** and **TikTok** style safety rules (they have the most experience). YouTube-style “keep for documentary” rules are for a **different longform-video queue**, not this one.
-
 ---
 
 ## Chapter 0b — Words you’ll hear (short glossary)
@@ -72,7 +67,7 @@ Claim-next follows **Meta** and **TikTok** style safety rules (they have the mos
 
 ### Why it is #1
 
-Zero tolerance. Same idea as Meta and TikTok. Always treated as **severe**. Confirmed or suspected cases **escalate**.
+Zero tolerance. Always treated as **severe**. Confirmed or suspected cases **escalate**.
 
 ### How to click
 
@@ -137,7 +132,7 @@ Step 2 → **3 Terrorism**.
 | News clip: “Attack condemned; victims remembered” | News / condemnation → mark |
 | History class post about a past event, no praise | Historical / educational → dismiss |
 
-**Remember:** place, time, target, or method → **escalate** (same idea Meta / TikTok use for actionable threats).
+**Remember:** place, time, target, or method → **escalate**.
 
 ---
 
@@ -371,7 +366,7 @@ Step 2 → **S Spam**.
 
 ### Definition
 
-Escalate is **not** “I’m unsure of the category.” It is for rare, high-stakes safety cases — same idea as big platforms.
+Escalate is **not** “I’m unsure of the category.” It is for rare, high-stakes safety cases only.
 
 ### When to use it
 
@@ -416,10 +411,3 @@ Try these mentally before your first real ticket:
 4. Cake photo auto-flagged NSFW → **Mature → false positive → dismiss** or **No violation**  
 5. Unsure if rude comment is harassment → **`P` Pass**
 
----
-
-## Appendix — Where rules come from
-
-Claim-next follows **Meta Community Standards** and **TikTok Community Guidelines**. YouTube-style longform exceptions are for a **separate longform video queue** (not built for Claim-next).
-
-Live leaf list (technical) is generated at the bottom of the web handbook page for ops.

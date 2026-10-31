@@ -29,7 +29,7 @@ const LINKS: HubLink[] = [
     group: 'Moderation',
     href: '/management/policy',
     title: 'Policy handbook',
-    blurb: 'Beginner training: chapters, definitions, examples. PDF download on the page.',
+    blurb: 'Training chapters, definitions, and examples for Claim-next.',
   },
   {
     group: 'Moderation',
@@ -41,7 +41,7 @@ const LINKS: HubLink[] = [
     group: 'Moderation',
     href: '/reports',
     title: 'Content queue',
-    blurb: 'Claim-next for posts and short-form (Meta + TikTok rules).',
+    blurb: 'Claim-next review for posts and comments.',
   },
   {
     group: 'Moderation',
@@ -54,12 +54,6 @@ const LINKS: HubLink[] = [
     href: '/reports/masquerade',
     title: 'Masquerade queue',
     blurb: 'Legacy Remove / Flag / Skip for anonymous posts.',
-  },
-  {
-    group: 'Moderation',
-    href: '/management/policy#6b-longform-video-queue-youtube-shaped--separate',
-    title: 'Longform video queue (planned)',
-    blurb: 'YouTube-shaped EDSA / age-restrict rules — not built yet; handbook section only.',
   },
   {
     group: 'Analytics',
