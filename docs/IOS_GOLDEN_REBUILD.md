@@ -44,14 +44,21 @@ See `docs/ios-golden-file-inventory.txt` (~194 Swift files).
 - [x] Core surfaces ported: Feed autoplay, Sparks, Hubs rails, Masquerade, Messages ink chrome, Profile/Auth/Search
 - [x] Android emulator install verified (Feed + Masquerade Wilde + tabs)
 - [x] Web `ng serve` / `ng build` development OK on :4200
-- [ ] Remaining fidelity gaps (handoff player claim, Sparks layout chips, Hubs shared-element morph, gh-pages prod deploy)
+- [x] Android Hubs Library screen (History / Sparks / Saved / Liked / Uploads)
+- [x] Android Feed→Sparks `instantOpenSeeds(12)` + deferred expand (iOS open path)
+- [x] Android Hubs pull-to-minimize (≥0.35) + landscape FS letterbox
+- [x] Android Hubs rails → `openLivingVideo` (no Feed fallthrough)
+- [x] Web Hubs 2-cycle looping Netflix rails
+- [ ] Remaining fidelity gaps (chat dock hole polish, gh-pages prod deploy, side-by-side QA)
 - [ ] Full QA pass vs iOS simulator side-by-side
 
-## Verified on device (2026-10-31)
+## Verified on device (2026-10-31 → 2026-11-01)
 - Android tabs: Feed | Masquerade | + | Matterya Hubs | Messages | Profile
-- Feed: Sparks for you strip, Matterya Hubs chip, ExoPlayer in-frame
-- Masquerade: Matterya Masquerade wordmark, Anonymous mode chip, Wilde quote, tagline
+- Feed: Sparks for you strip, Matterya Hubs chip, ExoPlayer in-frame; strip tap opens Sparks viewer
+- Hubs: Library chip trailing + statusBarsPadding; hero Play → expanded watch; pull-down → mini
+- Masquerade: Wilde → welcome letter → spaces onboarding → Ready (anonymous handles, post detail)
 - Theme: paper `#f8f6f2`, ink `#2c2825` (no brown/gold accents)
+- Web: looping rails in `hubs.page.ts`; deep-link `/hubs` may 404 without SPA fallback (in-app nav OK)
 
 ## Wipe
 - Removed `apps/web` and `apps/mobile/android-app` at commit after this plan.
