@@ -444,29 +444,32 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
       </div>
     </div>
 
-    <div class="call-overlay" *ngIf="callUiOpen">
-      <div class="call-card" [class.video]="callType === 'video'" (click)="$event.stopPropagation()">
-        <div class="call-top">
-          <img class="call-logo" src="/logo.png" alt="Matterya" />
-          <div>
-            <div class="call-title">{{ callTitle() }}</div>
-            <div class="call-sub">{{ callStatusText() }}</div>
-          </div>
-          <div class="call-timer">{{ callTimerLabel() }}</div>
-        </div>
-        <div class="call-body">
+    <div
+      class="call-overlay"
+      *ngIf="callUiOpen"
+      [class.is-video]="callType === 'video'"
+      [class.is-audio]="callType !== 'video'"
+      [class.is-incoming]="callIncoming"
+      role="dialog"
+      aria-modal="true"
+      [attr.aria-label]="callAriaLabel()"
+    >
+      <div class="call-stage" (click)="$event.stopPropagation()">
+        <!-- Video stage -->
+        <ng-container *ngIf="callType === 'video'; else audioStage">
           <video
             #remoteVideo
             class="call-remote"
             autoplay
             playsinline
-            *ngIf="callType === 'video'"
+            [class.has-stream]="hasRemoteMedia()"
           ></video>
-          <div class="call-avatar" [class.speaking]="callSpeaking" *ngIf="callType !== 'video'">
-            <img *ngIf="callPeerAvatar()" [src]="callPeerAvatar()" alt="avatar" />
-            <div class="initials" *ngIf="!callPeerAvatar()">
-              {{ initialsFor(callPeer()) }}
+          <div class="call-video-waiting" *ngIf="!callActive || !hasRemoteMedia()">
+            <div class="call-avatar lg" [class.speaking]="callSpeaking">
+              <img *ngIf="callPeerAvatar()" [src]="callPeerAvatar()" alt="" />
+              <div class="initials" *ngIf="!callPeerAvatar()">{{ initialsFor(callPeer()) }}</div>
             </div>
+            <div class="call-waiting-status">{{ callStatusText() }}</div>
           </div>
           <video
             #localVideo
@@ -474,27 +477,115 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
             autoplay
             muted
             playsinline
-            *ngIf="callType === 'video'"
+            *ngIf="!callCameraOff"
           ></video>
+          <div class="call-local call-local-off" *ngIf="callCameraOff" aria-hidden="true">
+            <span>Camera off</span>
+          </div>
+        </ng-container>
+        <ng-template #audioStage>
+          <div class="call-audio-layout">
+            <div class="call-avatar xl" [class.speaking]="callSpeaking" [class.ringing]="callIncoming || callConnecting">
+              <img *ngIf="callPeerAvatar()" [src]="callPeerAvatar()" alt="" />
+              <div class="initials" *ngIf="!callPeerAvatar()">{{ initialsFor(callPeer()) }}</div>
+            </div>
+            <div class="call-peer-name">{{ callPeerName() }}</div>
+            <div class="call-status">{{ callStatusText() }}</div>
+            <div class="call-timer-inline" *ngIf="callActive && !callError">{{ callTimerLabel() }}</div>
+          </div>
+        </ng-template>
+
+        <!-- Top chrome (video) -->
+        <div class="call-top-chrome" *ngIf="callType === 'video'">
+          <div class="call-top-meta">
+            <div class="call-peer-name light">{{ callPeerName() }}</div>
+            <div class="call-status light">{{ callStatusText() }}</div>
+          </div>
+          <div class="call-timer light" *ngIf="callActive && !callError">{{ callTimerLabel() }}</div>
         </div>
-        <div class="call-controls">
-          <ng-container *ngIf="callIncoming; else activeControls">
-            <button class="call-action accept" type="button" (click)="acceptCall()">Accept</button>
-            <button class="call-action end" type="button" (click)="declineCall()">Decline</button>
+
+        <!-- Error / reconnect banner -->
+        <div class="call-banner" *ngIf="callError || callReconnecting" [class.danger]="!!callError">
+          <span>{{ callError || 'Reconnecting…' }}</span>
+          <div class="call-banner-actions" *ngIf="callError">
+            <button type="button" class="call-banner-btn" (click)="retryLastCall()" *ngIf="canRetryCall()">
+              Retry
+            </button>
+            <button type="button" class="call-banner-btn" (click)="dismissCallError()">Dismiss</button>
+          </div>
+        </div>
+
+        <!-- Bottom controls -->
+        <div class="call-bottom-chrome">
+          <ng-container *ngIf="callIncoming; else activeCallControls">
+            <button class="call-round end" type="button" (click)="declineCall()" aria-label="Decline">
+              <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" aria-hidden="true">
+                <path d="M6.6 3.8c.5-.5 1.3-.5 1.8 0l1.7 1.7c.5.5.5 1.2.1 1.7l-1 1.3c.8 1.6 2 2.9 3.6 3.6l1.3-1c.5-.4 1.2-.4 1.7.1l1.7 1.7c.5.5.5 1.3 0 1.8l-1.1 1.1c-.5.5-1.2.7-1.9.5-3.3-.9-6.1-3.7-7-7-.2-.7 0-1.4.5-1.9l1.1-1.1z" transform="rotate(135 12 12)"/>
+              </svg>
+              <span>Decline</span>
+            </button>
+            <button class="call-round accept" type="button" (click)="acceptCall()" aria-label="Accept">
+              <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" aria-hidden="true">
+                <path d="M6.6 3.8c.5-.5 1.3-.5 1.8 0l1.7 1.7c.5.5.5 1.2.1 1.7l-1 1.3c.8 1.6 2 2.9 3.6 3.6l1.3-1c.5-.4 1.2-.4 1.7.1l1.7 1.7c.5.5.5 1.3 0 1.8l-1.1 1.1c-.5.5-1.2.7-1.9.5-3.3-.9-6.1-3.7-7-7-.2-.7 0-1.4.5-1.9l1.1-1.1z"/>
+              </svg>
+              <span>Accept</span>
+            </button>
           </ng-container>
-          <ng-template #activeControls>
-            <button class="call-action ghost" type="button" (click)="toggleMute()">
-              {{ callMuted ? 'Unmute' : 'Mute' }}
-            </button>
-            <button
-              class="call-action ghost"
-              type="button"
-              *ngIf="callType === 'video'"
-              (click)="toggleCamera()"
-            >
-              {{ callCameraOff ? 'Camera on' : 'Camera off' }}
-            </button>
-            <button class="call-action end" type="button" (click)="endCall()">End</button>
+          <ng-template #activeCallControls>
+            <ng-container *ngIf="!callError; else errorOnlyControls">
+              <button
+                class="call-round secondary"
+                type="button"
+                (click)="toggleMute()"
+                [attr.aria-label]="callMuted ? 'Unmute' : 'Mute'"
+                [attr.aria-pressed]="callMuted"
+              >
+                <svg *ngIf="!callMuted" viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+                  <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2z"/>
+                </svg>
+                <svg *ngIf="callMuted" viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+                  <path d="M4.3 3.3 3 4.6l4.1 4.1A5 5 0 0 0 7 11H5a7 7 0 0 0 6 6.9V21h2v-3.1c.7-.1 1.3-.3 1.9-.6l4.8 4.8 1.3-1.3L4.3 3.3zM12 14c-.4 0-.7-.1-1-.2l1.7 1.7c-.2 0-.4.1-.7.1a3 3 0 0 1-3-3V9.8l2.4 2.4V11a.6.6 0 0 0 .6.6h.2l1.5 1.5c-.3.5-.8.9-1.5.9zm3-3v-.2l2 2c.1-.3.1-.5.1-.8h2a7 7 0 0 1-1.4 4.2l1.5 1.5A8.9 8.9 0 0 0 21 11h-2a5 5 0 0 1-4-5.9l-2.1 2.1V6a3 3 0 0 1 5.1-2.1L15.8 5A1.5 1.5 0 0 0 15 6v5z"/>
+                </svg>
+                <span>{{ callMuted ? 'Unmute' : 'Mute' }}</span>
+              </button>
+              <button
+                class="call-round secondary"
+                type="button"
+                *ngIf="callType === 'video'"
+                (click)="toggleCamera()"
+                [attr.aria-label]="callCameraOff ? 'Camera on' : 'Camera off'"
+                [attr.aria-pressed]="callCameraOff"
+              >
+                <svg *ngIf="!callCameraOff" viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+                  <path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h7A2.5 2.5 0 0 1 16 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 4 16.5v-9z"/>
+                  <path d="M17 10.2l3.2-2.1a.8.8 0 0 1 1.3.7v6.4a.8.8 0 0 1-1.3.7L17 13.8v-3.6z"/>
+                </svg>
+                <svg *ngIf="callCameraOff" viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+                  <path d="M3.3 2 2 3.3l2.2 2.2A2.5 2.5 0 0 0 4 7.5v9A2.5 2.5 0 0 0 6.5 19h7c.4 0 .8-.1 1.1-.3L18.7 22 20 20.7 3.3 2zM16 12.3V7.5A2.5 2.5 0 0 0 13.5 5H8.2l7.8 7.8zM17 10.2l3.2-2.1a.8.8 0 0 1 1.3.7v6.4a.8.8 0 0 1-1.3.7L17 13.8v-3.6z"/>
+                </svg>
+                <span>{{ callCameraOff ? 'Camera' : 'Camera off' }}</span>
+              </button>
+              <button class="call-round end" type="button" (click)="endCall()" aria-label="End call">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
+                  <path d="M6.6 3.8c.5-.5 1.3-.5 1.8 0l1.7 1.7c.5.5.5 1.2.1 1.7l-1 1.3c.8 1.6 2 2.9 3.6 3.6l1.3-1c.5-.4 1.2-.4 1.7.1l1.7 1.7c.5.5.5 1.3 0 1.8l-1.1 1.1c-.5.5-1.2.7-1.9.5-3.3-.9-6.1-3.7-7-7-.2-.7 0-1.4.5-1.9l1.1-1.1z" transform="rotate(135 12 12)"/>
+                </svg>
+                <span>End</span>
+              </button>
+            </ng-container>
+            <ng-template #errorOnlyControls>
+              <button class="call-round secondary" type="button" (click)="dismissCallError()" aria-label="Close">
+                <span>Close</span>
+              </button>
+              <button
+                class="call-round accept"
+                type="button"
+                *ngIf="canRetryCall()"
+                (click)="retryLastCall()"
+                aria-label="Retry call"
+              >
+                <span>Retry</span>
+              </button>
+            </ng-template>
           </ng-template>
         </div>
       </div>
@@ -1298,134 +1389,292 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
     .call-overlay{
       position:fixed;
       inset:0;
-      background:rgba(5,10,18,0.75);
-      backdrop-filter:blur(10px);
-      display:grid;
-      place-items:center;
       z-index:120;
-      padding:calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));
+      display:flex;
+      align-items:stretch;
+      justify-content:center;
+      background:var(--m-paper, #f8f6f2);
+      color:var(--m-ink, #2c2825);
     }
-    .call-card{
-      width:min(92vw, 520px);
-      height:min(86svh, 680px);
-      max-height:calc(100svh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
-      background:rgba(8,16,28,0.96);
-      border-radius:24px;
-      padding:18px;
+    .call-overlay.is-video{
+      background:#2c2825;
+      color:#f6f3ef;
+    }
+    .call-stage{
+      position:relative;
+      width:100%;
+      height:100%;
+      max-width:720px;
+      margin:0 auto;
       display:flex;
       flex-direction:column;
-      color:#e8f1ff;
-      box-shadow:0 24px 60px rgba(0,0,0,0.35);
-      box-sizing:border-box;
-    }
-    .call-card.video{
-      width:min(96vw, 720px);
-      height:min(90svh, 720px);
-    }
-    .call-top{
-      display:flex;
-      align-items:center;
-      gap:12px;
-      margin-bottom:12px;
-    }
-    .call-logo{
-      width:32px;
-      height:32px;
-      border-radius:10px;
-      object-fit:cover;
-      background:rgba(255,255,255,0.08);
-    }
-    .call-title{
-      font-weight:700;
-      font-size:16px;
-    }
-    .call-sub{
-      font-size:12px;
-      opacity:0.7;
-    }
-    .call-timer{
-      margin-left:auto;
-      font-size:12px;
-      letter-spacing:0.12em;
-      text-transform:uppercase;
-      color:rgba(255,255,255,0.7);
-    }
-    .call-body{
-      flex:1;
-      position:relative;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      border-radius:18px;
-      background:rgba(0,0,0,0.2);
       overflow:hidden;
     }
+    .call-overlay.is-video .call-stage{ max-width:none; }
     .call-remote{
+      position:absolute;
+      inset:0;
       width:100%;
       height:100%;
       object-fit:cover;
-      background:#000;
+      background:#2c2825;
+      opacity:0;
+      transition:opacity 180ms ease;
+    }
+    .call-remote.has-stream{ opacity:1; }
+    .call-video-waiting{
+      position:absolute;
+      inset:0;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      gap:16px;
+      background:#2c2825;
+      z-index:1;
+      pointer-events:none;
+    }
+    .call-waiting-status{
+      font-size:14px;
+      font-weight:500;
+      color:rgba(246,243,239,0.85);
     }
     .call-local{
       position:absolute;
-      width:130px;
-      height:96px;
-      bottom:12px;
-      right:12px;
+      top:calc(72px + env(safe-area-inset-top));
+      right:16px;
+      width:104px;
+      height:144px;
       border-radius:12px;
-      border:1px solid rgba(255,255,255,0.25);
+      border:0.5px solid rgba(246,243,239,0.35);
       background:#000;
       object-fit:cover;
+      z-index:3;
+      box-shadow:0 8px 24px rgba(0,0,0,0.35);
+    }
+    .call-local-off{
+      display:grid;
+      place-items:center;
+      background:rgba(44,40,37,0.92);
+      color:rgba(246,243,239,0.75);
+      font-size:11px;
+      font-weight:600;
+    }
+    .call-audio-layout{
+      flex:1;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      gap:12px;
+      padding:24px 28px calc(140px + env(safe-area-inset-bottom));
+      text-align:center;
     }
     .call-avatar{
-      width:120px;
-      height:120px;
       border-radius:50%;
       display:grid;
       place-items:center;
-      background:rgba(255,255,255,0.08);
       overflow:hidden;
-      border:1px solid rgba(255,255,255,0.08);
-      box-shadow:0 0 0 rgba(0,0,0,0);
+      background:var(--m-canvas-muted, #f2f0ec);
+      border:0.5px solid var(--m-border, #ddd8d1);
       transition: box-shadow 200ms ease, transform 200ms ease;
     }
+    .call-overlay.is-video .call-avatar{
+      background:rgba(246,243,239,0.08);
+      border-color:rgba(246,243,239,0.35);
+    }
+    .call-avatar.lg{ width:112px; height:112px; }
+    .call-avatar.xl{ width:128px; height:128px; }
     .call-avatar.speaking{
       box-shadow:
-        0 0 0 6px rgba(0,155,220,0.18),
-        0 0 18px rgba(0,155,220,0.45);
+        0 0 0 6px rgba(0,176,80,0.14),
+        0 0 18px rgba(0,176,80,0.28);
       transform:scale(1.03);
+    }
+    .call-avatar.ringing{
+      animation:callPulse 1.6s ease-in-out infinite;
+    }
+    @keyframes callPulse{
+      0%,100%{ box-shadow:0 0 0 0 rgba(44,40,37,0.12); }
+      50%{ box-shadow:0 0 0 10px rgba(44,40,37,0.06); }
+    }
+    .call-overlay.is-video .call-avatar.ringing{
+      animation:callPulseVideo 1.6s ease-in-out infinite;
+    }
+    @keyframes callPulseVideo{
+      0%,100%{ box-shadow:0 0 0 0 rgba(246,243,239,0.18); }
+      50%{ box-shadow:0 0 0 10px rgba(246,243,239,0.08); }
     }
     .call-avatar img{
       width:100%;
       height:100%;
       object-fit:cover;
     }
-    .call-controls{
-      margin-top:14px;
-      display:flex;
-      gap:10px;
-      justify-content:center;
-      flex-wrap:wrap;
+    .call-avatar .initials{
+      font-size:36px;
+      font-weight:600;
+      color:var(--m-ink-secondary, #6b645d);
+      font-family:var(--m-serif, Georgia, serif);
     }
-    .call-action{
+    .call-overlay.is-video .call-avatar .initials{ color:rgba(246,243,239,0.9); font-size:32px; }
+    .call-peer-name{
+      font-family:var(--m-serif, Georgia, 'Iowan Old Style', Palatino, serif);
+      font-size:22px;
+      font-weight:600;
+      color:var(--m-ink, #2c2825);
+      letter-spacing:-0.01em;
+    }
+    .call-peer-name.light{ color:#f6f3ef; font-size:17px; font-family:inherit; }
+    .call-status{
+      font-size:14px;
+      font-weight:500;
+      color:var(--m-ink-secondary, #6b645d);
+    }
+    .call-status.light{ color:rgba(246,243,239,0.75); }
+    .call-timer,
+    .call-timer-inline{
+      font-variant-numeric:tabular-nums;
+      font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size:13px;
+      font-weight:500;
+      color:var(--m-ink-muted, #948b82);
+      letter-spacing:0.04em;
+    }
+    .call-timer.light{ color:rgba(246,243,239,0.85); }
+    .call-top-chrome{
+      position:absolute;
+      top:0; left:0; right:0;
+      z-index:4;
+      display:flex;
+      align-items:flex-start;
+      gap:12px;
+      padding:calc(14px + env(safe-area-inset-top)) 22px 14px;
+      background:linear-gradient(180deg, rgba(44,40,37,0.72) 0%, rgba(44,40,37,0) 100%);
+    }
+    .call-top-meta{ flex:1; min-width:0; }
+    .call-banner{
+      position:absolute;
+      top:calc(64px + env(safe-area-inset-top));
+      left:16px; right:16px;
+      z-index:5;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      padding:10px 12px;
+      border-radius:10px;
+      background:rgba(44,40,37,0.88);
+      color:#f6f3ef;
+      font-size:13px;
+      font-weight:500;
+      box-shadow:0 8px 24px rgba(0,0,0,0.25);
+    }
+    .call-overlay.is-audio .call-banner{
+      top:calc(18px + env(safe-area-inset-top));
+      background:var(--m-surface, #fefdfb);
+      color:var(--m-ink, #2c2825);
+      border:0.5px solid var(--m-border, #ddd8d1);
+      box-shadow:0 8px 24px rgba(44,40,37,0.08);
+    }
+    .call-banner.danger{ color:var(--m-danger, #ea000b); }
+    .call-overlay.is-video .call-banner.danger{ color:#ff8a8f; }
+    .call-banner-actions{ display:flex; gap:8px; flex-shrink:0; }
+    .call-banner-btn{
       border:0;
-      border-radius:18px;
-      padding:10px 16px;
-      background:rgba(255,255,255,0.12);
-      color:#eef6ff;
+      border-radius:8px;
+      padding:6px 10px;
+      background:rgba(246,243,239,0.14);
+      color:inherit;
+      font-size:12px;
       font-weight:600;
       cursor:pointer;
     }
-    .call-action.ghost{
-      background:rgba(255,255,255,0.08);
+    .call-overlay.is-audio .call-banner-btn{
+      background:var(--m-canvas-muted, #f2f0ec);
+      color:var(--m-ink, #2c2825);
     }
-    .call-action.accept{
-      background:#2f9d66;
-      color:#fff;
+    .call-bottom-chrome{
+      position:absolute;
+      left:0; right:0; bottom:0;
+      z-index:4;
+      display:flex;
+      align-items:flex-start;
+      justify-content:center;
+      gap:16px;
+      flex-wrap:wrap;
+      padding:16px 22px calc(28px + env(safe-area-inset-bottom));
+      background:var(--m-surface, #fefdfb);
+      border-top:0.5px solid var(--m-border, #ddd8d1);
     }
-    .call-action.end{
-      background:#d84c4c;
+    .call-overlay.is-video .call-bottom-chrome{
+      background:rgba(44,40,37,0.72);
+      border-top:0;
+    }
+    .call-overlay.is-incoming .call-bottom-chrome{ gap:40px; }
+    .call-round{
+      border:0;
+      background:transparent;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      gap:8px;
+      cursor:pointer;
+      color:var(--m-ink-secondary, #6b645d);
+      font-size:12px;
+      font-weight:500;
+      padding:0;
+      min-width:64px;
+    }
+    .call-overlay.is-video .call-round{ color:rgba(246,243,239,0.88); }
+    .call-round svg{
+      width:56px;
+      height:56px;
+      padding:15px;
+      box-sizing:border-box;
+      border-radius:50%;
+      background:var(--m-canvas-deep, #edeae5);
+      color:var(--m-ink, #2c2825);
+      border:0.5px solid var(--m-border, #ddd8d1);
+    }
+    .call-overlay.is-video .call-round svg{
+      background:rgba(246,243,239,0.18);
+      color:#f6f3ef;
+      border-color:transparent;
+    }
+    .call-round.accept svg{
+      width:68px;
+      height:68px;
+      padding:20px;
+      background:var(--m-ink, #2c2825);
+      color:var(--m-paper, #f8f6f2);
+      border-color:transparent;
+    }
+    .call-overlay.is-video .call-round.accept svg{
+      background:#f6f3ef;
+      color:#2c2825;
+    }
+    .call-round.end svg{
+      width:60px;
+      height:60px;
+      padding:16px;
+      background:var(--m-danger, #ea000b);
       color:#fff;
+      border-color:transparent;
+    }
+    .call-overlay.is-incoming .call-round.end svg{
+      width:68px;
+      height:68px;
+      padding:20px;
+    }
+    .call-round:active{ opacity:0.85; transform:scale(0.97); }
+    .call-round[aria-pressed="true"] svg{
+      background:var(--m-ink, #2c2825);
+      color:var(--m-paper, #f8f6f2);
+      border-color:transparent;
+    }
+    .call-overlay.is-video .call-round[aria-pressed="true"] svg{
+      background:#f6f3ef;
+      color:#2c2825;
     }
     @media (min-width: 900px){
       :host{ height:100svh; }
@@ -1572,11 +1821,14 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   callActive = false;
   callConnecting = false;
   callIncoming = false;
+  callReconnecting = false;
   callType: 'audio' | 'video' | null = null;
   callConversationId: string | null = null;
   callMuted = false;
   callCameraOff = false;
   callError = '';
+  private lastCallType: 'audio' | 'video' | null = null;
+  private lastCallConversationId: string | null = null;
   private callFromId: string | null = null;
   private incomingOffer:
     | {
@@ -2064,7 +2316,17 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   }
 
   get callUiOpen(): boolean {
-    return this.callActive || this.callConnecting || this.callIncoming || !!this.callError;
+    return (
+      this.callActive ||
+      this.callConnecting ||
+      this.callIncoming ||
+      this.callReconnecting ||
+      !!this.callError
+    );
+  }
+
+  hasRemoteMedia(): boolean {
+    return !!(this.remoteStream && this.remoteStream.getTracks().length > 0);
   }
 
   canStartCall(): boolean {
@@ -2092,21 +2354,66 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     return this.callPeer()?.avatar_url ?? '';
   }
 
-  callTitle(): string {
+  callPeerName(): string {
     const peer = this.callPeer();
-    const name = peer ? this.displayNameFor(peer) : 'Member';
+    return peer ? this.displayNameFor(peer) : 'Member';
+  }
+
+  callTitle(): string {
     const kind = this.callType === 'video' ? 'Video call' : 'Voice call';
-    return `${kind} · ${name}`;
+    return `${this.callPeerName()} · ${kind}`;
+  }
+
+  callAriaLabel(): string {
+    return this.callTitle();
+  }
+
+  private isOutgoingCaller(): boolean {
+    return !!this.meId && this.callFromId === this.meId && !this.callIncoming;
   }
 
   callStatusText(): string {
     if (this.callError) return this.callError;
+    if (this.callReconnecting) return 'Reconnecting…';
     if (this.callIncoming) {
-      return this.incomingOffer ? 'Incoming call' : 'Tap accept to call back';
+      return this.callType === 'video' ? 'Incoming video call' : 'Incoming voice call';
     }
-    if (this.callConnecting) return 'Connecting...';
     if (this.callActive) return 'In call';
-    return '';
+    if (this.isOutgoingCaller()) {
+      if (this.callConnecting) return 'Calling…';
+      return 'Ringing…';
+    }
+    if (this.callConnecting) return 'Connecting…';
+    return 'Calling…';
+  }
+
+  canRetryCall(): boolean {
+    return !!(this.lastCallType && (this.lastCallConversationId || this.activeConversationId));
+  }
+
+  dismissCallError(): void {
+    this.callError = '';
+    this.callReconnecting = false;
+    if (!this.callActive && !this.callConnecting && !this.callIncoming) {
+      this.cleanupCall(true);
+    } else {
+      this.forceUi();
+    }
+  }
+
+  async retryLastCall(): Promise<void> {
+    const type = this.lastCallType;
+    const convoId = this.lastCallConversationId || this.activeConversationId;
+    this.callError = '';
+    this.callReconnecting = false;
+    if (!type || !convoId) {
+      this.cleanupCall(true);
+      return;
+    }
+    if (this.activeConversationId !== convoId) {
+      await this.activateConversationById(convoId);
+    }
+    await this.startCall(type);
   }
 
   callTimerLabel(): string {
@@ -2225,12 +2532,15 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       this.cleanupCall();
     }
     this.callType = type;
+    this.lastCallType = type;
     this.callConversationId = this.activeConversationId;
+    this.lastCallConversationId = this.activeConversationId;
     this.callSessionId = this.newCallSessionId();
     this.callRoomName = `call_${this.callConversationId}_${this.callSessionId}`;
     this.callConnecting = true;
     this.callIncoming = false;
     this.callActive = false;
+    this.callReconnecting = false;
     this.callFromId = this.meId;
     this.callError = '';
     this.callStartAt = null;
@@ -2275,12 +2585,15 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     }
     const offer = this.incomingOffer;
     this.callConversationId = offer.conversationId;
+    this.lastCallConversationId = offer.conversationId;
     this.callType = offer.callType;
+    this.lastCallType = offer.callType;
     this.callFromId = offer.from;
     this.callSessionId = offer.callId ?? this.callSessionId;
     this.callIncoming = false;
     this.callConnecting = true;
     this.callActive = false;
+    this.callReconnecting = false;
     this.callError = '';
     this.callService.clearIncomingCall();
     this.callStartAt = null;
@@ -2418,11 +2731,14 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
         return;
       }
       this.callConversationId = conversationId;
+      this.lastCallConversationId = conversationId;
       this.callType = callType;
+      this.lastCallType = callType;
       this.callFromId = from;
       this.callIncoming = true;
       this.callConnecting = false;
       this.callActive = false;
+      this.callReconnecting = false;
       this.callStartAt = null;
       this.callLogSent = false;
       this.callService.clearIncomingCall();
@@ -2478,11 +2794,13 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       this.callCameraOff = callType !== 'video';
 
       const urlBase = environment.livekitUrl;
-      if (!urlBase) throw new Error('LiveKit URL not configured.');
+      if (!urlBase) {
+        throw new Error('Calling is unavailable in this build. Media credentials are not configured.');
+      }
 
       await this.ensureLiveKitLoaded();
       const LiveKit = this.livekitModule || (window as any).LiveKit;
-      if (!LiveKit) throw new Error('LiveKit not loaded.');
+      if (!LiveKit) throw new Error('Call media failed to load. Check your connection and try again.');
     const { Room, RoomEvent, createLocalTracks } = LiveKit;
 
     let lastError: unknown = null;
@@ -2538,9 +2856,24 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
       }
     });
 
+    if (RoomEvent.Reconnecting) {
+      room.on(RoomEvent.Reconnecting, () => {
+        this.callReconnecting = true;
+        this.forceUi();
+      });
+    }
+    if (RoomEvent.Reconnected) {
+      room.on(RoomEvent.Reconnected, () => {
+        this.callReconnecting = false;
+        this.clearDisconnectTimer();
+        this.forceUi();
+      });
+    }
+
     room.on(RoomEvent.Disconnected, () => {
       if (!this.destroyed) {
         this.callError = this.callError || 'Call disconnected.';
+        this.callReconnecting = false;
         this.cleanupCall(false);
         this.forceUi();
       }
@@ -2549,6 +2882,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     try {
       await room.connect(url, tokenInfo.token);
       this.callConnecting = true;
+      this.callReconnecting = false;
       this.callError = '';
 
       const tracks = await createLocalTracks({
@@ -2666,6 +3000,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.callActive = false;
     this.callConnecting = false;
     this.callIncoming = false;
+    this.callReconnecting = false;
     this.callType = null;
     this.callConversationId = null;
     this.callMuted = false;
@@ -2726,14 +3061,20 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
 
   private startDisconnectTimer(): void {
     if (this.callDisconnectTimer) return;
+    this.callReconnecting = true;
+    this.forceUi();
     this.callDisconnectTimer = window.setTimeout(() => {
-      if (this.callActive) {
+      this.callDisconnectTimer = null;
+      if (this.callActive || this.callConnecting) {
+        this.callError = 'Call disconnected.';
+        this.callReconnecting = false;
         if (this.callConversationId) {
           this.sendSignal('call-end', this.callConversationId);
         }
-        this.cleanupCall();
-      } else if (this.callConnecting) {
-        this.cleanupCall();
+        this.cleanupCall(false);
+      } else {
+        this.callReconnecting = false;
+        this.forceUi();
       }
     }, 8000);
   }
@@ -2742,6 +3083,10 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     if (!this.callDisconnectTimer) return;
     window.clearTimeout(this.callDisconnectTimer);
     this.callDisconnectTimer = null;
+    if (this.callReconnecting && (this.callActive || this.callConnecting)) {
+      this.callReconnecting = false;
+      this.forceUi();
+    }
   }
 
   private startVoiceDetection(): void {

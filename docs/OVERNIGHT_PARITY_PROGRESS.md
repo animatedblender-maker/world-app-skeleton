@@ -18,7 +18,7 @@
 | Hubs / Sparks / Messages / Globe / Search / People / Profile | present (chrome+) | present (Hubs strong) |
 | Masquerade / Anonymous | **ported** (Compose; AppMenu entry; assembleDebug green) | page exists |
 | Desktop Hubs/Sparks layouts | n/a | partial / needs Facebook-desktop treatment |
-| LiveKit calls | signaling stub | livekit-client present |
+| LiveKit calls | signaling stub | CallKit-grade overlay + livekit-client (prod URL) |
 | gh-pages | — | last deploy ~2026-10-16 |
 
 ## Work log
@@ -53,11 +53,18 @@
 - **13:40Z:** Messages archive/delete + Hubs watch autoplay-next already in `5f79fe57`. Android Masquerade media zoom `f5798cf3`. Redeployed gh-pages after continue-watching.
 
 ## Remaining gaps (web)
-- Messages: CallKit-grade call UX polish
+- Messages: CallKit-grade call UX polish — **shipped 15:28Z** (overlay/chrome; LiveKit media uses prod `livekitUrl` + `/livekit/token`)
 - Hubs: remount-free continuous mini player — **reduced flicker 15:17Z** (film kept warm across watch↔mini; full shared-element handoff still future)
 - Anonymous: Search profile deep-link / in-shell chat — **shipped 15:17Z**
 - Feed: continue-watching strip — **shipped 13:27Z**
 - Android Masquerade: mod panel — **placeholder panel shipped 15:17Z** (iOS parity; ops queue still parked)
+
+- **15:28Z Wave (web Messages call UX; no iOS edits):**
+  - Call overlay rebuilt toward iOS `CallOverlayView`: Matterya paper chrome for audio, ink/matte for video; serif peer name; Calling… / Ringing… / Incoming voice|video / In call / Reconnecting… status copy.
+  - Round CallKit-style Mute / Camera / End + Accept / Decline controls with icons + pressed states; local PiP + camera-off placeholder on video.
+  - Error banner with Dismiss / Retry; peer-drop → Reconnecting… (8s) then disconnect; LiveKit `Reconnecting`/`Reconnected` wired when available.
+  - Text messaging + archive/delete untouched. Prod env already has `livekitUrl` (`wss://world-app-9jjcc056.livekit.cloud`); token via `POST /livekit/token` (auth required). Dev env `livekitUrl` empty → friendly unavailable message.
+  - `ng build --configuration production` clean. Deploy via `npm run deploy:gh-pages`.
 
 - **13:24Z Wave (scheduler):**
   - No Android/web worktrees to merge (only iOS wt: feed-home-butter, freeze-cold-open, names-r2 — left alone).
