@@ -49,6 +49,9 @@
 
 - **13:27Z:** Web Home feed **Continue watching** strip (iOS FeedView parity) — Hubs history/in-progress via HubsCatalogService; 16:9 rail + progress; opens `/hubs/watch/:id`.
 
+
+- **13:40Z:** Messages archive/delete + Hubs watch autoplay-next already in `5f79fe57`. Android Masquerade media zoom `f5798cf3`. Redeployed gh-pages after continue-watching.
+
 ## Remaining gaps (web)
 - Messages: CallKit-grade call UX polish
 - Hubs: remount-free continuous mini player (watch up-next shipped)
