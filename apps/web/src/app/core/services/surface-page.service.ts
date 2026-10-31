@@ -109,6 +109,7 @@ export class SurfacePageService {
         avatar_url: row?.author_avatar ?? null,
         country_name: row?.country_name ?? null,
         country_code: row?.country_code ?? null,
+        is_verified: row?.author_is_verified === true || row?.is_verified === true ? true : null,
       },
       external_ref_type: row?.external_ref_type ?? null,
       external_ref_id: row?.external_ref_id ?? null,

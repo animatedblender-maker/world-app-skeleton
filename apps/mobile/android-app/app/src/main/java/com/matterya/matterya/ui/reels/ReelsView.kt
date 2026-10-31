@@ -117,6 +117,8 @@ fun ReelsView(
     feedVideosMuted: Boolean = false,
     onFeedVideosMutedChange: (Boolean) -> Unit = {},
     startIndex: Int = 0,
+    /** When set, first paint of this post claims warm mid-clip ExoPlayer (no seek-to-0). */
+    continueFromFeedPostId: String? = null,
     showsOpenPostAction: Boolean = false,
     showsProgressRail: Boolean = false,
     bottomInsetDp: Int = 28,
@@ -209,6 +211,8 @@ fun ReelsView(
                         isSaved = isPostSaved(post.id),
                         isFollowingAuthor = isFollowing(post.authorId),
                         currentUserId = currentUserId,
+                        continueFromFeed = continueFromFeedPostId != null &&
+                            post.id == continueFromFeedPostId,
                         onLike = { onLike(post) },
                         onSave = { onSave(post) },
                         onShare = { onShare(post) },
@@ -465,6 +469,7 @@ private fun ReelsPagerCard(
     isSaved: Boolean,
     isFollowingAuthor: Boolean,
     currentUserId: String?,
+    continueFromFeed: Boolean = false,
     onLike: () -> Unit,
     onSave: () -> Unit,
     onShare: () -> Unit,
@@ -485,10 +490,18 @@ private fun ReelsPagerCard(
     // Bump once per focus — not every recompose (old page+1 token caused restart/poster blink).
     var focusGeneration by remember(post.id) { mutableIntStateOf(0) }
     var hasFocusedOnce by remember(post.id) { mutableStateOf(false) }
-    val handoffStartSec = remember(post.id) {
-        if (SparkWarmPool.shared.shouldContinueFromCurrentTime(post.id)) {
-            SparkWarmPool.shared.peekPlayheadSeconds(post.id)
-        } else null
+    // Prefer parked ExoPlayer playhead; fall back to remembered seconds.
+    val handoffStartSec = remember(post.id, continueFromFeed) {
+        val pool = SparkWarmPool.shared
+        val parked = pool.parkedPlayer(post.id)
+        val parkedSec = parked?.currentPosition?.div(1000.0)
+        when {
+            parkedSec != null && parkedSec.isFinite() && parkedSec > 0.45 -> parkedSec
+            continueFromFeed || pool.shouldContinueFromCurrentTime(post.id) ||
+                pool.lastClaimWasContinuing || pool.hasContinuingParked ->
+                pool.peekPlayheadSeconds(post.id)
+            else -> null
+        }
     }
     val scope = rememberCoroutineScope()
 
@@ -545,16 +558,28 @@ private fun ReelsPagerCard(
             if (!hasFocusedOnce) {
                 hasFocusedOnce = true
                 val head = handoffStartSec
+                val claimedContinuing = continueFromFeed ||
+                    SparkWarmPool.shared.shouldContinueFromCurrentTime(post.id) ||
+                    SparkWarmPool.shared.hasContinuingParked
                 if (head != null && head > 0.45) {
-                    // Mid-clip Feed→Sparks: resume without seek-to-0 thrash.
+                    // Mid-clip Feed→Sparks: claim keeps playhead — only seek if cold player.
                     currentSec = head
-                    seekTo = head
+                    // Skip explicit seek when warm pool still holds / will claim continuing player.
+                    seekTo = if (SparkWarmPool.shared.parkedPlayer(post.id) != null ||
+                        claimedContinuing
+                    ) {
+                        null
+                    } else {
+                        head
+                    }
                     SparkWarmPool.shared.takePlayheadSeconds(post.id)
-                    SparkWarmPool.shared.clearContinuingHandoff(post.id)
+                    // Keep continuing flag until VideoPlayerView claim consumes it.
                 } else {
                     currentSec = 0.0
                     seekTo = null
-                    SparkWarmPool.shared.clearContinuingHandoff(post.id)
+                    if (!claimedContinuing) {
+                        SparkWarmPool.shared.clearContinuingHandoff(post.id)
+                    }
                 }
             } else {
                 // Swipe away and back — restart from beginning (iOS page settle).

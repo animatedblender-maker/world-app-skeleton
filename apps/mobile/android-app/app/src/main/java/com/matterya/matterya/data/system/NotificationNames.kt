@@ -11,4 +11,5 @@ object NotificationNames {
     const val LETTERS_DID_CHANGE = "matterya.letters.didChange"
     const val FEED_VIDEO_FOCUS_DID_CHANGE = "feedVideoFocusDidChange"
     const val RESUME_PLAYBACK_AFTER_INTERRUPT = "matterya.resumePlaybackAfterInterrupt"
+    const val EXPORT_PLAYBACK_FOR_HANDOFF = "matterya.exportPlaybackForHandoff"
 }

@@ -717,6 +717,8 @@ data class StoryViewerContext(
 data class ReelsViewerContext(
     val startingPost: CountryPost,
     val seedPosts: List<CountryPost>,
+    /** True when Feed→Sparks should claim the warm mid-clip ExoPlayer (iOS continueFromFeed). */
+    val continueFromFeed: Boolean = false,
     val id: String = UUID.randomUUID().toString(),
 ) {
     val startingPostId: String get() = startingPost.id

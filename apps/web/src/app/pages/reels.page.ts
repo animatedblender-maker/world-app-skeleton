@@ -4,11 +4,14 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { Subscription } from 'rxjs';
 
+import { VerifiedBadgeComponent } from '../components/verified-badge.component';
 import { VideoPlayerComponent } from '../components/video-player.component';
 import { MatteryaCopy } from '../core/copy/matterya-copy';
 import { AuthService } from '../core/services/auth.service';
+import { FollowService } from '../core/services/follow.service';
 import { MediaSessionService } from '../core/services/media-session.service';
 import { PostsService } from '../core/services/posts.service';
+import { showsVerifiedBadge } from '../core/services/profile.service';
 import { R2PlaybackService } from '../core/services/r2-playback.service';
 import { SurfacePageService } from '../core/services/surface-page.service';
 import { HubsCatalogService } from '../hubs/hubs-catalog.service';
@@ -23,9 +26,10 @@ const SPARKS_BLOCKED_KEY = 'matterya.sparks.blocked_authors.v1';
 @Component({
   selector: 'app-reels-page',
   standalone: true,
-  imports: [CommonModule, FormsModule, VideoPlayerComponent],
+  imports: [CommonModule, FormsModule, VideoPlayerComponent, VerifiedBadgeComponent],
   template: `
     <div class="reels-root" [class.comments-open]="!!commentOpenPostId">
+      <div class="keep-toast" *ngIf="keepToast" aria-live="polite">{{ keepToast }}</div>
       <header class="reels-chrome">
         <button type="button" class="chrome-btn" (click)="goBack()" [attr.aria-label]="'Close ' + copy.sparks.toLowerCase()">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2">
@@ -33,10 +37,9 @@ const SPARKS_BLOCKED_KEY = 'matterya.sparks.blocked_authors.v1';
           </svg>
         </button>
 
-        <!-- iOS SparksTopChrome: centered SPARKS wordmark (matte accents on dark) -->
+        <!-- iOS SparksTopChrome: centered SPARKS wordmark only (no country subtitle) -->
         <div class="chrome-wordmark" aria-hidden="true">
           <span class="wordmark-label">{{ copy.sparks }}</span>
-          <span class="wordmark-place" *ngIf="countryName || countryCode">{{ countryName || countryCode }}</span>
         </div>
 
         <!-- iOS SparksTopChrome: Close | SPARKS | ⋯ only (mute lives on player chrome if needed) -->
@@ -138,7 +141,7 @@ const SPARKS_BLOCKED_KEY = 'matterya.sparks.blocked_authors.v1';
 
             <div class="reel-gradient" aria-hidden="true"></div>
 
-            <!-- iOS sparkDock: frosted meta + horizontal Like / Chat / Keep / Send / Open chips -->
+            <!-- iOS sparkDock: frosted meta + Like / Chat / Keep / Send (Open hidden for global Sparks) -->
             <div class="reel-bottom">
               <div class="spark-dock" (click)="$event.stopPropagation()">
                 <div class="reel-author-row">
@@ -152,17 +155,37 @@ const SPARKS_BLOCKED_KEY = 'matterya.sparks.blocked_authors.v1';
                       <span *ngIf="!avatarFor(post)">{{ initialsFor(post) }}</span>
                     </span>
                     <span class="author-copy">
-                      <span class="author-name">{{ displayName(post) }}</span>
-                      <span class="author-sub" *ngIf="post.author?.username">@{{ post.author?.username }}</span>
+                      <span class="author-name-row">
+                        <span class="author-name">{{ displayName(post) }}</span>
+                        <app-verified-badge
+                          *ngIf="authorVerified(post)"
+                          [size]="13"
+                        ></app-verified-badge>
+                      </span>
+                      <span class="author-sub-row" *ngIf="post.author?.username || post.country_name || post.country_code">
+                        <span class="author-sub" *ngIf="post.author?.username">@{{ post.author?.username }}</span>
+                        <span class="author-sub-dot" *ngIf="post.author?.username && (post.country_name || post.country_code)">·</span>
+                        <button
+                          type="button"
+                          class="author-country"
+                          *ngIf="post.country_name || post.country_code"
+                          (click)="openCountrySparks(post); $event.stopPropagation()"
+                        >
+                          {{ post.country_name || post.country_code }}
+                        </button>
+                      </span>
                     </span>
                   </button>
                   <button
                     type="button"
-                    class="author-country"
-                    *ngIf="post.country_name || post.country_code"
-                    (click)="openCountrySparks(post)"
+                    class="follow-chip"
+                    *ngIf="canFollowAuthor(post)"
+                    [class.following]="isFollowingAuthor(post)"
+                    [disabled]="followBusyFor(post)"
+                    (click)="toggleFollowAuthor(post); $event.stopPropagation()"
+                    [attr.aria-label]="isFollowingAuthor(post) ? copy.following : copy.follow"
                   >
-                    {{ post.country_name || post.country_code }}
+                    {{ isFollowingAuthor(post) ? copy.following : copy.follow }}
                   </button>
                 </div>
 
@@ -224,13 +247,6 @@ const SPARKS_BLOCKED_KEY = 'matterya.sparks.blocked_authors.v1';
                       <path d="M15 5c-6.5 0-10 3.2-10 9v5" stroke-linecap="round" />
                     </svg>
                     <span>Send</span>
-                  </button>
-
-                  <button type="button" class="action-chip" (click)="openPost(post)" aria-label="Open">
-                    <svg class="chip-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                      <path d="M7 17L17 7M9 7h8v8" stroke-linecap="round" stroke-linejoin="round" />
-                    </svg>
-                    <span>Open</span>
                   </button>
                 </div>
               </div>
@@ -381,7 +397,6 @@ const SPARKS_BLOCKED_KEY = 'matterya.sparks.blocked_authors.v1';
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 2px;
         min-width: 0;
         max-width: min(62vw, 280px);
       }
@@ -402,16 +417,21 @@ const SPARKS_BLOCKED_KEY = 'matterya.sparks.blocked_authors.v1';
         color: transparent;
         filter: drop-shadow(0 1px 6px rgba(0, 0, 0, 0.55));
       }
-      .wordmark-place {
-        font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+      .keep-toast {
+        position: fixed;
+        top: calc(env(safe-area-inset-top) + 56px);
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 30;
+        pointer-events: none;
+        padding: 8px 14px;
+        border-radius: 999px;
+        background: rgba(248, 246, 242, 0.94);
+        color: var(--m-ink, #141210);
         font-size: 12px;
-        font-weight: 500;
-        line-height: 1.15;
-        color: rgba(246, 243, 239, 0.78);
+        font-weight: 600;
+        box-shadow: 0 3px 12px rgba(0, 0, 0, 0.18);
         white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        max-width: 100%;
       }
       .progress-rail {
         position: fixed;
@@ -584,6 +604,13 @@ const SPARKS_BLOCKED_KEY = 'matterya.sparks.blocked_authors.v1';
         gap: 1px;
         min-width: 0;
       }
+      .author-name-row {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        min-width: 0;
+        max-width: 100%;
+      }
       .author-name {
         font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
         font-size: 14px;
@@ -595,6 +622,13 @@ const SPARKS_BLOCKED_KEY = 'matterya.sparks.blocked_authors.v1';
         overflow: hidden;
         text-overflow: ellipsis;
       }
+      .author-sub-row {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        max-width: 100%;
+      }
       .author-sub {
         font-size: 11px;
         font-weight: 500;
@@ -603,8 +637,13 @@ const SPARKS_BLOCKED_KEY = 'matterya.sparks.blocked_authors.v1';
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      .author-country {
+      .author-sub-dot {
+        font-size: 11px;
+        color: rgba(248, 246, 242, 0.4);
         flex: 0 0 auto;
+      }
+      .author-country {
+        flex: 0 1 auto;
         border: 0;
         background: transparent;
         padding: 0;
@@ -614,14 +653,32 @@ const SPARKS_BLOCKED_KEY = 'matterya.sparks.blocked_authors.v1';
         color: rgba(248, 246, 242, 0.65);
         cursor: pointer;
         white-space: nowrap;
-        max-width: 38%;
         overflow: hidden;
         text-overflow: ellipsis;
+        min-width: 0;
       }
-      .reel-author:has(.author-sub) + .author-country::before {
-        content: '·';
-        margin-right: 6px;
-        color: rgba(248, 246, 242, 0.4);
+      /* iOS FollowButton compact onDark */
+      .follow-chip {
+        flex: 0 0 auto;
+        border: 0;
+        border-radius: 999px;
+        padding: 4px 10px;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.2;
+        cursor: pointer;
+        background: var(--m-matte, #f6f3ef);
+        color: var(--m-ink, #141210);
+        white-space: nowrap;
+      }
+      .follow-chip.following {
+        background: rgba(255, 255, 255, 0.14);
+        color: #fff;
+        border: 0.5px solid rgba(255, 255, 255, 0.45);
+      }
+      .follow-chip:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
       }
       .reel-caption {
         margin: 0;
@@ -1056,10 +1113,16 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
   commentLikeBusy: Record<string, Record<string, boolean>> = {};
 
   overflowOpen = false;
+  keepToast: string | null = null;
   private keptTick = 0;
+  private keepToastTimer: ReturnType<typeof setTimeout> | null = null;
+  private followingIds = new Set<string>();
+  private followBusyMap = new Map<string, boolean>();
   private suppressedIds = new Set<string>();
   private blockedAuthorIds = new Set<string>();
   private docClickCloser?: (event: Event) => void;
+  /** iOS GlobalSparksViewer: showsOpenPostAction = false */
+  readonly showsOpenPostAction = false;
 
   /** iOS SparkWarmPool.MediaBudget — do not retune daily. */
   private static readonly WARM_AHEAD = 5;
@@ -1090,6 +1153,7 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
     private mediaSession: MediaSessionService,
     private hubsPlayback: HubsPlaybackService,
     private catalog: HubsCatalogService,
+    private follows: FollowService,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -1160,6 +1224,10 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
     this.pauseAllReelVideos();
     this.routeSub?.unsubscribe();
     this.querySub?.unsubscribe();
+    if (this.keepToastTimer) {
+      clearTimeout(this.keepToastTimer);
+      this.keepToastTimer = null;
+    }
     if (this.muteListener) {
       window.removeEventListener('video-player-mute', this.muteListener);
       this.muteListener = undefined;
@@ -1297,6 +1365,7 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
   }
 
   openPost(post: CountryPost): void {
+    if (!this.showsOpenPostAction) return;
     void this.router.navigate(['/post', post.id]);
   }
 
@@ -1313,9 +1382,69 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
 
   toggleKeep(post: CountryPost): void {
     if (!post?.id) return;
+    const willSave = !this.catalog.isSaved(post.id);
     this.catalog.toggleSave(post.id);
     this.keptTick++;
+    // iOS: "Saved to Saved sparks" / "Removed from saved"
+    this.showKeepToast(
+      willSave ? `Saved to ${MatteryaCopy.savedSparks}` : 'Removed from saved'
+    );
     this.paint();
+  }
+
+  authorVerified(post: CountryPost): boolean {
+    return showsVerifiedBadge(post.author);
+  }
+
+  canFollowAuthor(post: CountryPost): boolean {
+    const authorId = post.author_id || post.author?.user_id;
+    if (!authorId || !this.meId) return false;
+    return authorId !== this.meId;
+  }
+
+  isFollowingAuthor(post: CountryPost): boolean {
+    const authorId = post.author_id || post.author?.user_id;
+    return !!authorId && this.followingIds.has(authorId);
+  }
+
+  followBusyFor(post: CountryPost): boolean {
+    const authorId = post.author_id || post.author?.user_id;
+    return !!authorId && this.followBusyMap.get(authorId) === true;
+  }
+
+  async toggleFollowAuthor(post: CountryPost): Promise<void> {
+    const authorId = post.author_id || post.author?.user_id;
+    if (!this.meId || !authorId || authorId === this.meId) return;
+    if (this.followBusyMap.get(authorId)) return;
+
+    const wasFollowing = this.followingIds.has(authorId);
+    // Optimistic — keep Sparks playing (iOS FollowButton).
+    if (wasFollowing) this.followingIds.delete(authorId);
+    else this.followingIds.add(authorId);
+    this.followBusyMap.set(authorId, true);
+    this.paint();
+
+    try {
+      if (wasFollowing) await this.follows.unfollow(this.meId, authorId);
+      else await this.follows.follow(this.meId, authorId);
+    } catch {
+      if (wasFollowing) this.followingIds.add(authorId);
+      else this.followingIds.delete(authorId);
+      this.postActionError[post.id] = 'Couldn’t update follow.';
+    } finally {
+      this.followBusyMap.delete(authorId);
+      this.paint();
+    }
+  }
+
+  private showKeepToast(message: string): void {
+    this.keepToast = message;
+    if (this.keepToastTimer) clearTimeout(this.keepToastTimer);
+    this.keepToastTimer = setTimeout(() => {
+      if (this.keepToast === message) this.keepToast = null;
+      this.keepToastTimer = null;
+      this.paint();
+    }, 1600);
   }
 
   compactCount(n: number): string {
@@ -1608,7 +1737,21 @@ export class ReelsPageComponent implements OnInit, OnDestroy {
     } catch {
       this.meId = null;
     }
+    await this.refreshFollowingSnapshot();
     this.paint();
+  }
+
+  private async refreshFollowingSnapshot(): Promise<void> {
+    if (!this.meId) {
+      this.followingIds.clear();
+      return;
+    }
+    try {
+      const ids = await this.follows.listFollowingIds(this.meId);
+      this.followingIds = new Set(ids);
+    } catch {
+      // keep prior snapshot
+    }
   }
 
   private async loadReels(): Promise<void> {

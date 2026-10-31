@@ -57,6 +57,7 @@ import com.matterya.matterya.data.media.MediaPlaybackCoordinator
 import com.matterya.matterya.data.media.SparkWarmPool
 import com.matterya.matterya.theme.MatteryaColors
 import com.matterya.matterya.ui.ads.AdPrerollView
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 
 /**
@@ -107,26 +108,92 @@ fun VideoPlayerView(
     val viewedCb by rememberUpdatedState(onViewed)
     val videoSizeCb by rememberUpdatedState(onVideoSize)
     val seekConsumedCb by rememberUpdatedState(onSeekConsumed)
+    val loopsLatest by rememberUpdatedState(loops)
+    val mutedLatest by rememberUpdatedState(muted)
 
     val shouldShowAd = adsEnabled && isActive && !adFinished && placement != null
 
-    val player = remember(url) {
+    // Claim warm/continuing ExoPlayer first (iOS installClaimedPlayer); else cold-start.
+    var player by remember(url) { mutableStateOf<ExoPlayer?>(null) }
+    var handedOffToPool by remember(url) { mutableStateOf(false) }
+    var claimedContinuing by remember(url) { mutableStateOf(false) }
+    val handedOffLatest = rememberUpdatedState(handedOffToPool)
+
+    LaunchedEffect(url, postId) {
         if (url.isNullOrBlank()) {
-            null
-        } else {
-            try {
-                ExoPlayer.Builder(context).build().apply {
-                    setMediaItem(MediaItem.fromUri(url))
-                    repeatMode = if (loops) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
-                    volume = if (muted) 0f else 1f
-                    // Crop to fill — matches iOS AVLayerVideoGravity.resizeAspectFill.
-                    videoScalingMode =
-                        androidx.media3.common.C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
-                    prepare()
+            player = null
+            return@LaunchedEffect
+        }
+        if (player != null || handedOffToPool) return@LaunchedEffect
+        val pool = SparkWarmPool.shared
+        val claimed = postId?.let { pool.claim(it) } ?: pool.claimFirstContinuing()
+        if (claimed != null) {
+            val wasContinuing = pool.takeLastClaimWasContinuing()
+            val t0 = claimed.currentPosition / 1000.0
+            val midClip = t0.isFinite() && t0 > 0.45
+            claimed.repeatMode = if (loopsLatest) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+            claimed.videoScalingMode =
+                androidx.media3.common.C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
+            claimed.volume = if (mutedLatest) 0f else 1f
+            claimedContinuing = wasContinuing && midClip
+            if (claimedContinuing) {
+                // Mid-clip Feed→Sparks: keep decoded frames, skip poster blink.
+                showPosterCover = false
+                hasRenderedFrame = true
+                currentMs = claimed.currentPosition
+                postId?.let {
+                    pool.clearContinueFlag(it)
+                    pool.takePlayheadSeconds(it)
                 }
-            } catch (_: Throwable) {
-                null
+            } else if (postId != null && pool.shouldContinueFromCurrentTime(postId)) {
+                val head = pool.peekPlayheadSeconds(postId)
+                if (head != null && head > 0.45) {
+                    runCatching { claimed.seekTo((head * 1000).toLong()) }
+                    currentMs = (head * 1000).toLong()
+                }
             }
+            MediaPlaybackCoordinator.shared.register(claimed)
+            player = claimed
+            return@LaunchedEffect
+        }
+        try {
+            val fresh = ExoPlayer.Builder(context).build().apply {
+                setMediaItem(MediaItem.fromUri(url))
+                repeatMode = if (loopsLatest) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+                volume = if (mutedLatest) 0f else 1f
+                videoScalingMode =
+                    androidx.media3.common.C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
+                prepare()
+            }
+            MediaPlaybackCoordinator.shared.register(fresh)
+            player = fresh
+        } catch (_: Throwable) {
+            player = null
+            loadFailed = true
+        }
+    }
+
+    // Live bind so AppState can sync-export before Sparks mounts.
+    LaunchedEffect(player, postId) {
+        val p = player
+        val id = postId
+        if (p == null || id.isNullOrBlank() || handedOffToPool) return@LaunchedEffect
+        SparkWarmPool.shared.attachLive(id, p)
+        try {
+            kotlinx.coroutines.awaitCancellation()
+        } finally {
+            SparkWarmPool.shared.detachLive(id, p)
+        }
+    }
+
+    // Detach when pool took our player via exportPlaybackForHandoff (do not release).
+    LaunchedEffect(postId, url) {
+        val id = postId ?: return@LaunchedEffect
+        SparkWarmPool.shared.exportTaken.collect { taken ->
+            if (id !in taken) return@collect
+            if (handedOffToPool) return@collect
+            handedOffToPool = true
+            player = null
         }
     }
 
@@ -157,11 +224,45 @@ fun VideoPlayerView(
         }
         onDispose {
             try {
-                // Capture mid-clip playhead before tear-down for Feed→Sparks handoff.
+                if (handedOffLatest.value) {
+                    // Pool owns the ExoPlayer now — do not release.
+                    if (protectAsContinuous && p != null &&
+                        MediaPlaybackCoordinator.shared.continuousHubPlayer === p
+                    ) {
+                        MediaPlaybackCoordinator.shared.clearContinuousProtection()
+                    }
+                    return@onDispose
+                }
                 val id = postId
+                val pool = SparkWarmPool.shared
                 if (id != null && p != null) {
+                    // Already parked by exportPlaybackForHandoff?
+                    if (pool.isParked(id, p) || pool.parkedPlayer(id) === p) {
+                        return@onDispose
+                    }
                     val sec = p.currentPosition / 1000.0
-                    if (sec > 0.45) SparkWarmPool.shared.rememberPlayhead(id, sec)
+                    if (sec > 0.45) pool.rememberPlayhead(id, sec)
+                    // Opening Sparks/Hubs marked continue → park mid-clip; else rewind park.
+                    if (pool.shouldContinueFromCurrentTime(id) && sec > 0.45) {
+                        pool.parkContinuing(id, p)
+                        if (protectAsContinuous &&
+                            MediaPlaybackCoordinator.shared.continuousHubPlayer === p
+                        ) {
+                            MediaPlaybackCoordinator.shared.clearContinuousProtection()
+                        }
+                        return@onDispose
+                    }
+                    // Scroll-away: park silent t≈0 for instant reclaim (iOS park).
+                    if (p.mediaItemCount > 0 && p.playbackState != Player.STATE_IDLE) {
+                        pool.park(id, p)
+                        if (protectAsContinuous &&
+                            MediaPlaybackCoordinator.shared.continuousHubPlayer === p
+                        ) {
+                            MediaPlaybackCoordinator.shared.clearContinuousProtection()
+                        }
+                        return@onDispose
+                    }
+                    pool.release(id)
                 }
                 if (protectAsContinuous && p != null &&
                     MediaPlaybackCoordinator.shared.continuousHubPlayer === p
@@ -360,7 +461,8 @@ fun VideoPlayerView(
             }
         }
 
-        if (showsControls && showChrome && player != null && !shouldShowAd) {
+        val controlsPlayer = player
+        if (showsControls && showChrome && controlsPlayer != null && !shouldShowAd) {
             MatteryaVideoControls(
                 isPlaying = isPlaying && !isPausedByUser,
                 isMuted = isMuted,
@@ -368,7 +470,7 @@ fun VideoPlayerView(
                 durationSeconds = durationMs / 1000.0,
                 showsFullscreen = allowsFullscreen,
                 onPlayPause = {
-                    if (player.isPlaying) player.pause() else player.play()
+                    if (controlsPlayer.isPlaying) controlsPlayer.pause() else controlsPlayer.play()
                     showChrome = true
                 },
                 onMuteToggle = {
@@ -376,7 +478,7 @@ fun VideoPlayerView(
                     showChrome = true
                 },
                 onSeek = { sec ->
-                    player.seekTo((sec * 1000).toLong())
+                    controlsPlayer.seekTo((sec * 1000).toLong())
                     showChrome = true
                 },
                 onFullscreen = if (allowsFullscreen) onFullscreen else null,

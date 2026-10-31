@@ -10,12 +10,19 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
+import java.lang.ref.WeakReference
 import java.util.Date
 
 /**
  * iOS `SparkWarmPool.swift` — keeps nearby Sparks fully buffered for instant play.
  * Uses ExoPlayer slots instead of AVPlayer.
+ *
+ * Feed→Sparks handoff: [exportPlaybackForHandoff] parks a live mid-clip player via
+ * [parkContinuing]; Sparks [claim]s the same ExoPlayer without seek-to-0.
  */
 class SparkWarmPool private constructor(private val appContext: Context?) {
     private data class Slot(
@@ -32,7 +39,18 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
     private val continuingIds = mutableSetOf<String>()
     /** Playheads (seconds) for Feed→Sparks continue without seek-to-0. */
     private val playheadsSec = mutableMapOf<String, Double>()
+    /** Live surface players that can sync-export into the pool on Sparks/Hubs open. */
+    private val livePlayers = mutableMapOf<String, WeakReference<ExoPlayer>>()
     private val maxSlots = 20
+
+    /** Sticky: last successful [claim] was a mid-clip handoff (share/origin id race). */
+    @Volatile
+    var lastClaimWasContinuing: Boolean = false
+        private set
+
+    private val _exportTaken = MutableSharedFlow<Set<String>>(extraBufferCapacity = 4)
+    /** Post IDs whose live ExoPlayer was parked into the pool (detach without release). */
+    val exportTaken: SharedFlow<Set<String>> = _exportTaken.asSharedFlow()
 
     fun prepare(
         posts: List<CountryPost>,
@@ -63,7 +81,8 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
         val hi = minOf(posts.size, around + ahead + 1)
         if (lo >= hi) return
         val window = posts.subList(lo, hi)
-        val keep = window.map { it.id }.toSet() + inUse
+        // Never evict mid-clip handoff slots (share id may ≠ origin id).
+        val keep = window.map { it.id }.toSet() + inUse + continuingIds
 
         for (id in slots.keys.toList()) {
             if (id !in keep) evict(id)
@@ -81,19 +100,65 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
         }
         for (post in ordered) {
             val url = post.playableVideoUrl ?: continue
-            if (post.id in inUse) continue
+            // Never re-warm parked / claimed / in-flight / continuing (would race seek-to-0).
+            if (post.id in inUse || post.id in continuingIds || post.id in slots || post.id in warming) {
+                continue
+            }
             scope.launch { warm(post.id, url) }
         }
     }
 
+    /**
+     * Hand a buffered player to the visible card (removes it from the pool).
+     * Only marks [inUse] on success. Continuing handoff keeps decoding (no pause / seek-0).
+     */
     fun claim(postId: String): ExoPlayer? {
-        inUse.add(postId)
-        val slot = slots.remove(postId) ?: return null
+        val slot = slots.remove(postId) ?: run {
+            lastClaimWasContinuing = false
+            return null
+        }
         val player = slot.player
-        player.pause()
+        if (player.mediaItemCount == 0 || player.playbackState == Player.STATE_IDLE) {
+            MediaPlaybackCoordinator.shared.unregister(player)
+            continuingIds.remove(postId)
+            runCatching { player.release() }
+            lastClaimWasContinuing = false
+            return null
+        }
+        inUse.add(postId)
+        val wasContinuing = continuingIds.remove(postId)
+        lastClaimWasContinuing = wasContinuing
+        livePlayers.remove(postId)
         player.volume = 0f
+        if (wasContinuing) {
+            // Keep decoding mid-clip — install unmutes without a t=0 blink.
+            if (!player.isPlaying) {
+                player.playWhenReady = true
+                player.play()
+            }
+        } else {
+            player.pause()
+            player.playWhenReady = false
+        }
         return player
     }
+
+    /** Claim any parked continuing handoff player (share/origin id race). */
+    fun claimFirstContinuing(): ExoPlayer? {
+        val id = continuingIds.firstOrNull { slots.containsKey(it) } ?: return null
+        return claim(id)
+    }
+
+    val hasContinuingParked: Boolean
+        get() = continuingIds.any { slots.containsKey(it) }
+
+    fun takeLastClaimWasContinuing(): Boolean {
+        val v = lastClaimWasContinuing
+        lastClaimWasContinuing = false
+        return v
+    }
+
+    fun parkedPlayer(postId: String): ExoPlayer? = slots[postId]?.player
 
     fun markInUse(postId: String) {
         inUse.add(postId)
@@ -103,35 +168,141 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
         inUse.remove(postId)
     }
 
+    /** Return a still-buffered player so scrolling back is instant (rewound to t≈0). */
     fun park(postId: String, player: ExoPlayer) {
+        parkInternal(postId, player, continueFromCurrentTime = false)
+    }
+
+    /** Park without seeking to 0 — feed→Sparks/Hubs open continues mid-clip. */
+    fun parkContinuing(postId: String, player: ExoPlayer) {
+        parkInternal(postId, player, continueFromCurrentTime = true)
+    }
+
+    private fun parkInternal(postId: String, player: ExoPlayer, continueFromCurrentTime: Boolean) {
         inUse.remove(postId)
-        player.pause()
-        player.volume = 0f
+        livePlayers.remove(postId)
 
         if (player.mediaItemCount == 0 || player.playbackState == Player.STATE_IDLE) {
             MediaPlaybackCoordinator.shared.unregister(player)
-            player.release()
+            runCatching { player.release() }
             return
         }
 
         val existing = slots[postId]
         if (existing != null && existing.player !== player) {
-            MediaPlaybackCoordinator.shared.unregister(player)
-            player.release()
-            return
+            // Prefer mid-clip handoff over a cold t≈0 warm.
+            if (continueFromCurrentTime) {
+                evict(postId)
+            } else {
+                MediaPlaybackCoordinator.shared.unregister(player)
+                runCatching { player.release() }
+                return
+            }
         }
 
         while (slots.size >= maxSlots) {
             val victim = slots
-                .filter { it.key != postId }
+                .filter { it.key != postId && it.key !in continuingIds }
                 .minByOrNull { it.value.parkedAt.time }
                 ?.key
+                ?: slots.filter { it.key != postId }.minByOrNull { it.value.parkedAt.time }?.key
             if (victim != null) evict(victim) else break
         }
 
         MediaPlaybackCoordinator.shared.register(player)
         slots[postId] = Slot(postId, player, Date())
-        scope.launch { silentBufferFill(postId, player) }
+        if (continueFromCurrentTime) {
+            continuingIds.add(postId)
+            val sec = player.currentPosition / 1000.0
+            if (sec.isFinite() && sec >= 0.45) playheadsSec[postId] = sec
+            // Butter handoff: stay muted but KEEP decoding while cover opens.
+            player.volume = 0f
+            if (!player.isPlaying) {
+                player.playWhenReady = true
+                player.play()
+            }
+        } else {
+            continuingIds.remove(postId)
+            playheadsSec.remove(postId)
+            player.pause()
+            player.volume = 0f
+            player.playWhenReady = false
+            scope.launch { silentBufferFill(postId, player) }
+        }
+    }
+
+    /**
+     * Bind a live feed/Sparks surface so [exportPlaybackForHandoff] can sync-park it.
+     */
+    fun attachLive(postId: String, player: ExoPlayer) {
+        if (postId.isBlank()) return
+        livePlayers[postId] = WeakReference(player)
+    }
+
+    fun detachLive(postId: String, player: ExoPlayer) {
+        if (livePlayers[postId]?.get() === player) livePlayers.remove(postId)
+    }
+
+    /**
+     * iOS `matteryaExportPlaybackForHandoff` — sync-park live mid-clip players into the pool
+     * before Sparks/Hubs mounts, then notify surfaces to detach without releasing.
+     */
+    fun exportPlaybackForHandoff(postIds: Collection<String>) {
+        val ids = postIds.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        if (ids.isEmpty()) return
+        val taken = mutableSetOf<String>()
+        for (id in ids) {
+            val player = livePlayers.remove(id)?.get() ?: continue
+            val sec = player.currentPosition / 1000.0
+            if (sec.isFinite() && sec > 0.45) {
+                parkContinuing(id, player)
+            } else {
+                park(id, player)
+            }
+            taken.add(id)
+        }
+        if (taken.isNotEmpty()) {
+            _exportTaken.tryEmit(taken)
+        }
+    }
+
+    /** Move a parked warm slot from one id → another (feed share → Sparks origin). */
+    fun rekey(from: String, to: String) {
+        val old = from.trim()
+        val neu = to.trim()
+        if (old.isEmpty() || neu.isEmpty() || old == neu) return
+
+        val oldIsContinuing = old in continuingIds
+
+        if (slots[old] != null && slots[neu] != null) {
+            if (oldIsContinuing) {
+                evict(neu)
+            } else {
+                evict(old)
+                if (inUse.remove(old)) inUse.add(neu)
+                if (continuingIds.remove(old)) continuingIds.add(neu)
+                playheadsSec.remove(old)?.let { playheadsSec[neu] = it }
+                return
+            }
+        } else if (slots[neu] != null && slots[old] == null) {
+            if (inUse.remove(old)) inUse.add(neu)
+            if (continuingIds.remove(old)) continuingIds.add(neu)
+            playheadsSec.remove(old)?.let { playheadsSec[neu] = it }
+            return
+        }
+
+        val slot = slots.remove(old)
+        if (slot == null) {
+            if (inUse.remove(old)) inUse.add(neu)
+            if (continuingIds.remove(old)) continuingIds.add(neu)
+            playheadsSec.remove(old)?.let { playheadsSec[neu] = it }
+            return
+        }
+        slots[neu] = Slot(neu, slot.player, slot.parkedAt)
+        if (inUse.remove(old)) inUse.add(neu)
+        if (continuingIds.remove(old)) continuingIds.add(neu)
+        playheadsSec.remove(old)?.let { playheadsSec[neu] = it }
+        livePlayers.remove(old)?.let { livePlayers[neu] = it }
     }
 
     fun isParked(postId: String, player: ExoPlayer): Boolean =
@@ -141,6 +312,9 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
         for (id in slots.keys.toList()) evict(id)
         warming.clear()
         inUse.clear()
+        continuingIds.clear()
+        playheadsSec.clear()
+        livePlayers.clear()
     }
 
     fun silenceAllBuffered() {
@@ -148,6 +322,10 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
             // Mid-clip Feed→Sparks handoff slots stay muted but keep decoding.
             if (slot.postId in continuingIds) {
                 slot.player.volume = 0f
+                if (!slot.player.isPlaying) {
+                    slot.player.playWhenReady = true
+                    slot.player.play()
+                }
                 continue
             }
             slot.player.pause()
@@ -179,7 +357,7 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
     }
 
     fun markContinuingHandoff(postId: String) {
-        continuingIds.add(postId)
+        if (postId.isNotBlank()) continuingIds.add(postId)
     }
 
     fun clearContinuingHandoff(postId: String? = null) {
@@ -190,6 +368,10 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
             continuingIds.remove(postId)
             playheadsSec.remove(postId)
         }
+    }
+
+    fun clearContinueFlag(postId: String) {
+        continuingIds.remove(postId)
     }
 
     fun shouldContinueFromCurrentTime(postId: String): Boolean = postId in continuingIds
@@ -208,12 +390,12 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
     fun takePlayheadSeconds(postId: String): Double? = playheadsSec.remove(postId)
 
     fun warmSingle(postId: String, url: String) {
-        if (slots.containsKey(postId) || postId in inUse) return
+        if (slots.containsKey(postId) || postId in inUse || postId in continuingIds) return
         scope.launch { warm(postId, url) }
     }
 
     private suspend fun warm(postId: String, sourceUrl: String) {
-        if (slots.containsKey(postId) || postId in inUse) return
+        if (slots.containsKey(postId) || postId in inUse || postId in continuingIds) return
         if (!warming.add(postId)) return
         try {
             val ctx = appContext ?: return
@@ -222,7 +404,7 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
             } else {
                 sourceUrl
             }
-            if (slots.containsKey(postId) || postId in inUse) return
+            if (slots.containsKey(postId) || postId in inUse || postId in continuingIds) return
 
             val player = ExoPlayer.Builder(ctx).build().apply {
                 volume = 0f
@@ -232,14 +414,14 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
                 prepare()
             }
 
-            if (slots.containsKey(postId) || postId in inUse) {
+            if (slots.containsKey(postId) || postId in inUse || postId in continuingIds) {
                 player.release()
                 return
             }
 
             while (slots.size >= maxSlots) {
                 val victim = slots
-                    .filter { it.key != postId }
+                    .filter { it.key != postId && it.key !in continuingIds }
                     .minByOrNull { it.value.parkedAt.time }
                     ?.key
                 if (victim != null) evict(victim) else break
@@ -256,6 +438,7 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
     private suspend fun silentBufferFill(postId: String, player: ExoPlayer) {
         repeat(80) {
             if (!isParked(postId, player)) return
+            if (postId in continuingIds) return
             if (player.mediaItemCount == 0) return
             if (player.playbackState == Player.STATE_READY) {
                 player.volume = 0f
@@ -270,6 +453,8 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
 
     private fun evict(postId: String) {
         val slot = slots.remove(postId) ?: return
+        continuingIds.remove(postId)
+        playheadsSec.remove(postId)
         slot.player.pause()
         slot.player.volume = 0f
         slot.player.clearMediaItems()

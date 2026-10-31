@@ -61,7 +61,7 @@ import com.matterya.matterya.ui.components.CreateMenuAction
 import com.matterya.matterya.ui.components.CreateMenuSheet
 import com.matterya.matterya.ui.components.MasqueradeCreateAction
 import com.matterya.matterya.ui.components.MasqueradeCreateSheet
-import com.matterya.matterya.ui.anonymous.AnonymousPostSpacePickerView
+
 import com.matterya.matterya.ui.components.PostComposerView
 import com.matterya.matterya.ui.components.ReelComposerView
 import com.matterya.matterya.ui.components.StoriesViewerView
@@ -122,7 +122,6 @@ fun MainTabView(
     var showAppMenu by remember { mutableStateOf(false) }
     var showCreateMenu by remember { mutableStateOf(false) }
     var showMasqueradeCreateMenu by remember { mutableStateOf(false) }
-    var showMasqueradeSpacePicker by remember { mutableStateOf(false) }
     var toast by remember { mutableStateOf<String?>(null) }
 
     // Search
@@ -164,7 +163,6 @@ fun MainTabView(
         showAppMenu = false
         showCreateMenu = false
         showMasqueradeCreateMenu = false
-        showMasqueradeSpacePicker = false
         navController.navigate(path) { launchSingleTop = true }
     }
 
@@ -274,7 +272,10 @@ fun MainTabView(
                             onEditProfile = { navigate(NavRoutes.editProfile) },
                             onOpenPost = { navigate(NavRoutes.post(it)) },
                             onOpenReels = { post ->
-                                vm.appState.openGlobalSparksViewer(post)
+                                vm.appState.openGlobalSparksViewer(
+                                    startingPost = post,
+                                    seedPosts = state.sparkStrip.ifEmpty { state.feedPosts },
+                                )
                             },
                             onOpenCountry = { iso -> navigate(NavRoutes.country(iso)) },
                             onOpenChat = { id -> navigate(NavRoutes.chat(id)) },
@@ -746,6 +747,7 @@ fun MainTabView(
                         }
                         AnonymousRootView(
                             onClose = { navController.popBackStack() },
+                            appState = vm.appState,
                         )
                     }
                     composable(NavRoutes.letters) {
@@ -1311,6 +1313,7 @@ fun MainTabView(
             SparksScrollViewer(
                 startingPost = reelsCtx.startingPost,
                 seedPosts = reelsCtx.seedPosts,
+                continueFromFeed = reelsCtx.continueFromFeed,
                 currentUserId = state.profile?.userId,
                 currentProfile = state.profile,
                 feedVideosMuted = appSnap.feedVideosMuted,
@@ -1477,32 +1480,17 @@ fun MainTabView(
                 showMasqueradeCreateMenu = false
                 when (action) {
                     MasqueradeCreateAction.CreateSpace -> {
-                        // Space create lives inside AnonymousRootView; hop to Masquerade ready + toast.
+                        // iOS: select Anonymous + showMasqueradeCreateSpace → real create UI.
                         vm.selectTab(AppTab.Anonymous)
-                        toast = MatteryaCopy.anonymousCreateSpace
+                        vm.appState.setShowMasqueradeCreateSpace(true)
                     }
                     MasqueradeCreateAction.NewPost -> {
                         vm.selectTab(AppTab.Anonymous)
-                        showMasqueradeSpacePicker = true
+                        vm.appState.setShowMasqueradeCreatePost(true)
                     }
                 }
             },
         )
-
-        if (showMasqueradeSpacePicker) {
-            androidx.compose.ui.window.Dialog(
-                onDismissRequest = { showMasqueradeSpacePicker = false },
-            ) {
-                AnonymousPostSpacePickerView(
-                    store = AnonymousStore.get(context),
-                    onBack = { showMasqueradeSpacePicker = false },
-                    onRequestCreateSpace = {
-                        showMasqueradeSpacePicker = false
-                        toast = MatteryaCopy.anonymousCreateSpace
-                    },
-                )
-            }
-        }
 
         toast?.let { msg ->
             Box(
@@ -1591,6 +1579,7 @@ private fun TabContent(
         if (state.selectedTab == AppTab.Anonymous) {
             AnonymousRootView(
                 onClose = { /* stay on tab — iOS keeps Masquerade mounted */ },
+                appState = vm.appState,
             )
         }
 

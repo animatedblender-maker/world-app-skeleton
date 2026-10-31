@@ -38,6 +38,7 @@ import kotlinx.coroutines.withContext
 fun SparksScrollViewer(
     startingPost: CountryPost,
     seedPosts: List<CountryPost> = emptyList(),
+    continueFromFeed: Boolean = false,
     currentUserId: String? = null,
     currentProfile: Profile? = null,
     feedVideosMuted: Boolean = false,
@@ -293,6 +294,7 @@ fun SparksScrollViewer(
                 feedVideosMuted = feedVideosMuted,
                 onFeedVideosMutedChange = onFeedVideosMutedChange,
                 startIndex = activeIndex,
+                continueFromFeedPostId = if (continueFromFeed) startingPost.id else null,
                 // iOS global Sparks omits Open; Keep / Chat / Send / ⋯ remain.
                 showsOpenPostAction = false,
                 showsProgressRail = false,

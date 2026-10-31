@@ -365,6 +365,7 @@ export class PostsService {
             avatar_url
             country_name
             country_code
+            is_verified
           }
         }
       }
@@ -1194,6 +1195,7 @@ export class PostsService {
             ),
             country_name: row.author.country_name,
             country_code: row.author.country_code,
+            is_verified: row.author.is_verified === true ? true : row.author.is_verified ?? null,
           }
         : null,
       external_ref_type: row.external_ref_type ?? null,

@@ -155,7 +155,8 @@ export class HubsCatalogService {
     let networkLong: CountryPost[] = [];
     try {
       // Recent network posts only (seed catalog covers offline hubs when Archive is on).
-      const recent = await this.posts.listRecent(40).catch(() => [] as CountryPost[]);
+      // Fat first page so Netflix rails can approach the product floor of ~15/row.
+      const recent = await this.posts.listRecent(120).catch(() => [] as CountryPost[]);
       const networkVideos = (recent || [])
         .filter((p: CountryPost) => this.isPlayEligible(p))
         .filter((p: CountryPost) => this.allowArchiveMedia(p));
@@ -640,11 +641,31 @@ export class HubsCatalogService {
     return t;
   }
 
+  /** Parent vibe slug for Netflix shelves (mirrors iOS parentHubSlug). */
+  parentHubSlug(post: CountryPost): string | null {
+    return this.hubSlugOf(post);
+  }
+
   private hubSlugOf(post: CountryPost): string | null {
     if (String(post.external_ref_type || '').toLowerCase() === 'hub') {
       return (post.external_ref_id || '').toLowerCase() || null;
     }
+    const author = String(post.author_id || '');
+    if (author.startsWith('hub_') && !author.startsWith('hub_spark_')) {
+      const slug = author.slice('hub_'.length).toLowerCase();
+      return slug || null;
+    }
     return null;
+  }
+
+  /** Cheap media fingerprint for rail dedupe across home shelves. */
+  railMediaKey(post: CountryPost): string {
+    const url = this.mediaUrl(post) || String(post.thumb_url || '').trim();
+    if (url) {
+      const bare = url.split('?')[0].toLowerCase();
+      if (bare) return `media:${bare}`;
+    }
+    return `id:${String(post.id || '').toLowerCase()}`;
   }
 
   private hasVideo(post: CountryPost): boolean {

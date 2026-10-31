@@ -51,6 +51,7 @@ import com.matterya.matterya.ui.components.ToastBanner
 import com.matterya.matterya.ui.components.ToastStyle
 import com.matterya.matterya.ui.messages.ConversationRouteView
 import com.matterya.matterya.viewmodel.AnonymousStore
+import com.matterya.matterya.viewmodel.AppState
 import kotlinx.coroutines.launch
 
 enum class AnonymousShellTab(val title: String) {
@@ -70,6 +71,7 @@ enum class AnonymousShellTab(val title: String) {
 @Composable
 fun AnonymousRootView(
     onClose: () -> Unit,
+    appState: AppState? = null,
 ) {
     val context = LocalContext.current
     val store = remember { AnonymousStore.get(context) }
@@ -83,6 +85,20 @@ fun AnonymousRootView(
     var showHeaderCreateMenu by remember { mutableStateOf(false) }
     var showNotificationsMenu by remember { mutableStateOf(false) }
     var toast by remember { mutableStateOf<String?>(null) }
+
+    // Center-tab Create a Space / New post → real create UI (iOS showMasqueradeCreate*).
+    MasqueradeCreateFlagEffects(
+        appState = appState,
+        onOpenCreateSpace = {
+            showCreateSpace = true
+            showCreatePostPicker = false
+            showHeaderCreateMenu = false
+        },
+        onOpenCreatePost = {
+            showCreatePostPicker = true
+            showHeaderCreateMenu = false
+        },
+    )
 
     val isPushed = state.navigationPath.isNotEmpty()
     val route = state.navigationPath.lastOrNull()
@@ -111,9 +127,13 @@ fun AnonymousRootView(
                 Column(Modifier.fillMaxSize().statusBarsPadding()) {
                     AnonymousCreateSpaceView(
                         store = store,
-                        onBack = { showCreateSpace = false },
+                        onBack = {
+                            showCreateSpace = false
+                            appState?.setShowMasqueradeCreateSpace(false)
+                        },
                         onCreated = { slug ->
                             showCreateSpace = false
+                            appState?.setShowMasqueradeCreateSpace(false)
                             store.pushSpace(slug)
                         },
                     )
@@ -123,9 +143,13 @@ fun AnonymousRootView(
                 Column(Modifier.fillMaxSize().statusBarsPadding()) {
                     AnonymousPostSpacePickerView(
                         store = store,
-                        onBack = { showCreatePostPicker = false },
+                        onBack = {
+                            showCreatePostPicker = false
+                            appState?.setShowMasqueradeCreatePost(false)
+                        },
                         onRequestCreateSpace = {
                             showCreatePostPicker = false
+                            appState?.setShowMasqueradeCreatePost(false)
                             showCreateSpace = true
                         },
                     )
@@ -472,6 +496,29 @@ fun AnonymousRootView(
                 kotlinx.coroutines.delay(2800)
                 toast = null
             }
+        }
+    }
+}
+
+/** Consume AppState masquerade create flags into local sheet state (iOS bindings). */
+@Composable
+private fun MasqueradeCreateFlagEffects(
+    appState: AppState?,
+    onOpenCreateSpace: () -> Unit,
+    onOpenCreatePost: () -> Unit,
+) {
+    if (appState == null) return
+    val appSnap by appState.snapshot.collectAsState()
+    LaunchedEffect(appSnap.showMasqueradeCreateSpace) {
+        if (appSnap.showMasqueradeCreateSpace) {
+            onOpenCreateSpace()
+            appState.setShowMasqueradeCreateSpace(false)
+        }
+    }
+    LaunchedEffect(appSnap.showMasqueradeCreatePost) {
+        if (appSnap.showMasqueradeCreatePost) {
+            onOpenCreatePost()
+            appState.setShowMasqueradeCreatePost(false)
         }
     }
 }

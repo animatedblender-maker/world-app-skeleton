@@ -95,6 +95,10 @@ data class AppStateSnapshot(
     val searchPrefersCountries: Boolean = false,
     val openComposerOnCountryFeed: Boolean = false,
     val showCreateMenu: Boolean = false,
+    /** Anonymous-tab center + → Create a Space (iOS showMasqueradeCreateSpace). */
+    val showMasqueradeCreateSpace: Boolean = false,
+    /** Anonymous-tab center + → New post space picker (iOS showMasqueradeCreatePost). */
+    val showMasqueradeCreatePost: Boolean = false,
     val activeCreateSheet: CreateContentSheet? = null,
     val composerCountry: Country? = null,
     val storyGroups: List<StoryGroup> = emptyList(),
@@ -234,6 +238,8 @@ class AppState(private val app: Application) {
     private var pollJob: Job? = null
     private var pendingHubCreateSheet: CreateContentSheet? = null
     private var pendingPushRoute: PendingPushRoute? = null
+    /** Feed→Sparks/Hubs continue ids (iOS continuePlaybackIDs). */
+    private val continuePlaybackIds = mutableSetOf<String>()
 
     private data class PendingPushRoute(
         val type: String,
@@ -1055,9 +1061,25 @@ class AppState(private val app: Application) {
     private fun applyHubPlayback(watchPost: CountryPost, expanded: Boolean) {
         // Never resetAll on the open frame (silence storm hitch) — clear election only.
         FeedVideoFocus.shared.clearElectionOnly()
-        MediaPlaybackCoordinator.shared.pauseAll()
-        watchPost.playableVideoUrl?.let {
-            SparkWarmPool.shared.markContinuingHandoff(watchPost.id)
+        val presentation = PlayPlatformBridge.hubWatchPresentation(watchPost)
+        val handoffIds = linkedSetOf(watchPost.id, presentation.id)
+        SparkWarmPool.shared.exportPlaybackForHandoff(handoffIds)
+        val hasMidClip = handoffIds.any { id ->
+            SparkWarmPool.shared.shouldContinueFromCurrentTime(id) ||
+                (SparkWarmPool.shared.parkedPlayer(id)?.let { p ->
+                    val t = p.currentPosition / 1000.0
+                    t.isFinite() && t > 0.45
+                } == true)
+        }
+        if (hasMidClip) markContinuePlayback(handoffIds)
+        if (presentation.id != watchPost.id) {
+            SparkWarmPool.shared.rekey(watchPost.id, presentation.id)
+        }
+        MediaPlaybackCoordinator.shared.pauseAll(
+            except = SparkWarmPool.shared.parkedPlayer(presentation.id),
+        )
+        if (hasMidClip) {
+            SparkWarmPool.shared.markContinuingHandoff(presentation.id)
         }
         _snapshot.update { s ->
             var next = s.copy(
@@ -1352,22 +1374,58 @@ class AppState(private val app: Application) {
         navigate(AppDestination.Post(postId))
     }
 
+    fun markContinuePlayback(postIds: Collection<String>) {
+        for (id in postIds) {
+            if (id.isNotBlank()) continuePlaybackIds.add(id)
+        }
+    }
+
+    fun shouldContinuePlayback(postId: String): Boolean = postId in continuePlaybackIds
+
+    fun clearContinuePlayback(postId: String) {
+        continuePlaybackIds.remove(postId)
+        SparkWarmPool.shared.clearContinueFlag(postId)
+    }
+
     fun openReelsViewer(startingPost: CountryPost, seedPosts: List<CountryPost> = emptyList()) {
-        // Feed→Sparks handoff: clear election only (never resetAll / pauseAll on open frame).
+        // Detect continue BEFORE clearing feed focus — never resetAll on the open frame.
+        val startId = startingPost.id
+        val pool = SparkWarmPool.shared
+        val hasParked = pool.parkedPlayer(startId) != null || pool.hasContinuingParked
+        val continuing = shouldContinuePlayback(startId) ||
+            pool.shouldContinueFromCurrentTime(startId) ||
+            hasParked
         FeedVideoFocus.shared.clearElectionOnly()
-        startingPost.playableVideoUrl?.let {
-            SparkWarmPool.shared.markContinuingHandoff(startingPost.id)
+        if (continuing) {
+            pool.markContinuingHandoff(startId)
+        } else if (startingPost.playableVideoUrl != null) {
+            // Soft page silence only when we have no parked buffer to claim.
+            MediaPlaybackCoordinator.shared.silenceForSparkPageChange()
+        }
+        var seeds = seedPosts
+        if (seeds.isEmpty()) {
+            seeds = listOf(ReelsRankingEngine.resolvePlayerStart(startingPost))
+        }
+        if (seeds.none { it.id == startingPost.id }) {
+            seeds = listOf(ReelsRankingEngine.resolvePlayerStart(startingPost)) + seeds
         }
         _snapshot.update {
             it.copy(
                 // Continuous hubs stays; pause only when expanded watch would fight Sparks.
                 hubPlaybackPlaying = if (it.hubPlaybackExpanded) false else it.hubPlaybackPlaying,
-                reelsViewerContext = ReelsViewerContext(startingPost, seedPosts),
+                reelsViewerContext = ReelsViewerContext(
+                    startingPost = startingPost,
+                    seedPosts = seeds,
+                    continueFromFeed = continuing,
+                ),
             )
         }
     }
 
-    fun openGlobalSparksViewer(startingPost: CountryPost) {
+    fun openGlobalSparksViewer(
+        startingPost: CountryPost,
+        seedPosts: List<CountryPost> = emptyList(),
+    ) {
         val start = ReelsRankingEngine.resolvePlayerStart(startingPost)
         if (start.playableVideoUrl == null) {
             scope.launch {
@@ -1388,17 +1446,40 @@ class AppState(private val app: Application) {
                     showToast("${MatteryaCopy.noSparksYet} — publish one to get started.", ToastStyle.Info)
                     return@launch
                 }
-                presentGlobalSparks(resolved)
+                presentGlobalSparks(resolved, fromFeedPost = startingPost, seedPosts = seedPosts)
             }
             return
         }
-        presentGlobalSparks(start)
+        presentGlobalSparks(start, fromFeedPost = startingPost, seedPosts = seedPosts)
     }
 
-    private fun presentGlobalSparks(start: CountryPost) {
-        val seeds = instantSparksSeedQueue(start)
-        openReelsViewer(start, seeds)
-        if (seeds.size < 12) {
+    private fun presentGlobalSparks(
+        start: CountryPost,
+        fromFeedPost: CountryPost? = null,
+        seedPosts: List<CountryPost> = emptyList(),
+    ) {
+        // Mark continue + sync-export live feed ExoPlayer into the warm pool (same frame).
+        val handoffIds = linkedSetOf(start.id)
+        if (fromFeedPost != null) handoffIds.add(fromFeedPost.id)
+        markContinuePlayback(handoffIds)
+        SparkWarmPool.shared.exportPlaybackForHandoff(handoffIds)
+        if (fromFeedPost != null && fromFeedPost.id != start.id) {
+            SparkWarmPool.shared.rekey(fromFeedPost.id, start.id)
+        }
+        start.playableVideoUrl?.let { url ->
+            SparkWarmPool.shared.warmSingle(start.id, url)
+        }
+        // Solo the parked buffer now (still muted) so Sparks mounts onto a live decoder.
+        val parked = SparkWarmPool.shared.parkedPlayer(start.id)
+            ?: fromFeedPost?.let { SparkWarmPool.shared.parkedPlayer(it.id) }
+        if (parked != null) {
+            MediaPlaybackCoordinator.shared.soloSparkAudio(keeping = parked)
+            parked.volume = 0f
+        }
+
+        val preferred = if (seedPosts.isNotEmpty()) seedPosts else instantSparksSeedQueue(start)
+        openReelsViewer(start, preferred)
+        if (preferred.size < 12) {
             scope.launch { postsService.loadSparksDiscoveryCatalog(forceRefresh = false) }
         }
     }
@@ -2119,6 +2200,14 @@ class AppState(private val app: Application) {
 
     fun setShowCreateMenu(show: Boolean) {
         _snapshot.update { it.copy(showCreateMenu = show) }
+    }
+
+    fun setShowMasqueradeCreateSpace(show: Boolean) {
+        _snapshot.update { it.copy(showMasqueradeCreateSpace = show) }
+    }
+
+    fun setShowMasqueradeCreatePost(show: Boolean) {
+        _snapshot.update { it.copy(showMasqueradeCreatePost = show) }
     }
 
     fun setShowAppMenu(show: Boolean) {
