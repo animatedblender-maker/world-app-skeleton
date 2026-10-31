@@ -58,7 +58,7 @@ Like Meta / Discord / TikTok / X, escalation is **not** a general “I’m unsur
 | Leaf | When | Outcome |
 |---|---|---|
 | `escalation.child_safety` | Sexual content involving a minor (incl. AI/drawn), grooming, minor NCII / sextortion | remove · **severe** |
-| `escalation.imminent_violence` | Credible threat that is imminent/ongoing, swatting, extremist ops planning | remove · **severe** |
+| `escalation.imminent_violence` | Credible threat with **place, time, target, and/or method** (terror attack threat, swatting, ops planning) | remove · **severe** |
 | `escalation.suicide_crisis` | Active suicide/self-harm crisis with a concrete plan | remove · **severe** |
 | `escalation.second_look` | High-stakes but outcome still unclear after reading the content | mark |
 

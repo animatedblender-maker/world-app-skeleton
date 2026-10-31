@@ -67,13 +67,13 @@ function escalationImminentViolence(
 ): PolicyLeaf {
   return leaf(
     'escalation.imminent_violence',
-    'Escalate — imminent real-world violence',
+    'Escalate — specific threat (place / time / target)',
     root,
     'remove',
     {
       severity: 'severe',
       rationale:
-        'Credible + imminent threat (Meta / TikTok / Discord). Remove + instant account review.',
+        'Credible threat with place, time, target, and/or method (Meta / X / TikTok / Discord). Remove + instant account review.',
     }
   );
 }
@@ -114,7 +114,7 @@ function escalationRootTree(): PolicyNode {
     },
     {
       key: '2',
-      label: 'Imminent real-world violence / swatting',
+      label: 'Specific threat with place / time / target (incl. terror or swatting)',
       node: escalationImminentViolence('violence'),
     },
     {
@@ -321,16 +321,16 @@ function harassmentTree(): PolicyNode {
           label: 'Credible / specific threat',
           node: branch(
             'harassment.threats.credible_gate',
-            'Is the harm imminent or ongoing (time, place, or swatting)?',
+            'Does the threat name a place, time, target, or method?',
             [
               {
                 key: '1',
-                label: 'Yes — imminent / ongoing → escalate',
+                label: 'Yes — place / time / target / method → escalate',
                 node: escalationImminentViolence('violence'),
               },
               {
                 key: '2',
-                label: 'Credible but not imminent',
+                label: 'Credible but no place / time / target / method',
                 node: leaf(
                   'harassment.threats.credible',
                   'Credible threat of violence',
@@ -896,22 +896,26 @@ function terrorismTree(): PolicyNode {
       label: 'Threat to commit a terrorist attack',
       node: branch(
         'terrorism.threat_gate',
-        'Is the threat specific and imminent?',
+        'Does the threat name a place, time, target, or method (like other platforms)?',
         [
           {
             key: '1',
-            label: 'Yes — imminent → escalate',
+            label: 'Yes — place / time / target / method → escalate',
             node: escalationImminentViolence('terrorism'),
           },
           {
             key: '2',
-            label: 'Threat without clear imminence',
+            label: 'Vague threat only (no place, time, target, or method)',
             node: leaf(
               'terrorism.threat',
-              'Terrorist attack threat',
+              'Vague terrorist attack threat',
               'terrorism',
               'remove',
-              { severity: 'severe' }
+              {
+                severity: 'severe',
+                rationale:
+                  'Still remove + severe strike; escalate only when specifics make it actionable',
+              }
             ),
           },
         ]

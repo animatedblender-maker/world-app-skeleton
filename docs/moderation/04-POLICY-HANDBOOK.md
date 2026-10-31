@@ -58,7 +58,7 @@ Like Meta / Discord / TikTok / X, escalation is **not** a general “I’m unsur
 | Leaf | When | Outcome |
 |---|---|---|
 | `escalation.child_safety` | Sexual content involving a minor (incl. AI/drawn), grooming, minor NCII / sextortion | remove · **severe** |
-| `escalation.imminent_violence` | Credible threat that is imminent/ongoing, swatting, extremist ops planning | remove · **severe** |
+| `escalation.imminent_violence` | Credible threat with **place, time, target, and/or method** (terror attack threat, swatting, ops planning) | remove · **severe** |
 | `escalation.suicide_crisis` | Active suicide/self-harm crisis with a concrete plan | remove · **severe** |
 | `escalation.second_look` | High-stakes but outcome still unclear after reading the content | mark |
 
@@ -201,8 +201,8 @@ Terrorism / violent extremist orgs are a **standalone Step-2 category** (not und
 |---|---|---|
 | `terrorism.ops` | Recruitment, fundraising, or operational planning | remove · **severe** |
 | `terrorism.praise` | Praise / propaganda for a terrorist org or attack | remove · **severe** |
-| `terrorism.threat` | Threat to commit a terrorist attack (not clearly imminent) | remove · **severe** |
-| → escalate imminent | Specific + imminent terror threat | `escalation.imminent_violence` |
+| → **escalate** | Terror threat with **place / time / target / method** | `escalation.imminent_violence` · **severe** |
+| `terrorism.threat` | Vague terror threat only (no place, time, target, or method) | remove · **severe** |
 | `terrorism.news` | News / documentary / clear condemnation | mark |
 | `terrorism.historical` | Historical or educational, no glorification | dismiss |
 
