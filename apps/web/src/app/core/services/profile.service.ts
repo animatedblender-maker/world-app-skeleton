@@ -1,0 +1,432 @@
+import { Injectable } from '@angular/core';
+import { GqlService } from './gql.service';
+import { FakeDataService } from './fake-data.service';
+
+export type LatLng = { lat: number; lng: number };
+
+export type Country = {
+  id: string;
+  name: string;
+  iso: string;
+  continent?: string | null;
+  center?: LatLng | null;
+};
+
+export type Profile = {
+  user_id: string;
+  email?: string | null;
+  display_name?: string | null;
+  username?: string | null;
+  avatar_url?: string | null;
+  country_name: string;
+  country_code?: string | null;
+  city_name?: string | null;
+  bio?: string | null;
+  /** YYYY-MM-DD — owner-only; under-18 policy TBD. */
+  birthdate?: string | null;
+  /** Official / flagged accounts — warm bronze seal on web + iOS. */
+  is_verified?: boolean | null;
+  followers_count?: number | null;
+  following_count?: number | null;
+  account_status?: string | null;
+  deactivated_at?: string | null;
+  deleted_at?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** iOS `Profile.showsVerifiedBadge` — verified flag or @matterya. */
+export function showsVerifiedBadge(
+  profile: Pick<Profile, 'is_verified' | 'username'> | null | undefined
+): boolean {
+  if (!profile) return false;
+  if (profile.is_verified === true) return true;
+  return String(profile.username || '')
+    .trim()
+    .toLowerCase() === 'matterya';
+}
+
+export type AccountActionResult = {
+  ok: boolean;
+  action: string;
+  message?: string | null;
+  account_status: string;
+};
+
+const COUNTRIES_QUERY = `
+query Countries {
+  countries {
+    countries {
+      id
+      name
+      iso
+      continent
+      center { lat lng }
+    }
+  }
+}
+`;
+
+const ME_PROFILE = `
+query MeProfile {
+  meProfile {
+    user_id
+    email
+    display_name
+    username
+    avatar_url
+    country_name
+    country_code
+    city_name
+    bio
+    birthdate
+    is_verified
+    account_status
+    deactivated_at
+    deleted_at
+    created_at
+    updated_at
+  }
+}
+`;
+
+/** Fallback while older API revisions lack Profile.birthdate. */
+const ME_PROFILE_NO_BIRTHDATE = `
+query MeProfile {
+  meProfile {
+    user_id
+    email
+    display_name
+    username
+    avatar_url
+    country_name
+    country_code
+    city_name
+    bio
+    is_verified
+    account_status
+    deactivated_at
+    deleted_at
+    created_at
+    updated_at
+  }
+}
+`;
+
+const DEACTIVATE_ACCOUNT = `
+mutation DeactivateAccount {
+  deactivateAccount { ok action message account_status }
+}
+`;
+
+const REACTIVATE_ACCOUNT = `
+mutation ReactivateAccount {
+  reactivateAccount { ok action message account_status }
+}
+`;
+
+const DELETE_ACCOUNT = `
+mutation DeleteAccount($confirmation: String!) {
+  deleteAccount(confirmation: $confirmation) { ok action message account_status }
+}
+`;
+
+const UPDATE_PROFILE = `
+mutation UpdateProfile($input: UpdateProfileInput!) {
+  updateProfile(input: $input) {
+    user_id
+    email
+    display_name
+    username
+    avatar_url
+    country_name
+    country_code
+    city_name
+    bio
+    birthdate
+    created_at
+    updated_at
+  }
+}
+`;
+
+const UPDATE_PROFILE_NO_BIRTHDATE = `
+mutation UpdateProfile($input: UpdateProfileInput!) {
+  updateProfile(input: $input) {
+    user_id
+    email
+    display_name
+    username
+    avatar_url
+    country_name
+    country_code
+    city_name
+    bio
+    created_at
+    updated_at
+  }
+}
+`;
+
+function isUnknownBirthdateFieldError(err: unknown): boolean {
+  const msg = String((err as any)?.message ?? err ?? '').toLowerCase();
+  return (
+    msg.includes('birthdate') ||
+    msg.includes('cannot query field') ||
+    msg.includes('unknown field') ||
+    msg.includes('is not defined by type')
+  );
+}
+
+const PROFILE_BY_USERNAME = `
+query ProfileByUsername($username: String!) {
+  profileByUsername(username: $username) {
+    user_id
+    email
+    display_name
+    username
+    avatar_url
+    country_name
+    country_code
+    city_name
+    bio
+    is_verified
+    created_at
+    updated_at
+  }
+}
+`;
+
+const PROFILE_BY_ID = `
+query ProfileById($user_id: ID!) {
+  profileById(user_id: $user_id) {
+    user_id
+    email
+    display_name
+    username
+    avatar_url
+    country_name
+    country_code
+    city_name
+    bio
+    is_verified
+    created_at
+    updated_at
+  }
+}
+`;
+
+const SEARCH_PROFILES = `
+query SearchProfiles($query: String!, $limit: Int) {
+  searchProfiles(query: $query, limit: $limit) {
+    user_id
+    email
+    display_name
+    username
+    avatar_url
+    country_name
+    country_code
+    city_name
+    bio
+    is_verified
+    created_at
+    updated_at
+  }
+}
+`;
+
+const BROWSE_PROFILES = `
+query BrowseProfiles($limit: Int, $offset: Int) {
+  browseProfiles(limit: $limit, offset: $offset) {
+    user_id
+    email
+    display_name
+    username
+    avatar_url
+    country_name
+    country_code
+    city_name
+    bio
+    is_verified
+    created_at
+    updated_at
+  }
+}
+`;
+
+@Injectable({ providedIn: 'root' })
+export class ProfileService {
+  constructor(
+    private gql: GqlService,
+    private fakeData: FakeDataService
+  ) {}
+
+  async countries() {
+    return this.gql.request<{ countries: { countries: Country[] } }>(COUNTRIES_QUERY);
+  }
+
+  async meProfile() {
+    try {
+      return await this.gql.request<{ meProfile: Profile | null }>(ME_PROFILE);
+    } catch (err) {
+      if (!isUnknownBirthdateFieldError(err)) throw err;
+      return this.gql.request<{ meProfile: Profile | null }>(ME_PROFILE_NO_BIRTHDATE);
+    }
+  }
+
+  async deactivateAccount() {
+    return this.gql.request<{ deactivateAccount: AccountActionResult }>(DEACTIVATE_ACCOUNT);
+  }
+
+  async reactivateAccount() {
+    return this.gql.request<{ reactivateAccount: AccountActionResult }>(REACTIVATE_ACCOUNT);
+  }
+
+  async deleteAccount(confirmation: string) {
+    return this.gql.request<{ deleteAccount: AccountActionResult }>(DELETE_ACCOUNT, {
+      confirmation,
+    });
+  }
+
+  async updateProfile(input: {
+    display_name?: string;
+    username?: string;
+    avatar_url?: string | null;
+    country_name?: string;
+    country_code?: string | null;
+    city_name?: string | null;
+    bio?: string | null;
+    birthdate?: string | null;
+  }) {
+    try {
+      return await this.gql.request<{ updateProfile: Profile }>(UPDATE_PROFILE, { input });
+    } catch (err) {
+      if (!isUnknownBirthdateFieldError(err)) throw err;
+      if (input.birthdate != null && Object.keys(input).length === 1) {
+        throw new Error('Birthdate isn’t on the live API yet. Deploy the API, then try again.');
+      }
+      const { birthdate: _ignored, ...rest } = input;
+      return this.gql.request<{ updateProfile: Profile }>(UPDATE_PROFILE_NO_BIRTHDATE, {
+        input: rest,
+      });
+    }
+  }
+
+  async profileByUsername(username: string) {
+    const trimmed = String(username || '').trim().replace(/^@/, '');
+    if (!trimmed) {
+      return { profileByUsername: null };
+    }
+    try {
+      const real = await this.gql.request<{ profileByUsername: Profile | null }>(
+        PROFILE_BY_USERNAME,
+        { username: trimmed }
+      );
+      if (real?.profileByUsername) return real;
+    } catch {
+    }
+    const fake = await this.fakeData.getProfileByUsername(trimmed);
+    if (fake) return { profileByUsername: fake };
+    return { profileByUsername: null };
+  }
+
+  async profileById(userId: string) {
+    const trimmed = String(userId || '').trim();
+    if (!trimmed) return { profileById: null };
+    try {
+      const real = await this.gql.request<{ profileById: Profile | null }>(PROFILE_BY_ID, {
+        user_id: trimmed,
+      });
+      if (real?.profileById) return real;
+    } catch {
+    }
+    const fake = await this.fakeData.getProfileById(trimmed);
+    if (fake) return { profileById: fake };
+    return { profileById: null };
+  }
+
+  hasCoreIdentity(p: Profile | null): boolean {
+    if (!p) return false;
+    const name = String(p.display_name || '').trim();
+    const country = String(p.country_name || '').trim();
+    return !!name && !!country && country !== 'Unknown';
+  }
+
+  hasBirthdate(p: Profile | null): boolean {
+    if (!p) return false;
+    return String(p.birthdate || '').trim().length >= 10;
+  }
+
+  /** Existing user with name/location — only birthdate still needed. */
+  needsBirthdateOnly(p: Profile | null): boolean {
+    return this.hasCoreIdentity(p) && !this.hasBirthdate(p);
+  }
+
+  isComplete(p: Profile | null) {
+    return this.hasCoreIdentity(p) && this.hasBirthdate(p);
+  }
+
+  async searchProfiles(query: string, limit = 6) {
+    const trimmed = String(query || '').trim();
+    if (!trimmed) return { searchProfiles: [] };
+    const normalizedLimit = limit <= 0 ? undefined : limit;
+    const fakeLimit = limit <= 0 ? 5000 : limit;
+
+    const [realResult, fakeResult] = await Promise.allSettled([
+      this.gql.request<{ searchProfiles: Profile[] }>(SEARCH_PROFILES, {
+        query: trimmed,
+        limit: normalizedLimit,
+      }),
+      this.fakeData.searchProfiles(trimmed, fakeLimit),
+    ]);
+
+    const realProfiles =
+      realResult.status === 'fulfilled' ? realResult.value.searchProfiles ?? [] : [];
+    const fakeProfiles = fakeResult.status === 'fulfilled' ? fakeResult.value : [];
+
+    return { searchProfiles: this.mergeProfiles(realProfiles, fakeProfiles, limit) };
+  }
+
+  async searchProfilesReal(query: string, limit = 6) {
+    const trimmed = String(query || '').trim();
+    if (!trimmed) return { searchProfiles: [] };
+    const normalizedLimit = limit <= 0 ? undefined : limit;
+    try {
+      return await this.gql.request<{ searchProfiles: Profile[] }>(SEARCH_PROFILES, {
+        query: trimmed,
+        limit: normalizedLimit,
+      });
+    } catch {
+      return { searchProfiles: [] };
+    }
+  }
+
+  async browseProfilesReal(limit = 80, offset = 0) {
+    try {
+      return await this.gql.request<{ browseProfiles: Profile[] }>(BROWSE_PROFILES, {
+        limit: limit <= 0 ? undefined : limit,
+        offset: Math.max(0, offset),
+      });
+    } catch {
+      return { browseProfiles: [] };
+    }
+  }
+
+  private mergeProfiles(real: Profile[], fake: Profile[], limit: number): Profile[] {
+    const next: Profile[] = [];
+    const seen = new Set<string>();
+
+    const push = (profile: Profile) => {
+      const key = profile.user_id || profile.username || '';
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      next.push(profile);
+    };
+
+    real.forEach(push);
+    fake.forEach(push);
+
+    if (limit <= 0) return next;
+    return next.slice(0, Math.max(1, limit));
+  }
+}

@@ -1,0 +1,412 @@
+import { AfterViewInit, Component, ElementRef, OnDestroy, ViewChild, Input } from '@angular/core';
+import { CommonModule } from '@angular/common';
+
+
+declare const THREE: any;
+
+type Centroid = { lon: number; lat: number };
+type Feature = any;
+
+@Component({
+  selector: 'app-globe',
+  standalone: true,
+  imports: [CommonModule],
+  template: `
+    <div #host class="globe-host"></div>
+  `,
+  styles: [`
+    .globe-host{
+      width:100%;
+      height:520px;
+      border-radius:18px;
+      overflow:hidden;
+      border:1px solid #eee;
+      background:transparent;
+    }
+  `]
+})
+export class GlobeComponent implements AfterViewInit, OnDestroy {
+  @ViewChild('host', { static: true }) host!: ElementRef<HTMLDivElement>;
+  @Input() countries: { code: string; name: string }[] = [];
+  private renderer: any;
+  private scene: any;
+  private camera: any;
+  private controls: any;
+  private raf = 0;
+
+  private globeMesh: any;
+  private outlineLines: any;
+
+  private R = 2.25;
+
+  // label sprites
+  private labelsGroup: any;
+  private labelSpritesByName = new Map<string, any>();
+
+  // centroids
+  private centroidsByName = new Map<string, Centroid>();
+
+  // view defaults
+  private defaultCamZ = 6.2;
+  private minZ = 3.4;
+  private maxZ = 10.0;
+
+  async ngAfterViewInit() {
+    this.initThree();
+    const geojson = await this.loadGeo();
+    this.buildCentroids(geojson.features || []);
+    this.drawOcean();
+    this.drawOutlines(geojson.features || []);
+    this.buildLabels();
+    this.animate();
+    window.addEventListener('resize', this.onResize);
+    this.onResize();
+  }
+
+  ngOnDestroy() {
+    cancelAnimationFrame(this.raf);
+    window.removeEventListener('resize', this.onResize);
+    this.renderer?.dispose?.();
+  }
+
+  // ---------- Public API (called from App) ----------
+  focusCountry(name: string) {
+    const key = this.normalizeName(name);
+    const c = this.centroidsByName.get(key);
+    if (!c) return;
+
+    // Hide all labels except the selected
+    this.showOnlyLabel(key);
+
+    // Rotate globe so the country is in front, then zoom in
+    const targetQuat = this.quaternionToFront(c.lon, c.lat);
+    this.smoothRotateTo(targetQuat, 650);
+
+    // zoom in smoothly
+    this.smoothZoomTo(this.minZ + 0.6, 650);
+  }
+
+  resetView() {
+    // show all labels again
+    this.showAllLabels();
+
+    // zoom out
+    this.smoothZoomTo(this.defaultCamZ, 500);
+
+    // rotate back gently to a neutral view
+    this.smoothRotateTo(new THREE.Quaternion(), 650);
+  }
+
+  // ---------- Setup ----------
+  private initThree() {
+    const el = this.host.nativeElement;
+
+    this.scene = new THREE.Scene();
+
+    this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
+    this.camera.position.set(0, 0, this.defaultCamZ);
+
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setClearColor(0x000000, 0);
+    el.appendChild(this.renderer.domElement);
+
+    // soft lights (atlas look)
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+    const dl = new THREE.DirectionalLight(0xffffff, 0.65);
+    dl.position.set(5, 3, 6);
+    this.scene.add(dl);
+
+    // Controls: “iOS smooth”
+    this.controls = new (window as any).OrbitControls(this.camera, this.renderer.domElement);
+
+    this.controls.enablePan = false;
+    this.controls.enableDamping = true;
+    this.controls.dampingFactor = 0.065;
+    this.controls.rotateSpeed = 0.42;
+    this.controls.zoomSpeed = 0.72;
+    this.controls.minDistance = this.minZ;
+    this.controls.maxDistance = this.maxZ;
+
+    // Labels
+    this.labelsGroup = new THREE.Group();
+    this.scene.add(this.labelsGroup);
+  }
+
+  private onResize = () => {
+    const el = this.host.nativeElement;
+    const w = el.clientWidth || 800;
+    const h = el.clientHeight || 520;
+    this.camera.aspect = w / h;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(w, h, false);
+  };
+
+  private async loadGeo() {
+    const res = await fetch('/countries50m.geojson');
+    if (!res.ok) throw new Error('Failed to load countries50m.geojson');
+    return await res.json();
+  }
+
+  // ---------- Styling (atlas) ----------
+  private drawOcean() {
+    const geo = new THREE.SphereGeometry(this.R, 128, 128);
+
+    // Ocean blue that fits earth palette (calm + readable)
+    const ocean = new THREE.MeshStandardMaterial({
+      color: 0x2e6382,
+      roughness: 0.95,
+      metalness: 0.0
+    });
+
+    this.globeMesh = new THREE.Mesh(geo, ocean);
+    this.scene.add(this.globeMesh);
+  }
+
+  private drawOutlines(features: Feature[]) {
+    const positions: number[] = [];
+    const indices: number[] = [];
+
+    let idx = 0;
+    const pushRing = (ring: number[][]) => {
+      let prevIndex: number | null = null;
+      for (const [lon, lat] of ring) {
+        const v = this.lonLatToVec3(lon, lat, this.R + 0.012);
+        positions.push(v.x, v.y, v.z);
+        if (prevIndex !== null) {
+          indices.push(prevIndex, idx);
+        }
+        prevIndex = idx;
+        idx++;
+      }
+    };
+
+    for (const f of features) {
+      const g = f?.geometry;
+      if (!g) continue;
+
+      if (g.type === 'Polygon') {
+        for (const ring of g.coordinates) pushRing(ring);
+      } else if (g.type === 'MultiPolygon') {
+        for (const poly of g.coordinates) {
+          for (const ring of poly) pushRing(ring);
+        }
+      }
+    }
+
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geom.setIndex(indices);
+
+    // Warm Charcoal / Basalt Gray
+    const mat = new THREE.LineBasicMaterial({
+      color: 0x2f2f2d,
+      transparent: true,
+      opacity: 0.90
+    });
+
+    this.outlineLines = new THREE.LineSegments(geom, mat);
+    this.scene.add(this.outlineLines);
+  }
+
+  // ---------- Labels (printed / surface) ----------
+  private buildLabels() {
+    // clear existing
+    while (this.labelsGroup.children.length) this.labelsGroup.remove(this.labelsGroup.children[0]);
+    this.labelSpritesByName.clear();
+
+    for (const [nameKey, c] of this.centroidsByName) {
+      // Skip super tiny/empty labels if name is weird
+      if (!nameKey || nameKey.length < 2) continue;
+
+      const labelText = this.displayNameFromKey(nameKey);
+      const sprite = this.makeTextSprite(labelText);
+
+      // position on surface
+      const pos = this.lonLatToVec3(c.lon, c.lat, this.R + 0.02);
+      sprite.position.copy(pos);
+
+      // orient so it “hugs” the surface
+      sprite.lookAt(new THREE.Vector3(0, 0, 0));
+
+      this.labelsGroup.add(sprite);
+      this.labelSpritesByName.set(nameKey, sprite);
+    }
+  }
+
+  private makeTextSprite(text: string) {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d')!;
+    // high DPI for crisp text
+    const scale = 2;
+    const padding = 18 * scale;
+
+    ctx.font = `${14 * scale}px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+    const metrics = ctx.measureText(text);
+    const w = Math.ceil(metrics.width + padding * 2);
+    const h = Math.ceil(28 * scale + padding);
+
+    canvas.width = w;
+    canvas.height = h;
+
+    // background transparent (printed)
+    ctx.clearRect(0, 0, w, h);
+
+    // subtle “ink” text in charcoal
+    ctx.font = `${14 * scale}px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+    ctx.fillStyle = '#2F2F2D';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, padding, h / 2);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.anisotropy = 8;
+    texture.needsUpdate = true;
+
+    const mat = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: true,
+      depthWrite: false,
+      opacity: 0.95
+    });
+
+    const sprite = new THREE.Sprite(mat);
+
+    // scale: “printed on globe” not huge
+    const s = 0.45;
+    sprite.scale.set((w / h) * s, s, 1);
+
+    return sprite;
+  }
+
+  private showOnlyLabel(nameKey: string) {
+    for (const [k, sprite] of this.labelSpritesByName) {
+      sprite.visible = (k === nameKey);
+    }
+  }
+
+  private showAllLabels() {
+    for (const sprite of this.labelSpritesByName.values()) sprite.visible = true;
+  }
+
+  // ---------- Centroids ----------
+  private buildCentroids(features: Feature[]) {
+    this.centroidsByName.clear();
+
+    for (const f of features) {
+      const props = f?.properties || {};
+      const rawName =
+        props.name ||
+        props.ADMIN ||
+        props.admin ||
+        props.NAME ||
+        props.name_long ||
+        props.sovereignt ||
+        '';
+
+      const nameKey = this.normalizeName(String(rawName));
+      if (!nameKey) continue;
+
+      const geom = f.geometry;
+      const c = this.computeCentroidLonLat(geom);
+      if (!c) continue;
+
+      // Keep first if duplicates
+      if (!this.centroidsByName.has(nameKey)) {
+        this.centroidsByName.set(nameKey, c);
+      }
+    }
+  }
+
+  private computeCentroidLonLat(geom: any): Centroid | null {
+    if (!geom) return null;
+
+    // centroid as average of vertices (good enough for label anchoring)
+    let sumLon = 0, sumLat = 0, count = 0;
+
+    const eat = (lon: number, lat: number) => {
+      sumLon += lon; sumLat += lat; count++;
+    };
+
+    const walkRing = (ring: number[][]) => {
+      for (const p of ring) eat(p[0], p[1]);
+    };
+
+    if (geom.type === 'Polygon') {
+      for (const ring of geom.coordinates) walkRing(ring);
+    } else if (geom.type === 'MultiPolygon') {
+      for (const poly of geom.coordinates) for (const ring of poly) walkRing(ring);
+    } else {
+      return null;
+    }
+
+    if (!count) return null;
+    return { lon: sumLon / count, lat: sumLat / count };
+  }
+
+  // ---------- Rotation / Zoom animations ----------
+  private quaternionToFront(lon: number, lat: number) {
+    // Convert point to vector, compute rotation that brings it to +Z (camera facing)
+    const v = this.lonLatToVec3(lon, lat, 1).normalize();
+    const target = new THREE.Vector3(0, 0, 1); // front
+    const q = new THREE.Quaternion().setFromUnitVectors(v, target);
+    return q;
+  }
+
+  private smoothRotateTo(targetQuat: any, ms: number) {
+    const start = performance.now();
+    const from = this.globeMesh.quaternion.clone();
+    const to = targetQuat.clone();
+
+    const tick = () => {
+      const t = Math.min(1, (performance.now() - start) / ms);
+      THREE.Quaternion.slerp(from, to, this.globeMesh.quaternion, this.easeInOut(t));
+      if (t < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
+  private smoothZoomTo(z: number, ms: number) {
+    const start = performance.now();
+    const fromZ = this.camera.position.z;
+    const toZ = z;
+
+    const tick = () => {
+      const t = Math.min(1, (performance.now() - start) / ms);
+      this.camera.position.z = fromZ + (toZ - fromZ) * this.easeInOut(t);
+      this.controls.update();
+      if (t < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
+  private easeInOut(t: number) {
+    return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+  }
+
+  // ---------- Math helpers ----------
+  private lonLatToVec3(lon: number, lat: number, r: number) {
+    const phi = (90 - lat) * (Math.PI / 180);
+    const theta = (lon + 180) * (Math.PI / 180);
+    const x = -r * Math.sin(phi) * Math.cos(theta);
+    const z = r * Math.sin(phi) * Math.sin(theta);
+    const y = r * Math.cos(phi);
+    return new THREE.Vector3(x, y, z);
+  }
+
+  private normalizeName(s: string) {
+    return s.trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+
+  private displayNameFromKey(key: string) {
+    // basic title-case
+    return key.split(' ').map(w => w ? (w[0].toUpperCase() + w.slice(1)) : w).join(' ');
+  }
+
+  // ---------- Render loop ----------
+  private animate = () => {
+    this.raf = requestAnimationFrame(this.animate);
+    this.controls?.update?.();
+    this.renderer.render(this.scene, this.camera);
+  };
+}

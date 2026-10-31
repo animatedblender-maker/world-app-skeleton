@@ -1,0 +1,4233 @@
+import { ChangeDetectorRef, Component, ElementRef, NgZone, OnDestroy, OnInit, ViewChild } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
+import { DomSanitizer, type SafeHtml } from '@angular/platform-browser';
+import { ActivatedRoute, Router } from '@angular/router';
+import { Subscription } from 'rxjs';
+
+import { AuthService } from '../core/services/auth.service';
+import { NotificationsUiService } from '../core/services/notifications-ui.service';
+import { MessagesService } from '../core/services/messages.service';
+import { MediaService } from '../core/services/media.service';
+import { NotificationsService, type NotificationItem } from '../core/services/notifications.service';
+import { PushService } from '../core/services/push.service';
+import { CallService, type CallSignal } from '../core/services/call.service';
+import { Conversation, Message } from '../core/models/messages.model';
+import { PostAuthor } from '../core/models/post.model';
+import { VideoPlayerComponent } from '../components/video-player.component';
+import { environment } from '../../envirnoments/envirnoment';
+import { BottomTabsComponent } from '../components/bottom-tabs.component';
+import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitize';
+
+@Component({
+  selector: 'app-messages-page',
+  standalone: true,
+  imports: [CommonModule, FormsModule, VideoPlayerComponent, BottomTabsComponent],
+  template: `
+    <div class="wrap" [class.thread-open]="!!activeConversation">
+      <div class="card">
+        <div class="layout" [class.thread-only]="mobileThreadOnly">
+          <aside class="panel">
+            <!-- iOS MessagesView top bar -->
+            <div class="panel-title">
+              <button class="panel-icon-btn" type="button" (click)="goBack()" aria-label="Back">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <path d="M15 5l-7 7 7 7" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+              <span class="panel-heading">Messages</span>
+              <button class="panel-icon-btn" type="button" (click)="goPeople()" aria-label="New message">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7">
+                  <path d="M5 19l1.5-5.5L16.5 3.5a2.1 2.1 0 0 1 3 3L9.5 16.5 4 18z" stroke-linejoin="round"/>
+                  <path d="M13.5 6.5l4 4" stroke-linecap="round"/>
+                </svg>
+              </button>
+            </div>
+            <!-- iOS MessagesView inboxPicker -->
+            <div class="inbox-picker" role="tablist" aria-label="Inbox">
+              <button
+                type="button"
+                class="inbox-tab"
+                role="tab"
+                [class.active]="inboxFolder === 'primary'"
+                [attr.aria-selected]="inboxFolder === 'primary'"
+                (click)="setInboxFolder('primary')"
+              >
+                Primary
+              </button>
+              <button
+                type="button"
+                class="inbox-tab"
+                role="tab"
+                [class.active]="inboxFolder === 'requests'"
+                [attr.aria-selected]="inboxFolder === 'requests'"
+                (click)="setInboxFolder('requests')"
+              >
+                Requests
+              </button>
+            </div>
+            <div class="status" *ngIf="loadingConversations">Loading conversations…</div>
+            <div class="status error" *ngIf="conversationError">{{ conversationError }}</div>
+            <div class="status feedback" *ngIf="inboxFeedback">{{ inboxFeedback }}</div>
+            <div class="status empty" *ngIf="!loadingConversations && !conversations.length">
+              <ng-container *ngIf="inboxFolder === 'requests'; else primaryEmpty">
+                No message requests. When someone you don’t follow messages you, it shows up here.
+              </ng-container>
+              <ng-template #primaryEmpty>
+                No conversations yet. Start chatting from a profile.
+              </ng-template>
+            </div>
+            <div
+              class="conversation-block"
+              *ngFor="let convo of conversations; trackBy: trackConversationById"
+              [class.swipe-open]="swipeOpenId === convo.id"
+            >
+              <div
+                class="conversation-swipe"
+                (touchstart)="onConvoTouchStart($event, convo)"
+                (touchmove)="onConvoTouchMove($event, convo)"
+                (touchend)="onConvoTouchEnd($event, convo)"
+                (touchcancel)="onConvoTouchCancel()"
+              >
+                <div
+                  class="conversation-slide"
+                  [style.transform]="swipeOpenId === convo.id ? 'translateX(-148px)' : null"
+                >
+                  <button
+                    class="conversation"
+                    type="button"
+                    [class.active]="convo.id === activeConversationId"
+                    [class.unread]="isConversationUnread(convo)"
+                    (click)="onConversationRowClick(convo)"
+                  >
+                    <div class="avatar">
+                      <img
+                        *ngIf="otherMember(convo)?.avatar_url"
+                        [src]="otherMember(convo)?.avatar_url"
+                        alt=""
+                      />
+                      <div class="initials" *ngIf="!otherMember(convo)?.avatar_url">
+                        {{ initialsFor(otherMember(convo)) }}
+                      </div>
+                    </div>
+                    <div class="meta">
+                      <div class="name-row">
+                        <div class="name">{{ displayNameFor(otherMember(convo)) }}</div>
+                        <div class="time">{{ formatTime(convo.last_message_at || convo.updated_at) }}</div>
+                      </div>
+                      <div class="snippet">{{ conversationSnippet(convo) }}</div>
+                    </div>
+                    <span class="conversation-unread" *ngIf="isConversationUnread(convo)" aria-hidden="true"></span>
+                  </button>
+                </div>
+                <div class="swipe-actions" aria-hidden="false">
+                  <button
+                    type="button"
+                    class="swipe-btn archive"
+                    *ngIf="inboxFolder === 'primary'"
+                    [disabled]="inboxBusyId === convo.id"
+                    (click)="archiveConversation(convo); $event.stopPropagation()"
+                  >
+                    Archive
+                  </button>
+                  <button
+                    type="button"
+                    class="swipe-btn delete"
+                    [disabled]="inboxBusyId === convo.id || requestBusyId === convo.id"
+                    (click)="onSwipeDelete(convo); $event.stopPropagation()"
+                  >
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    class="swipe-btn accept"
+                    *ngIf="inboxFolder === 'requests'"
+                    [disabled]="requestBusyId === convo.id"
+                    (click)="acceptRequest(convo); $event.stopPropagation()"
+                  >
+                    Accept
+                  </button>
+                </div>
+              </div>
+              <div class="request-actions" *ngIf="inboxFolder === 'requests'">
+                <button
+                  type="button"
+                  class="request-btn accept"
+                  [disabled]="requestBusyId === convo.id"
+                  (click)="acceptRequest(convo); $event.stopPropagation()"
+                >
+                  Accept
+                </button>
+                <button
+                  type="button"
+                  class="request-btn decline"
+                  [disabled]="requestBusyId === convo.id"
+                  (click)="declineRequest(convo); $event.stopPropagation()"
+                >
+                  Delete
+                </button>
+              </div>
+              <div class="inbox-actions" *ngIf="inboxFolder === 'primary'">
+                <button
+                  type="button"
+                  class="inbox-btn archive"
+                  [disabled]="inboxBusyId === convo.id"
+                  (click)="archiveConversation(convo); $event.stopPropagation()"
+                >
+                  Archive
+                </button>
+                <button
+                  type="button"
+                  class="inbox-btn delete"
+                  [disabled]="inboxBusyId === convo.id"
+                  (click)="deleteConversation(convo); $event.stopPropagation()"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </aside>
+
+          <section class="thread" *ngIf="activeConversation || !isNarrow">
+            <div class="thread-header" *ngIf="activeConversation; else emptyThread">
+              <button
+                class="thread-back"
+                type="button"
+                *ngIf="mobileThreadOnly"
+                (click)="showConversationList()"
+                aria-label="Back to chats"
+              >
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <path d="M15 5l-7 7 7 7" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+              <div class="avatar large">
+                <img
+                  *ngIf="otherMember(activeConversation)?.avatar_url"
+                  [src]="otherMember(activeConversation)?.avatar_url"
+                  alt=""
+                />
+                <div class="initials" *ngIf="!otherMember(activeConversation)?.avatar_url">
+                  {{ initialsFor(otherMember(activeConversation)) }}
+                </div>
+              </div>
+              <div class="thread-meta">
+                <div class="thread-name">{{ displayNameFor(otherMember(activeConversation)) }}</div>
+                <div
+                  class="thread-sub"
+                  *ngIf="displayHandleFor(otherMember(activeConversation)) as handle"
+                >
+                  {{ handle }}
+                </div>
+              </div>
+              <div class="thread-actions">
+                <button
+                  class="call-btn"
+                  type="button"
+                  [disabled]="!canStartCall()"
+                  (click)="startCall('audio')"
+                  aria-label="Voice call"
+                >
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+                    <path d="M6.6 3.8c.5-.5 1.3-.5 1.8 0l1.7 1.7c.5.5.5 1.2.1 1.7l-1 1.3c.8 1.6 2 2.9 3.6 3.6l1.3-1c.5-.4 1.2-.4 1.7.1l1.7 1.7c.5.5.5 1.3 0 1.8l-1.1 1.1c-.5.5-1.2.7-1.9.5-3.3-.9-6.1-3.7-7-7-.2-.7 0-1.4.5-1.9l1.1-1.1z"/>
+                  </svg>
+                </button>
+                <button
+                  class="call-btn"
+                  type="button"
+                  [disabled]="!canStartCall()"
+                  (click)="startCall('video')"
+                  aria-label="Video call"
+                >
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+                    <path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h7A2.5 2.5 0 0 1 16 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 4 16.5v-9z"/>
+                    <path d="M17 10.2l3.2-2.1a.8.8 0 0 1 1.3.7v6.4a.8.8 0 0 1-1.3.7L17 13.8v-3.6z"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <ng-template #emptyThread>
+              <div class="thread-empty">
+                <div class="thread-empty-icon" aria-hidden="true">💬</div>
+                <div class="thread-empty-title">Your messages</div>
+                <div class="thread-empty-sub">Select a conversation to start chatting.</div>
+              </div>
+            </ng-template>
+
+            <div class="messages" *ngIf="activeConversation">
+              <div class="status" *ngIf="loadingMessages">Loading messages…</div>
+              <div class="status error" *ngIf="messageError">{{ messageError }}</div>
+              <div class="message-list" *ngIf="!loadingMessages" #messageList>
+                <ng-container *ngFor="let message of messages; let i = index; trackBy: trackMessageById">
+                  <ng-container *ngIf="!isReactionMessage(message)">
+                    <div class="message-day" *ngIf="showDaySeparatorVisible(i)">
+                      {{ formatDayLabel(message.created_at) }}
+                    </div>
+
+                    <!-- iOS call log pill -->
+                    <div
+                      class="call-log-row"
+                      *ngIf="isCallLogMessage(message); else chatBubble"
+                      [attr.id]="'msg-' + message.id"
+                    >
+                      <span class="call-log-line"></span>
+                      <span class="call-log-pill">{{ messageText(message) }}</span>
+                      <span class="call-log-line"></span>
+                      <div class="call-log-time">{{ formatTimestamp(message.created_at) }}</div>
+                    </div>
+
+                    <ng-template #chatBubble>
+                      <!-- iOS MessageBubble: no per-message avatar, stacked content -->
+                      <div
+                        class="message"
+                        [class.me]="message.sender_id === meId"
+                        [class.pending]="isPendingMessage(message)"
+                        [attr.id]="'msg-' + message.id"
+                      >
+                        <div class="bubble-col">
+                          <div
+                            class="reply-preview"
+                            *ngIf="replyPreview(message) as reply"
+                            (click)="scrollToMessage(reply.id)"
+                          >
+                            <div class="reply-meta">Replying to {{ reply.name }}</div>
+                            <div class="reply-text">{{ reply.text }}</div>
+                          </div>
+
+                          <div class="message-media" *ngIf="message.media_type && message.media_url">
+                            <img
+                              *ngIf="message.media_type === 'image'"
+                              [src]="message.media_url"
+                              alt=""
+                              (click)="openImageLightbox(message.media_url)"
+                            />
+                            <app-video-player
+                              *ngIf="message.media_type === 'video'"
+                              [src]="message.media_url"
+                            ></app-video-player>
+                          </div>
+
+                          <div class="bubble" *ngIf="messageHtml(message) as html">
+                            <div class="body" [innerHTML]="html"></div>
+                          </div>
+
+                          <div class="reaction-strip" *ngIf="messageLikeCount(message) > 0">
+                            <span class="reaction-chip">❤️ {{ messageLikeCount(message) }}</span>
+                          </div>
+
+                          <div class="message-meta">
+                            <span class="message-time">{{ formatTimestamp(message.created_at) }}</span>
+                            <span class="message-edited" *ngIf="isEdited(message)">Edited</span>
+                            <span class="message-read" *ngIf="isLastReadOwn(message)">Read</span>
+                          </div>
+
+                          <div class="message-tools" *ngIf="!isEditing(message) && !isPendingMessage(message)">
+                            <button type="button" class="tool" (click)="startReply(message)">Reply</button>
+                            <button
+                              type="button"
+                              class="tool"
+                              [class.on]="isMessageLikedByMe(message)"
+                              (click)="toggleMessageLike(message)"
+                            >
+                              {{ isMessageLikedByMe(message) ? 'Liked' : 'Like' }}
+                            </button>
+                            <button
+                              type="button"
+                              class="tool"
+                              *ngIf="message.sender_id === meId"
+                              (click)="startEditMessage(message)"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              class="tool danger"
+                              *ngIf="message.sender_id === meId"
+                              (click)="deleteMessage(message)"
+                            >
+                              Unsend
+                            </button>
+                          </div>
+
+                          <div class="message-edit" *ngIf="isEditing(message)">
+                            <textarea class="message-edit-input" [(ngModel)]="editingDraft" rows="2"></textarea>
+                            <div class="message-edit-actions">
+                              <button type="button" class="ghost" (click)="cancelEditMessage()">Cancel</button>
+                              <button type="button" class="save" (click)="saveEditMessage(message)" [disabled]="editBusy">
+                                {{ editBusy ? 'Saving…' : 'Save' }}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </ng-template>
+                  </ng-container>
+                </ng-container>
+              </div>
+            </div>
+
+            <!-- iOS composerBar: photo + field + paperplane circle -->
+            <form class="composer" *ngIf="activeConversation" (ngSubmit)="sendMessage()">
+              <div class="composer-reply" *ngIf="replyingTo">
+                <div class="composer-reply-bar" aria-hidden="true"></div>
+                <div class="composer-reply-copy">
+                  <div class="composer-reply-title">
+                    Replying to {{ displayNameFor(senderInfo(replyingTo)) }}
+                  </div>
+                  <div class="composer-reply-text">{{ replySnippet(replyingTo) }}</div>
+                </div>
+                <button type="button" class="composer-reply-close" (click)="cancelReply()">Cancel</button>
+              </div>
+              <div class="composer-preview" *ngIf="messageMediaPreview">
+                <img *ngIf="messageMediaType === 'image'" [src]="messageMediaPreview" alt="" />
+                <video
+                  *ngIf="messageMediaType === 'video'"
+                  [src]="messageMediaPreview"
+                  muted
+                  playsinline
+                ></video>
+                <button class="composer-clear" type="button" (click)="clearMedia()">Remove</button>
+              </div>
+              <div class="composer-row">
+                <input
+                  #mediaInput
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime"
+                  hidden
+                  (change)="onMediaSelected($event)"
+                />
+                <button class="composer-attach" type="button" (click)="triggerMediaPicker()" aria-label="Add photo">
+                  <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7">
+                    <rect x="3.5" y="5.5" width="17" height="13" rx="2.2"/>
+                    <circle cx="9" cy="10.5" r="1.6"/>
+                    <path d="M7.5 16.5l3.2-3.4 2.4 2.2 3.1-3.6 3.3 4.8" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+                <textarea
+                  #messageInput
+                  class="composer-input"
+                  name="message"
+                  [(ngModel)]="messageDraft"
+                  [placeholder]="replyingTo ? 'Write a reply…' : 'Message…'"
+                  maxlength="2000"
+                  rows="1"
+                  (input)="onMessageInput($event)"
+                  (keydown.enter)="onComposerEnter($event)"
+                ></textarea>
+                <button
+                  class="composer-send"
+                  type="submit"
+                  [disabled]="messageBusy || !canSendMessage()"
+                  aria-label="Send"
+                >
+                  <svg *ngIf="!messageBusy" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+                    <path d="M3.4 20.6 21 12 3.4 3.4l.1 6.7L15 12 3.5 13.9z"/>
+                  </svg>
+                  <span *ngIf="messageBusy" class="send-busy">…</span>
+                </button>
+              </div>
+              <div class="status error" *ngIf="messageMediaError">{{ messageMediaError }}</div>
+            </form>
+          </section>
+        </div>
+      </div>
+    </div>
+    <app-bottom-tabs *ngIf="!activeConversation"></app-bottom-tabs>
+
+    <div class="lightbox" *ngIf="lightboxUrl" (click)="closeImageLightbox()">
+      <div class="lightbox-card" (click)="$event.stopPropagation()">
+        <div class="lightbox-frame">
+          <button class="lightbox-close" type="button" (click)="closeImageLightbox()">x</button>
+          <img [src]="lightboxUrl" alt="Preview" />
+        </div>
+      </div>
+    </div>
+
+    <div
+      class="call-overlay"
+      *ngIf="callUiOpen"
+      [class.is-video]="callType === 'video'"
+      [class.is-audio]="callType !== 'video'"
+      [class.is-incoming]="callIncoming"
+      role="dialog"
+      aria-modal="true"
+      [attr.aria-label]="callAriaLabel()"
+    >
+      <div class="call-stage" (click)="$event.stopPropagation()">
+        <!-- Video stage -->
+        <ng-container *ngIf="callType === 'video'; else audioStage">
+          <video
+            #remoteVideo
+            class="call-remote"
+            autoplay
+            playsinline
+            [class.has-stream]="hasRemoteMedia()"
+          ></video>
+          <div class="call-video-waiting" *ngIf="!callActive || !hasRemoteMedia()">
+            <div class="call-avatar lg" [class.speaking]="callSpeaking">
+              <img *ngIf="callPeerAvatar()" [src]="callPeerAvatar()" alt="" />
+              <div class="initials" *ngIf="!callPeerAvatar()">{{ initialsFor(callPeer()) }}</div>
+            </div>
+            <div class="call-waiting-status">{{ callStatusText() }}</div>
+          </div>
+          <video
+            #localVideo
+            class="call-local"
+            autoplay
+            muted
+            playsinline
+            *ngIf="!callCameraOff"
+          ></video>
+          <div class="call-local call-local-off" *ngIf="callCameraOff" aria-hidden="true">
+            <span>Camera off</span>
+          </div>
+        </ng-container>
+        <ng-template #audioStage>
+          <div class="call-audio-layout">
+            <div class="call-avatar xl" [class.speaking]="callSpeaking" [class.ringing]="callIncoming || callConnecting">
+              <img *ngIf="callPeerAvatar()" [src]="callPeerAvatar()" alt="" />
+              <div class="initials" *ngIf="!callPeerAvatar()">{{ initialsFor(callPeer()) }}</div>
+            </div>
+            <div class="call-peer-name">{{ callPeerName() }}</div>
+            <div class="call-status">{{ callStatusText() }}</div>
+            <div class="call-timer-inline" *ngIf="callActive && !callError">{{ callTimerLabel() }}</div>
+          </div>
+        </ng-template>
+
+        <!-- Top chrome (video) -->
+        <div class="call-top-chrome" *ngIf="callType === 'video'">
+          <div class="call-top-meta">
+            <div class="call-peer-name light">{{ callPeerName() }}</div>
+            <div class="call-status light">{{ callStatusText() }}</div>
+          </div>
+          <div class="call-timer light" *ngIf="callActive && !callError">{{ callTimerLabel() }}</div>
+        </div>
+
+        <!-- Error / reconnect banner -->
+        <div class="call-banner" *ngIf="callError || callReconnecting" [class.danger]="!!callError">
+          <span>{{ callError || 'Reconnecting…' }}</span>
+          <div class="call-banner-actions" *ngIf="callError">
+            <button type="button" class="call-banner-btn" (click)="retryLastCall()" *ngIf="canRetryCall()">
+              Retry
+            </button>
+            <button type="button" class="call-banner-btn" (click)="dismissCallError()">Dismiss</button>
+          </div>
+        </div>
+
+        <!-- Bottom controls -->
+        <div class="call-bottom-chrome">
+          <ng-container *ngIf="callIncoming; else activeCallControls">
+            <button class="call-round end" type="button" (click)="declineCall()" aria-label="Decline">
+              <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" aria-hidden="true">
+                <path d="M6.6 3.8c.5-.5 1.3-.5 1.8 0l1.7 1.7c.5.5.5 1.2.1 1.7l-1 1.3c.8 1.6 2 2.9 3.6 3.6l1.3-1c.5-.4 1.2-.4 1.7.1l1.7 1.7c.5.5.5 1.3 0 1.8l-1.1 1.1c-.5.5-1.2.7-1.9.5-3.3-.9-6.1-3.7-7-7-.2-.7 0-1.4.5-1.9l1.1-1.1z" transform="rotate(135 12 12)"/>
+              </svg>
+              <span>Decline</span>
+            </button>
+            <button class="call-round accept" type="button" (click)="acceptCall()" aria-label="Accept">
+              <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" aria-hidden="true">
+                <path d="M6.6 3.8c.5-.5 1.3-.5 1.8 0l1.7 1.7c.5.5.5 1.2.1 1.7l-1 1.3c.8 1.6 2 2.9 3.6 3.6l1.3-1c.5-.4 1.2-.4 1.7.1l1.7 1.7c.5.5.5 1.3 0 1.8l-1.1 1.1c-.5.5-1.2.7-1.9.5-3.3-.9-6.1-3.7-7-7-.2-.7 0-1.4.5-1.9l1.1-1.1z"/>
+              </svg>
+              <span>Accept</span>
+            </button>
+          </ng-container>
+          <ng-template #activeCallControls>
+            <ng-container *ngIf="!callError; else errorOnlyControls">
+              <button
+                class="call-round secondary"
+                type="button"
+                (click)="toggleMute()"
+                [attr.aria-label]="callMuted ? 'Unmute' : 'Mute'"
+                [attr.aria-pressed]="callMuted"
+              >
+                <svg *ngIf="!callMuted" viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+                  <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2z"/>
+                </svg>
+                <svg *ngIf="callMuted" viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+                  <path d="M4.3 3.3 3 4.6l4.1 4.1A5 5 0 0 0 7 11H5a7 7 0 0 0 6 6.9V21h2v-3.1c.7-.1 1.3-.3 1.9-.6l4.8 4.8 1.3-1.3L4.3 3.3zM12 14c-.4 0-.7-.1-1-.2l1.7 1.7c-.2 0-.4.1-.7.1a3 3 0 0 1-3-3V9.8l2.4 2.4V11a.6.6 0 0 0 .6.6h.2l1.5 1.5c-.3.5-.8.9-1.5.9zm3-3v-.2l2 2c.1-.3.1-.5.1-.8h2a7 7 0 0 1-1.4 4.2l1.5 1.5A8.9 8.9 0 0 0 21 11h-2a5 5 0 0 1-4-5.9l-2.1 2.1V6a3 3 0 0 1 5.1-2.1L15.8 5A1.5 1.5 0 0 0 15 6v5z"/>
+                </svg>
+                <span>{{ callMuted ? 'Unmute' : 'Mute' }}</span>
+              </button>
+              <button
+                class="call-round secondary"
+                type="button"
+                *ngIf="callType === 'video'"
+                (click)="toggleCamera()"
+                [attr.aria-label]="callCameraOff ? 'Camera on' : 'Camera off'"
+                [attr.aria-pressed]="callCameraOff"
+              >
+                <svg *ngIf="!callCameraOff" viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+                  <path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h7A2.5 2.5 0 0 1 16 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 4 16.5v-9z"/>
+                  <path d="M17 10.2l3.2-2.1a.8.8 0 0 1 1.3.7v6.4a.8.8 0 0 1-1.3.7L17 13.8v-3.6z"/>
+                </svg>
+                <svg *ngIf="callCameraOff" viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+                  <path d="M3.3 2 2 3.3l2.2 2.2A2.5 2.5 0 0 0 4 7.5v9A2.5 2.5 0 0 0 6.5 19h7c.4 0 .8-.1 1.1-.3L18.7 22 20 20.7 3.3 2zM16 12.3V7.5A2.5 2.5 0 0 0 13.5 5H8.2l7.8 7.8zM17 10.2l3.2-2.1a.8.8 0 0 1 1.3.7v6.4a.8.8 0 0 1-1.3.7L17 13.8v-3.6z"/>
+                </svg>
+                <span>{{ callCameraOff ? 'Camera' : 'Camera off' }}</span>
+              </button>
+              <button class="call-round end" type="button" (click)="endCall()" aria-label="End call">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">
+                  <path d="M6.6 3.8c.5-.5 1.3-.5 1.8 0l1.7 1.7c.5.5.5 1.2.1 1.7l-1 1.3c.8 1.6 2 2.9 3.6 3.6l1.3-1c.5-.4 1.2-.4 1.7.1l1.7 1.7c.5.5.5 1.3 0 1.8l-1.1 1.1c-.5.5-1.2.7-1.9.5-3.3-.9-6.1-3.7-7-7-.2-.7 0-1.4.5-1.9l1.1-1.1z" transform="rotate(135 12 12)"/>
+                </svg>
+                <span>End</span>
+              </button>
+            </ng-container>
+            <ng-template #errorOnlyControls>
+              <button class="call-round secondary" type="button" (click)="dismissCallError()" aria-label="Close">
+                <span>Close</span>
+              </button>
+              <button
+                class="call-round accept"
+                type="button"
+                *ngIf="canRetryCall()"
+                (click)="retryLastCall()"
+                aria-label="Retry call"
+              >
+                <span>Retry</span>
+              </button>
+            </ng-template>
+          </ng-template>
+        </div>
+      </div>
+    </div>
+  `,
+  styles: [
+    `
+    :host{
+      display:block;
+      min-height:100svh;
+      height:100svh;
+      position:relative;
+      color:var(--m-ink, #2c2825);
+      background:var(--m-paper, #f8f6f2);
+    }
+    .wrap{
+      min-height:100%;
+      height:100%;
+      position:relative;
+      padding:0 0 var(--tabs-safe, 64px);
+      box-sizing:border-box;
+      display:flex;
+      flex-direction:column;
+      background:var(--m-paper, #f8f6f2);
+    }
+    .wrap.thread-open{ padding-bottom:0; }
+    .card{
+      position:relative;
+      z-index:1;
+      width:100%;
+      height:100%;
+      max-width:none;
+      margin:0;
+      background:var(--m-paper, #f8f6f2);
+      border-radius:0;
+      padding:0;
+      border:0;
+      box-shadow:none;
+      backdrop-filter:none;
+      color:var(--m-ink, #2c2825);
+      flex:1;
+      box-sizing:border-box;
+      display:flex;
+      flex-direction:column;
+      min-height:0;
+      overflow:hidden;
+    }
+    .layout{
+      display:grid;
+      grid-template-columns:320px 1fr;
+      gap:0;
+      align-items:stretch;
+      flex:1;
+      min-height:0;
+    }
+    .layout.thread-only .panel{
+      display:none;
+    }
+    /* Desktop (≥900px): ALWAYS keep list + thread side-by-side */
+    @media (min-width: 900px){
+      .layout.thread-only .panel{
+        display:flex !important;
+      }
+    }
+    .panel{
+      display:flex;
+      flex-direction:column;
+      gap:4px;
+      background:var(--m-paper, #f8f6f2);
+      border-radius:0;
+      padding:0 0 8px;
+      border:0;
+      border-right:0.5px solid var(--m-divider, #e2ded8);
+      min-height:0;
+      overflow:auto;
+    }
+    .panel-title{
+      position:sticky;
+      top:0;
+      z-index:2;
+      min-height:44px;
+      padding:0 8px;
+      display:grid;
+      grid-template-columns:44px 1fr 44px;
+      align-items:center;
+      gap:4px;
+      background:var(--m-surface, #fefdfb);
+      border-bottom:0.5px solid var(--m-divider, #e2ded8);
+    }
+    .panel-heading{
+      text-align:center;
+      font-size:17px;
+      font-weight:650;
+      color:var(--m-ink, #2c2825);
+    }
+    .panel-icon-btn{
+      width:44px;
+      height:44px;
+      border:0;
+      background:transparent;
+      color:var(--m-ink, #2c2825);
+      display:grid;
+      place-items:center;
+      cursor:pointer;
+      border-radius:12px;
+      padding:0;
+    }
+    .panel-icon-btn:hover{ background:rgba(44,40,37,0.05); }
+    .inbox-picker{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:4px;
+      margin:8px 12px 4px;
+      padding:4px;
+      border-radius:12px;
+      background:var(--m-wash, #f3efe8);
+      border:0.5px solid var(--m-border, #ddd8d1);
+    }
+    .inbox-tab{
+      border:0;
+      border-radius:10px;
+      padding:8px 10px;
+      font:inherit;
+      font-size:13px;
+      font-weight:650;
+      color:var(--m-ink-muted, #948b82);
+      background:transparent;
+      cursor:pointer;
+    }
+    .inbox-tab.active{
+      background:var(--m-surface, #fefdfb);
+      color:var(--m-ink, #2c2825);
+      box-shadow:0 1px 3px rgba(44,40,37,0.08);
+    }
+    .status{
+      font-size:14px;
+      color:var(--m-ink-muted, #948b82);
+      padding:16px 16px 8px;
+    }
+    .status.error{ color:var(--m-danger, #ea000b); }
+    .status.feedback{ color:var(--m-ink-secondary, #6b645d); }
+    .status.empty{ text-align:center; padding:40px 20px; line-height:1.45; }
+    .conversation-block{
+      display:flex;
+      flex-direction:column;
+      gap:0;
+      position:relative;
+    }
+    .conversation-swipe{
+      position:relative;
+      overflow:hidden;
+      touch-action:pan-y;
+    }
+    .conversation-slide{
+      position:relative;
+      z-index:1;
+      background:var(--m-paper, #f8f6f2);
+      transition:transform 0.18s ease-out;
+      will-change:transform;
+    }
+    .swipe-actions{
+      position:absolute;
+      inset:0 6px 0 auto;
+      display:none;
+      align-items:stretch;
+      gap:0;
+      z-index:0;
+      width:148px;
+      border-radius:14px;
+      overflow:hidden;
+    }
+    .conversation-block.swipe-open .swipe-actions{ display:flex; }
+    .swipe-btn{
+      flex:1;
+      border:0;
+      font:inherit;
+      font-size:12px;
+      font-weight:700;
+      cursor:pointer;
+      color:var(--m-paper, #f8f6f2);
+      padding:0 8px;
+    }
+    .swipe-btn:disabled{ opacity:0.55; cursor:default; }
+    .swipe-btn.archive{ background:var(--m-ink, #2c2825); }
+    .swipe-btn.accept{ background:var(--m-ink, #2c2825); }
+    .swipe-btn.delete{ background:var(--m-danger, #ea000b); }
+    .request-actions,
+    .inbox-actions{
+      display:flex;
+      gap:8px;
+      padding:0 14px 10px 70px;
+    }
+    .request-btn,
+    .inbox-btn{
+      border:0;
+      border-radius:10px;
+      padding:7px 12px;
+      font:inherit;
+      font-size:12px;
+      font-weight:700;
+      cursor:pointer;
+    }
+    .request-btn:disabled,
+    .inbox-btn:disabled{ opacity:0.5; cursor:default; }
+    .request-btn.accept,
+    .inbox-btn.archive{
+      background:var(--m-ink, #2c2825);
+      color:var(--m-paper, #f8f6f2);
+    }
+    .request-btn.decline,
+    .inbox-btn.delete{
+      background:transparent;
+      color:var(--m-danger, #ea000b);
+      border:0.5px solid color-mix(in srgb, var(--m-danger, #ea000b) 35%, transparent);
+    }
+    .conversation{
+      display:flex;
+      align-items:center;
+      gap:12px;
+      padding:10px 14px;
+      margin:0 6px;
+      border-radius:14px;
+      border:0;
+      background:transparent;
+      cursor:pointer;
+      text-align:left;
+      color:inherit;
+      width:calc(100% - 12px);
+      box-sizing:border-box;
+    }
+    .conversation:hover{ background:rgba(44,40,37,0.04); }
+    .conversation.active{ background:var(--m-surface, #fefdfb); box-shadow:inset 0 0 0 0.5px var(--m-border, #ddd8d1); }
+    .conversation.unread .name{ font-weight:750; }
+    .conversation.unread .snippet{ color:var(--m-ink, #2c2825); opacity:0.85; }
+    .conversation-unread{
+      width:9px;
+      height:9px;
+      border-radius:999px;
+      background:var(--m-danger, #ea000b);
+      flex:0 0 auto;
+    }
+    .avatar{
+      width:48px;
+      height:48px;
+      border-radius:50%;
+      overflow:hidden;
+      background:var(--m-canvas-muted, #f2f0ec);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-weight:700;
+      font-size:13px;
+      color:var(--m-ink-secondary, #6b645d);
+      flex-shrink:0;
+    }
+    .avatar img{ width:100%; height:100%; object-fit:cover; }
+    .avatar.large{ width:40px; height:40px; font-size:12px; }
+    .meta{ flex:1; min-width:0; }
+    .name-row{
+      display:flex;
+      align-items:baseline;
+      justify-content:space-between;
+      gap:10px;
+    }
+    .name{
+      font-weight:650;
+      font-size:15px;
+      color:var(--m-ink, #2c2825);
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    .snippet{
+      margin-top:3px;
+      font-size:13px;
+      color:var(--m-ink-muted, #948b82);
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    .time{
+      font-size:11px;
+      color:var(--m-ink-muted, #948b82);
+      white-space:nowrap;
+      flex-shrink:0;
+    }
+    .thread{
+      display:flex;
+      flex-direction:column;
+      border-radius:0;
+      border:0;
+      background:var(--m-paper, #f8f6f2);
+      min-height:0;
+      overflow:hidden;
+    }
+    .thread-back{
+      border:0;
+      background:transparent;
+      color:var(--m-ink, #2c2825);
+      width:40px;
+      height:40px;
+      border-radius:12px;
+      display:grid;
+      place-items:center;
+      cursor:pointer;
+      padding:0;
+      flex-shrink:0;
+    }
+    .thread-header{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      padding:8px 12px;
+      min-height:52px;
+      border-bottom:0.5px solid var(--m-divider, #e2ded8);
+      background:var(--m-canvas, #f8f6f2);
+      min-width:0;
+    }
+    .thread-meta{ min-width:0; flex:1; }
+    .thread-name{
+      font-weight:650;
+      font-size:16px;
+      color:var(--m-ink, #2c2825);
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    .thread-sub{
+      font-size:12px;
+      color:var(--m-ink-muted, #948b82);
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    .thread-actions{
+      margin-left:auto;
+      display:flex;
+      gap:4px;
+      flex-shrink:0;
+    }
+    .call-btn{
+      width:40px;
+      height:40px;
+      border-radius:12px;
+      border:0;
+      background:transparent;
+      color:var(--m-ink, #2c2825);
+      cursor:pointer;
+      display:grid;
+      place-items:center;
+      padding:0;
+    }
+    .call-btn:hover{ background:rgba(44,40,37,0.05); }
+    .call-btn:disabled{ opacity:0.4; cursor:not-allowed; }
+    .thread-empty{
+      flex:1;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      gap:6px;
+      padding:40px 24px;
+      text-align:center;
+      color:var(--m-ink-muted, #948b82);
+    }
+    .thread-empty-icon{ font-size:36px; line-height:1; margin-bottom:8px; opacity:0.7; }
+    .thread-empty-title{ font-size:17px; font-weight:650; color:var(--m-ink, #2c2825); }
+    .thread-empty-sub{ font-size:14px; }
+    .messages{
+      flex:1;
+      display:flex;
+      flex-direction:column;
+      min-height:0;
+      overflow:hidden;
+    }
+    .message-list{
+      flex:1;
+      padding:16px;
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+      overflow-y:auto;
+      min-height:0;
+      background:var(--m-paper, #f8f6f2);
+    }
+    .message-day{
+      align-self:center;
+      font-size:12px;
+      font-weight:650;
+      color:var(--m-ink-muted, #948b82);
+      background:var(--m-canvas-muted, #f2f0ec);
+      border:0.5px solid var(--m-border, #ddd8d1);
+      border-radius:999px;
+      padding:5px 12px;
+      margin:6px 0;
+    }
+    /* —— iOS MessageBubble —— */
+    .message{
+      display:flex;
+      width:100%;
+      justify-content:flex-start;
+    }
+    .message.me{ justify-content:flex-end; }
+    .message.pending{ opacity:0.72; }
+    .bubble-col{
+      display:flex;
+      flex-direction:column;
+      align-items:flex-start;
+      gap:4px;
+      max-width:min(78%, 340px);
+      min-width:0;
+    }
+    .message.me .bubble-col{ align-items:flex-end; }
+    .bubble{
+      max-width:100%;
+      background:var(--m-surface, #fefdfb);
+      border:0.5px solid var(--m-border, #ddd8d1);
+      border-radius:18px;
+      padding:10px 14px;
+      font-size:15px;
+      line-height:1.4;
+      color:var(--m-ink, #2c2825);
+    }
+    /* iOS: outgoing = ink on matteDeep (never ink fill / white text) */
+    .message.me .bubble{
+      background:var(--m-matte-deep, #f0ede8);
+      border-color:color-mix(in srgb, var(--m-border, #ddd8d1) 55%, transparent);
+      color:var(--m-ink, #2c2825);
+    }
+    .body{
+      white-space:pre-wrap;
+      word-break:break-word;
+    }
+    .body strong{
+      font-weight:700;
+      color:inherit;
+    }
+    .body strong.md-h{
+      display:inline;
+      font-size:1.2em;
+      font-weight:700;
+      color:inherit;
+    }
+    .body em{
+      font-style:italic;
+      color:inherit;
+    }
+    .call-log-row{
+      display:flex;
+      flex-wrap:wrap;
+      align-items:center;
+      justify-content:center;
+      gap:10px;
+      width:100%;
+      padding:8px 0;
+    }
+    .call-log-line{
+      flex:1;
+      height:0.5px;
+      background:var(--m-border, #ddd8d1);
+      min-width:24px;
+    }
+    .call-log-pill{
+      font-size:12px;
+      font-weight:650;
+      color:var(--m-ink-muted, #948b82);
+      background:var(--m-canvas-muted, #f2f0ec);
+      border-radius:999px;
+      padding:6px 12px;
+      max-width:70%;
+      text-align:center;
+    }
+    .call-log-time{
+      width:100%;
+      text-align:center;
+      font-size:11px;
+      color:var(--m-ink-muted, #948b82);
+    }
+    .message-media{
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+      max-width:220px;
+    }
+    .message.me .message-media{ align-items:flex-end; }
+    .message-media img{
+      display:block;
+      width:100%;
+      max-height:280px;
+      min-height:120px;
+      object-fit:cover;
+      border-radius:14px;
+      cursor:pointer;
+      background:#0c0a09;
+    }
+    .message-media app-video-player{
+      width:220px;
+      max-width:100%;
+      border-radius:12px;
+      overflow:hidden;
+      background:#000;
+    }
+    .message-media app-video-player ::ng-deep .video-shell{ max-height:none; }
+    .message-media app-video-player ::ng-deep video{
+      width:100%;
+      height:100%;
+      object-fit:contain;
+    }
+    .reaction-strip{ display:flex; gap:6px; }
+    .reaction-chip{
+      font-size:12px;
+      padding:4px 8px;
+      border-radius:999px;
+      background:var(--m-canvas-muted, #f2f0ec);
+      color:var(--m-ink, #2c2825);
+    }
+    .message-meta{
+      display:flex;
+      align-items:center;
+      gap:6px;
+      font-size:11px;
+      color:var(--m-ink-muted, #948b82);
+      padding:0 2px;
+    }
+    .message-time{ font-size:11px; }
+    .message-edited{ font-weight:650; }
+    .message-read{
+      font-weight:500;
+      color:var(--m-ink-muted, #948b82);
+    }
+    .message-tools{
+      display:flex;
+      flex-wrap:wrap;
+      gap:10px;
+      padding:0 2px;
+      opacity:0.85;
+    }
+    .message-tools .tool{
+      border:0;
+      background:transparent;
+      padding:0;
+      font-size:12px;
+      font-weight:650;
+      color:var(--m-ink-muted, #948b82);
+      cursor:pointer;
+    }
+    .message-tools .tool.on{ color:var(--m-ink, #2c2825); }
+    .message-tools .tool.danger{ color:var(--m-danger, #ea000b); }
+    .reply-preview{
+      width:100%;
+      max-width:220px;
+      box-sizing:border-box;
+      padding:8px 12px 8px 14px;
+      border-radius:12px;
+      background:var(--m-canvas-muted, #f2f0ec);
+      position:relative;
+      cursor:pointer;
+    }
+    .reply-preview::before{
+      content:'';
+      position:absolute;
+      left:0;
+      top:6px;
+      bottom:6px;
+      width:3px;
+      border-radius:2px;
+      background:var(--m-accent, #2c2825);
+    }
+    .reply-meta{
+      font-size:11px;
+      font-weight:650;
+      color:var(--m-ink-muted, #948b82);
+    }
+    .reply-text{
+      margin-top:2px;
+      font-size:13px;
+      color:var(--m-ink-secondary, #6b645d);
+      display:-webkit-box;
+      -webkit-line-clamp:2;
+      -webkit-box-orient:vertical;
+      overflow:hidden;
+    }
+    .message-edit{
+      width:100%;
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+    }
+    .message-edit-input{
+      width:100%;
+      border-radius:12px;
+      border:0.5px solid var(--m-border, #ddd8d1);
+      padding:10px 12px;
+      font:inherit;
+      font-size:14px;
+      resize:vertical;
+      min-height:60px;
+      background:var(--m-surface, #fefdfb);
+      color:var(--m-ink, #2c2825);
+      box-sizing:border-box;
+    }
+    .message-edit-actions{
+      display:flex;
+      justify-content:flex-end;
+      gap:10px;
+    }
+    .message-edit-actions .ghost{
+      border:0;
+      background:none;
+      font-size:13px;
+      font-weight:650;
+      color:var(--m-ink-muted, #948b82);
+      cursor:pointer;
+    }
+    .message-edit-actions .save{
+      border:0;
+      border-radius:999px;
+      padding:8px 14px;
+      background:var(--m-ink, #2c2825);
+      color:var(--m-paper, #f8f6f2);
+      font-size:13px;
+      font-weight:650;
+      cursor:pointer;
+    }
+    .message-highlight .bubble{
+      box-shadow:0 0 0 2px color-mix(in srgb, var(--m-ink, #2c2825) 45%, transparent);
+    }
+    @media (max-width: 600px){
+      .message-media app-video-player ::ng-deep .video-shell{ max-height:240px; }
+      .message-media app-video-player ::ng-deep video{ max-height:240px; }
+    }
+    /* —— iOS composerBar —— */
+    .composer{
+      position:sticky;
+      bottom:0;
+      z-index:5;
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+      padding:12px 16px;
+      border-top:0.5px solid var(--m-border, #ddd8d1);
+      background:var(--m-surface, #fefdfb);
+      padding-bottom:calc(12px + env(safe-area-inset-bottom));
+    }
+    .composer-reply{
+      display:flex;
+      align-items:flex-start;
+      gap:10px;
+      padding:0 2px;
+    }
+    .composer-reply-bar{
+      width:2px;
+      align-self:stretch;
+      border-radius:1px;
+      background:color-mix(in srgb, var(--m-accent, #2c2825) 45%, transparent);
+      flex-shrink:0;
+    }
+    .composer-reply-copy{ flex:1; min-width:0; }
+    .composer-reply-title{
+      font-size:12px;
+      font-weight:650;
+      color:var(--m-ink, #2c2825);
+    }
+    .composer-reply-text{
+      margin-top:2px;
+      font-size:12px;
+      color:var(--m-ink-secondary, #6b645d);
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    .composer-reply-close{
+      border:0;
+      background:transparent;
+      color:var(--m-accent, #2c2825);
+      font-size:12px;
+      font-weight:650;
+      cursor:pointer;
+      padding:0;
+      flex-shrink:0;
+    }
+    .composer-row{
+      display:flex;
+      gap:10px;
+      align-items:flex-end;
+    }
+    /* iOS PhotosPicker: ink glyph on matteDeep circle */
+    .composer-attach{
+      width:40px;
+      height:40px;
+      border:0.5px solid var(--m-border, #ddd8d1);
+      border-radius:999px;
+      background:var(--m-matte-deep, #f0ede8);
+      color:var(--m-ink, #2c2825);
+      cursor:pointer;
+      display:grid;
+      place-items:center;
+      flex-shrink:0;
+      padding:0;
+    }
+    .composer-input{
+      flex:1;
+      min-width:0;
+      border:0.5px solid var(--m-border, #ddd8d1);
+      border-radius:8px;
+      padding:12px;
+      font-size:15px;
+      font-family:inherit;
+      background:var(--m-surface, #fefdfb);
+      color:var(--m-ink, #2c2825);
+      min-height:44px;
+      max-height:120px;
+      line-height:1.35;
+      resize:none;
+      overflow-y:auto;
+      box-sizing:border-box;
+    }
+    .composer-send{
+      width:44px;
+      height:44px;
+      min-width:44px;
+      border:0;
+      border-radius:999px;
+      padding:0;
+      background:var(--m-ink, #2c2825);
+      color:var(--m-paper, #f8f6f2);
+      cursor:pointer;
+      display:grid;
+      place-items:center;
+      flex-shrink:0;
+    }
+    .composer-send:disabled{
+      background:var(--m-ink-muted, #948b82);
+      opacity:0.85;
+      cursor:not-allowed;
+    }
+    .send-busy{ font-size:16px; line-height:1; }
+    .composer-preview{
+      display:flex;
+      align-items:center;
+      gap:12px;
+      background:var(--m-canvas-muted, #f2f0ec);
+      border:0.5px solid var(--m-border, #ddd8d1);
+      border-radius:12px;
+      padding:8px;
+    }
+    .composer-preview img,
+    .composer-preview video{
+      width:120px;
+      height:80px;
+      object-fit:cover;
+      border-radius:10px;
+      background:#000;
+    }
+    .composer-clear{
+      border:0;
+      background:none;
+      color:var(--m-danger, #ea000b);
+      font-weight:650;
+      font-size:14px;
+      cursor:pointer;
+    }
+    .lightbox{
+      position:fixed;
+      inset:0;
+      background:rgba(5,10,18,0.7);
+      backdrop-filter:blur(6px);
+      display:grid;
+      place-items:center;
+      z-index:100;
+    }
+    .lightbox-card{
+      position:relative;
+      max-width:min(92vw, 780px);
+      max-height:80vh;
+      background:rgba(255,255,255,0.95);
+      border-radius:18px;
+      padding:12px;
+      box-shadow:0 20px 50px rgba(0,0,0,0.25);
+    }
+    .lightbox-frame{
+      position:relative;
+    }
+    .lightbox-card img{
+      width:100%;
+      height:auto;
+      max-height:70vh;
+      display:block;
+      border-radius:12px;
+    }
+    .lightbox-close{
+      position:absolute;
+      top:6px;
+      right:6px;
+      width:30px;
+      height:30px;
+      border-radius:50%;
+      border:1px solid rgba(7,20,40,0.2);
+      background:white;
+      cursor:pointer;
+      font-weight:800;
+    }
+    .call-overlay{
+      position:fixed;
+      inset:0;
+      z-index:120;
+      display:flex;
+      align-items:stretch;
+      justify-content:center;
+      background:var(--m-paper, #f8f6f2);
+      color:var(--m-ink, #2c2825);
+    }
+    .call-overlay.is-video{
+      background:#2c2825;
+      color:#f6f3ef;
+    }
+    .call-stage{
+      position:relative;
+      width:100%;
+      height:100%;
+      max-width:720px;
+      margin:0 auto;
+      display:flex;
+      flex-direction:column;
+      overflow:hidden;
+    }
+    .call-overlay.is-video .call-stage{ max-width:none; }
+    .call-remote{
+      position:absolute;
+      inset:0;
+      width:100%;
+      height:100%;
+      object-fit:cover;
+      background:#2c2825;
+      opacity:0;
+      transition:opacity 180ms ease;
+    }
+    .call-remote.has-stream{ opacity:1; }
+    .call-video-waiting{
+      position:absolute;
+      inset:0;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      gap:16px;
+      background:#2c2825;
+      z-index:1;
+      pointer-events:none;
+    }
+    .call-waiting-status{
+      font-size:14px;
+      font-weight:500;
+      color:rgba(246,243,239,0.85);
+    }
+    .call-local{
+      position:absolute;
+      top:calc(72px + env(safe-area-inset-top));
+      right:16px;
+      width:104px;
+      height:144px;
+      border-radius:12px;
+      border:0.5px solid rgba(246,243,239,0.35);
+      background:#000;
+      object-fit:cover;
+      z-index:3;
+      box-shadow:0 8px 24px rgba(0,0,0,0.35);
+    }
+    .call-local-off{
+      display:grid;
+      place-items:center;
+      background:rgba(44,40,37,0.92);
+      color:rgba(246,243,239,0.75);
+      font-size:11px;
+      font-weight:600;
+    }
+    .call-audio-layout{
+      flex:1;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      gap:12px;
+      padding:24px 28px calc(140px + env(safe-area-inset-bottom));
+      text-align:center;
+    }
+    .call-avatar{
+      border-radius:50%;
+      display:grid;
+      place-items:center;
+      overflow:hidden;
+      background:var(--m-canvas-muted, #f2f0ec);
+      border:0.5px solid var(--m-border, #ddd8d1);
+      transition: box-shadow 200ms ease, transform 200ms ease;
+    }
+    .call-overlay.is-video .call-avatar{
+      background:rgba(246,243,239,0.08);
+      border-color:rgba(246,243,239,0.35);
+    }
+    .call-avatar.lg{ width:112px; height:112px; }
+    .call-avatar.xl{ width:128px; height:128px; }
+    .call-avatar.speaking{
+      box-shadow:
+        0 0 0 6px rgba(0,176,80,0.14),
+        0 0 18px rgba(0,176,80,0.28);
+      transform:scale(1.03);
+    }
+    .call-avatar.ringing{
+      animation:callPulse 1.6s ease-in-out infinite;
+    }
+    @keyframes callPulse{
+      0%,100%{ box-shadow:0 0 0 0 rgba(44,40,37,0.12); }
+      50%{ box-shadow:0 0 0 10px rgba(44,40,37,0.06); }
+    }
+    .call-overlay.is-video .call-avatar.ringing{
+      animation:callPulseVideo 1.6s ease-in-out infinite;
+    }
+    @keyframes callPulseVideo{
+      0%,100%{ box-shadow:0 0 0 0 rgba(246,243,239,0.18); }
+      50%{ box-shadow:0 0 0 10px rgba(246,243,239,0.08); }
+    }
+    .call-avatar img{
+      width:100%;
+      height:100%;
+      object-fit:cover;
+    }
+    .call-avatar .initials{
+      font-size:36px;
+      font-weight:600;
+      color:var(--m-ink-secondary, #6b645d);
+      font-family:var(--m-serif, Georgia, serif);
+    }
+    .call-overlay.is-video .call-avatar .initials{ color:rgba(246,243,239,0.9); font-size:32px; }
+    .call-peer-name{
+      font-family:var(--m-serif, Georgia, 'Iowan Old Style', Palatino, serif);
+      font-size:22px;
+      font-weight:600;
+      color:var(--m-ink, #2c2825);
+      letter-spacing:-0.01em;
+    }
+    .call-peer-name.light{ color:#f6f3ef; font-size:17px; font-family:inherit; }
+    .call-status{
+      font-size:14px;
+      font-weight:500;
+      color:var(--m-ink-secondary, #6b645d);
+    }
+    .call-status.light{ color:rgba(246,243,239,0.75); }
+    .call-timer,
+    .call-timer-inline{
+      font-variant-numeric:tabular-nums;
+      font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size:13px;
+      font-weight:500;
+      color:var(--m-ink-muted, #948b82);
+      letter-spacing:0.04em;
+    }
+    .call-timer.light{ color:rgba(246,243,239,0.85); }
+    .call-top-chrome{
+      position:absolute;
+      top:0; left:0; right:0;
+      z-index:4;
+      display:flex;
+      align-items:flex-start;
+      gap:12px;
+      padding:calc(14px + env(safe-area-inset-top)) 22px 14px;
+      background:linear-gradient(180deg, rgba(44,40,37,0.72) 0%, rgba(44,40,37,0) 100%);
+    }
+    .call-top-meta{ flex:1; min-width:0; }
+    .call-banner{
+      position:absolute;
+      top:calc(64px + env(safe-area-inset-top));
+      left:16px; right:16px;
+      z-index:5;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      padding:10px 12px;
+      border-radius:10px;
+      background:rgba(44,40,37,0.88);
+      color:#f6f3ef;
+      font-size:13px;
+      font-weight:500;
+      box-shadow:0 8px 24px rgba(0,0,0,0.25);
+    }
+    .call-overlay.is-audio .call-banner{
+      top:calc(18px + env(safe-area-inset-top));
+      background:var(--m-surface, #fefdfb);
+      color:var(--m-ink, #2c2825);
+      border:0.5px solid var(--m-border, #ddd8d1);
+      box-shadow:0 8px 24px rgba(44,40,37,0.08);
+    }
+    .call-banner.danger{ color:var(--m-danger, #ea000b); }
+    .call-overlay.is-video .call-banner.danger{ color:#ff8a8f; }
+    .call-banner-actions{ display:flex; gap:8px; flex-shrink:0; }
+    .call-banner-btn{
+      border:0;
+      border-radius:8px;
+      padding:6px 10px;
+      background:rgba(246,243,239,0.14);
+      color:inherit;
+      font-size:12px;
+      font-weight:600;
+      cursor:pointer;
+    }
+    .call-overlay.is-audio .call-banner-btn{
+      background:var(--m-canvas-muted, #f2f0ec);
+      color:var(--m-ink, #2c2825);
+    }
+    .call-bottom-chrome{
+      position:absolute;
+      left:0; right:0; bottom:0;
+      z-index:4;
+      display:flex;
+      align-items:flex-start;
+      justify-content:center;
+      gap:16px;
+      flex-wrap:wrap;
+      padding:16px 22px calc(28px + env(safe-area-inset-bottom));
+      background:var(--m-surface, #fefdfb);
+      border-top:0.5px solid var(--m-border, #ddd8d1);
+    }
+    .call-overlay.is-video .call-bottom-chrome{
+      background:rgba(44,40,37,0.72);
+      border-top:0;
+    }
+    .call-overlay.is-incoming .call-bottom-chrome{ gap:40px; }
+    .call-round{
+      border:0;
+      background:transparent;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      gap:8px;
+      cursor:pointer;
+      color:var(--m-ink-secondary, #6b645d);
+      font-size:12px;
+      font-weight:500;
+      padding:0;
+      min-width:64px;
+    }
+    .call-overlay.is-video .call-round{ color:rgba(246,243,239,0.88); }
+    .call-round svg{
+      width:56px;
+      height:56px;
+      padding:15px;
+      box-sizing:border-box;
+      border-radius:50%;
+      background:var(--m-canvas-deep, #edeae5);
+      color:var(--m-ink, #2c2825);
+      border:0.5px solid var(--m-border, #ddd8d1);
+    }
+    .call-overlay.is-video .call-round svg{
+      background:rgba(246,243,239,0.18);
+      color:#f6f3ef;
+      border-color:transparent;
+    }
+    .call-round.accept svg{
+      width:68px;
+      height:68px;
+      padding:20px;
+      background:var(--m-ink, #2c2825);
+      color:var(--m-paper, #f8f6f2);
+      border-color:transparent;
+    }
+    .call-overlay.is-video .call-round.accept svg{
+      background:#f6f3ef;
+      color:#2c2825;
+    }
+    .call-round.end svg{
+      width:60px;
+      height:60px;
+      padding:16px;
+      background:var(--m-danger, #ea000b);
+      color:#fff;
+      border-color:transparent;
+    }
+    .call-overlay.is-incoming .call-round.end svg{
+      width:68px;
+      height:68px;
+      padding:20px;
+    }
+    .call-round:active{ opacity:0.85; transform:scale(0.97); }
+    .call-round[aria-pressed="true"] svg{
+      background:var(--m-ink, #2c2825);
+      color:var(--m-paper, #f8f6f2);
+      border-color:transparent;
+    }
+    .call-overlay.is-video .call-round[aria-pressed="true"] svg{
+      background:#f6f3ef;
+      color:#2c2825;
+    }
+    @media (min-width: 900px){
+      :host{ height:100svh; }
+      .wrap{
+        padding:0;
+        height:100%;
+        background:var(--m-paper, #f8f6f2);
+      }
+      .card{ height:100%; }
+      .layout{
+        grid-template-columns:minmax(320px, min(380px, 34vw)) minmax(0, 1fr);
+        max-width:none;
+        width:100%;
+        margin:0;
+        border:0;
+        background:var(--m-paper, #f8f6f2);
+        height:100%;
+      }
+      .panel{
+        border-right:0.5px solid var(--m-divider, #e2ded8);
+        background:var(--m-paper, #f8f6f2);
+        padding:0 0 12px;
+        gap:2px;
+        min-width:320px;
+      }
+      .thread{ background:var(--m-paper, #f8f6f2); min-height:0; }
+      .thread-header{
+        background:var(--m-canvas, #f8f6f2);
+        border-bottom:0.5px solid var(--m-divider, #e2ded8);
+        padding:8px 16px;
+        min-height:52px;
+      }
+      .message-list{ padding:16px 20px 20px; gap:12px; }
+      .bubble-col{ max-width:min(62%, 420px); }
+      .composer{ padding:12px 20px calc(12px + env(safe-area-inset-bottom)); }
+      /* Desktop: explicit Archive/Delete; swipe chrome unused */
+      .inbox-actions{ display:flex; }
+      .swipe-actions{ display:none !important; }
+      .conversation-block.swipe-open .conversation-slide{ transform:none !important; }
+    }
+    @media (max-width: 899px){
+      .wrap{ padding:0; }
+      .layout{
+        grid-template-columns:1fr;
+        height:100%;
+        gap:0;
+      }
+      .panel{
+        max-height:none;
+        overflow:auto;
+        border-right:0;
+      }
+      .layout.thread-only .panel{ display:none; }
+      .layout.thread-only{ height:100%; }
+      .thread{ min-height:0; height:100%; }
+      .messages, .message-list{ min-height:0; }
+      /* Mobile: swipe reveal; keep compact explicit buttons too */
+      .inbox-actions{ padding-top:2px; }
+    }
+    @media (max-width: 600px){
+      .wrap{ padding:0; }
+      .card{ padding:0; }
+      .bubble-col{ max-width:min(86%, 340px); }
+      .composer-send{
+        width:44px;
+        min-width:44px;
+        height:44px;
+      }
+      .call-card{
+        height:min(80svh, 600px);
+        max-height:calc(100svh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+      }
+      .call-local{
+        width:96px;
+        height:72px;
+      }
+      .thread-actions{
+        align-items:center;
+        gap:6px;
+      }
+      .thread-header{
+        flex-wrap:nowrap;
+        align-items:center;
+      }
+      .thread-meta{
+        min-width:0;
+      }
+      .thread-name{
+        font-size:14px;
+      }
+    }
+    `
+  ],
+})
+export class MessagesPageComponent implements OnInit, OnDestroy {
+  @ViewChild('mediaInput') mediaInput?: ElementRef<HTMLInputElement>;
+  @ViewChild('messageInput') messageInput?: ElementRef<HTMLTextAreaElement>;
+  @ViewChild('messageList') messageList?: ElementRef<HTMLDivElement>;
+  @ViewChild('remoteVideo') remoteVideo?: ElementRef<HTMLVideoElement>;
+  @ViewChild('localVideo') localVideo?: ElementRef<HTMLVideoElement>;
+  conversations: Conversation[] = [];
+  messages: Message[] = [];
+  activeConversation: Conversation | null = null;
+  activeConversationId: string | null = null;
+  /** iOS MessagesInboxFolder — Primary | Requests */
+  inboxFolder: 'primary' | 'requests' = 'primary';
+  requestBusyId: string | null = null;
+  inboxBusyId: string | null = null;
+  inboxFeedback = '';
+  private inboxFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Mobile swipe-reveal open conversation id (iOS swipeActions parity). */
+  swipeOpenId: string | null = null;
+  private swipeStartX = 0;
+  private swipeStartY = 0;
+  private swipeTracking = false;
+  private swipeMoved = false;
+  private readonly hiddenInboxKey = 'matterya.messages.inbox.hidden.v1';
+  loadingConversations = false;
+  loadingMessages = false;
+  conversationError = '';
+  messageError = '';
+  messageDraft = '';
+  messageBusy = false;
+  messageMediaFile: File | null = null;
+  messageMediaPreview = '';
+  messageMediaType: 'image' | 'video' | null = null;
+  messageMediaError = '';
+  replyingTo: Message | null = null;
+  lightboxUrl: string | null = null;
+  meId: string | null = null;
+  editingMessageId: string | null = null;
+  editingDraft = '';
+  editBusy = false;
+  private pendingConversation: Conversation | null = null;
+  private routeSub?: Subscription;
+  private pendingSub?: Subscription;
+  private callSignalSub?: Subscription;
+  private callConnectedSub?: Subscription;
+  private pollTimer: number | null = null;
+  mobileThreadOnly = false;
+  isNarrow = false;
+  unreadConversationIds = new Set<string>();
+  private messageNotifications: NotificationItem[] = [];
+  callActive = false;
+  callConnecting = false;
+  callIncoming = false;
+  callReconnecting = false;
+  callType: 'audio' | 'video' | null = null;
+  callConversationId: string | null = null;
+  callMuted = false;
+  callCameraOff = false;
+  callError = '';
+  private lastCallType: 'audio' | 'video' | null = null;
+  private lastCallConversationId: string | null = null;
+  private callFromId: string | null = null;
+  private incomingOffer:
+    | {
+        conversationId: string;
+        from: string;
+        callType: 'audio' | 'video';
+        callId?: string | null;
+        roomName?: string | null;
+      }
+    | null =
+      null;
+  private wsConnected = false;
+  private localStream?: MediaStream;
+  private remoteStream?: MediaStream;
+  private livekitRoom?: any;
+  private livekitLocalTracks: any[] = [];
+  private livekitLoadPromise: Promise<void> | null = null;
+  private livekitModule: any | null = null;
+  private pendingCallType: 'audio' | 'video' | null = null;
+  private pendingCallFrom: string | null = null;
+  private pendingCallConversationId: string | null = null;
+  private pendingCallId: string | null = null;
+  private pendingCallRoom: string | null = null;
+  private pendingCallAutoAccept = false;
+  private awaitingOffer = false;
+  private callSessionId: string | null = null;
+  private callRoomName: string | null = null;
+  private liveKitConnectGeneration = 0;
+  private readonly callLogPrefix = '__call__|';
+  private audioContext?: AudioContext;
+  private audioAnalyser?: AnalyserNode;
+  private audioData?: Uint8Array<ArrayBuffer>;
+  private speakingRafId: number | null = null;
+  callSpeaking = false;
+  callTimerSeconds = 0;
+  private callTimerId: number | null = null;
+  private callDisconnectTimer: number | null = null;
+  private callStartAt: number | null = null;
+  private callLogSent = false;
+  private destroyed = false;
+  private messagesLoadToken = 0;
+  private readonly REACTION_PREFIX = '__react__|';
+  private readonly REPLY_PREFIX = '__reply__|';
+  private reactionsByMessage = new Map<string, { count: number; likedByMe: boolean }>();
+
+  constructor(
+    private route: ActivatedRoute,
+    private router: Router,
+    private auth: AuthService,
+    private messagesService: MessagesService,
+    private mediaService: MediaService,
+    private notificationsService: NotificationsService,
+    private notificationsUi: NotificationsUiService,
+    private push: PushService,
+    private callService: CallService,
+    private zone: NgZone,
+    private cdr: ChangeDetectorRef,
+    private sanitizer: DomSanitizer
+  ) {}
+
+  async ngOnInit(): Promise<void> {
+    this.updateViewportFlag();
+    if (typeof window !== 'undefined') {
+      window.addEventListener('resize', this.onViewportResize);
+    }
+    void this.push.syncIfGranted();
+    const user = await this.auth.getUser();
+    this.meId = user?.id ?? null;
+    if (!this.meId) {
+      this.conversationError = 'Sign in to view messages.';
+      this.forceUi();
+      return;
+    }
+    this.forceUi();
+    this.wsConnected = this.callService.connected;
+    this.callSignalSub = this.callService.signals$.subscribe((msg) => {
+      void this.handleSignalMessage(msg);
+    });
+    this.callConnectedSub = this.callService.connected$.subscribe((connected) => {
+      this.wsConnected = connected;
+      this.forceUi();
+    });
+
+    const stashed = this.messagesService.getPendingConversation();
+    const navState = (this.router.getCurrentNavigation()?.extras.state ?? history.state) as
+      | { convo?: Conversation }
+      | null;
+    const pending = stashed ?? navState?.convo ?? null;
+    if (pending) {
+      this.pendingConversation = pending;
+      this.activeConversation = pending;
+      this.activeConversationId = pending.id;
+      this.upsertConversation(pending);
+      this.enterThreadView();
+      this.forceUi();
+      void this.loadMessages(pending.id, false);
+    }
+
+    this.routeSub = this.route.queryParamMap.subscribe((params) => {
+      const convoId = params.get('c');
+      const callParam = params.get('call');
+      const fromParam = params.get('from');
+      const callIdParam = params.get('callId');
+      const roomParam = params.get('room');
+      const acceptParam = params.get('accept');
+      if (convoId && callParam) {
+        this.pendingCallType = callParam === 'video' ? 'video' : 'audio';
+        this.pendingCallFrom = fromParam;
+        this.pendingCallConversationId = convoId;
+        this.pendingCallId = callIdParam;
+        this.pendingCallRoom = roomParam;
+        this.pendingCallAutoAccept = acceptParam === '1';
+      }
+      if (!convoId) return;
+      if (convoId !== this.activeConversationId) {
+        void this.activateConversationById(convoId).then(() => this.maybeShowCallFromParams());
+        return;
+      }
+      if (!this.messages.length) {
+        void this.loadMessages(convoId, false);
+      }
+      this.maybeShowCallFromParams();
+    });
+
+    this.pendingSub = this.messagesService.pendingConversation$.subscribe((convo) => {
+      if (!convo) return;
+      this.pendingConversation = convo;
+      this.activeConversation = convo;
+      this.activeConversationId = convo.id;
+      this.upsertConversation(convo);
+      this.enterThreadView();
+      this.forceUi();
+      void this.loadMessages(convo.id, false);
+    });
+
+    await this.loadConversations();
+    await this.refreshUnreadConversations();
+    this.startPolling();
+  }
+
+  ngOnDestroy(): void {
+    this.destroyed = true;
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('resize', this.onViewportResize);
+    }
+    this.routeSub?.unsubscribe();
+    this.pendingSub?.unsubscribe();
+    this.callSignalSub?.unsubscribe();
+    this.callConnectedSub?.unsubscribe();
+    if (this.pollTimer) {
+      window.clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+    if (this.inboxFeedbackTimer) {
+      clearTimeout(this.inboxFeedbackTimer);
+      this.inboxFeedbackTimer = null;
+    }
+    this.cleanupCall();
+    this.clearMedia();
+  }
+
+  private onViewportResize = (): void => {
+    this.updateViewportFlag();
+    this.forceUi();
+  };
+
+  setInboxFolder(folder: 'primary' | 'requests'): void {
+    if (this.inboxFolder === folder) return;
+    this.inboxFolder = folder;
+    this.conversations = [];
+    this.conversationError = '';
+    if (folder === 'requests') {
+      // Requests are list-only until accepted — clear thread selection on mobile.
+      this.activeConversation = null;
+      this.activeConversationId = null;
+      this.messages = [];
+      this.mobileThreadOnly = false;
+    }
+    this.forceUi();
+    void this.loadConversations();
+  }
+
+  async acceptRequest(convo: Conversation): Promise<void> {
+    if (!convo?.id || this.requestBusyId) return;
+    this.requestBusyId = convo.id;
+    this.forceUi();
+    try {
+      const accepted = await this.messagesService.acceptMessageRequest(convo.id);
+      this.conversations = this.conversations.filter((c) => c.id !== convo.id);
+      this.inboxFolder = 'primary';
+      this.upsertConversation(accepted);
+      this.activeConversation = accepted;
+      this.activeConversationId = accepted.id;
+      this.enterThreadView();
+      await this.loadConversations(accepted.id);
+      void this.loadMessages(accepted.id, false);
+    } catch (e: any) {
+      this.conversationError = e?.message ?? String(e);
+    } finally {
+      this.requestBusyId = null;
+      this.forceUi();
+    }
+  }
+
+  async declineRequest(convo: Conversation): Promise<void> {
+    if (!convo?.id || this.requestBusyId) return;
+    this.requestBusyId = convo.id;
+    this.conversations = this.conversations.filter((c) => c.id !== convo.id);
+    this.forceUi();
+    try {
+      await this.messagesService.declineMessageRequest(convo.id);
+      if (this.activeConversationId === convo.id) {
+        this.activeConversation = null;
+        this.activeConversationId = null;
+        this.messages = [];
+        this.mobileThreadOnly = false;
+      }
+    } catch (e: any) {
+      this.conversationError = e?.message ?? String(e);
+      await this.loadConversations();
+    } finally {
+      this.requestBusyId = null;
+      this.forceUi();
+    }
+  }
+
+  onConversationRowClick(convo: Conversation): void {
+    if (this.swipeMoved) {
+      this.swipeMoved = false;
+      return;
+    }
+    if (this.swipeOpenId && this.swipeOpenId !== convo.id) {
+      this.swipeOpenId = null;
+    } else if (this.swipeOpenId === convo.id) {
+      this.swipeOpenId = null;
+      this.forceUi();
+      return;
+    }
+    void this.selectConversation(convo, true);
+  }
+
+  onConvoTouchStart(ev: TouchEvent, convo: Conversation): void {
+    if (this.inboxFolder !== 'primary' && this.inboxFolder !== 'requests') return;
+    if (!ev.touches?.length) return;
+    this.swipeTracking = true;
+    this.swipeMoved = false;
+    this.swipeStartX = ev.touches[0].clientX;
+    this.swipeStartY = ev.touches[0].clientY;
+    if (this.swipeOpenId && this.swipeOpenId !== convo.id) {
+      this.swipeOpenId = null;
+    }
+  }
+
+  onConvoTouchMove(ev: TouchEvent, _convo: Conversation): void {
+    if (!this.swipeTracking || !ev.touches?.length) return;
+    const dx = ev.touches[0].clientX - this.swipeStartX;
+    const dy = ev.touches[0].clientY - this.swipeStartY;
+    if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+      this.swipeMoved = true;
+    }
+  }
+
+  onConvoTouchEnd(ev: TouchEvent, convo: Conversation): void {
+    if (!this.swipeTracking) return;
+    this.swipeTracking = false;
+    const touch = ev.changedTouches?.[0];
+    if (!touch) return;
+    const dx = touch.clientX - this.swipeStartX;
+    const dy = touch.clientY - this.swipeStartY;
+    if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy)) {
+      if (this.swipeOpenId === convo.id && Math.abs(dx) < 12) {
+        // tap while open — close without selecting
+        this.swipeOpenId = null;
+        this.swipeMoved = true;
+        this.forceUi();
+      }
+      return;
+    }
+    if (dx < -48) {
+      this.swipeOpenId = convo.id;
+      this.swipeMoved = true;
+    } else if (dx > 36 && this.swipeOpenId === convo.id) {
+      this.swipeOpenId = null;
+      this.swipeMoved = true;
+    }
+    this.forceUi();
+  }
+
+  onConvoTouchCancel(): void {
+    this.swipeTracking = false;
+  }
+
+  onSwipeDelete(convo: Conversation): void {
+    if (this.inboxFolder === 'requests') {
+      void this.declineRequest(convo);
+      return;
+    }
+    void this.deleteConversation(convo);
+  }
+
+  async archiveConversation(convo: Conversation): Promise<void> {
+    if (!convo?.id || this.inboxBusyId) return;
+    this.inboxBusyId = convo.id;
+    this.swipeOpenId = null;
+    this.removeConversationLocally(convo.id);
+    this.markInboxHidden(convo.id);
+    this.showInboxFeedback('Chat archived');
+    this.forceUi();
+    try {
+      await this.messagesService.archiveConversation(convo.id);
+      this.clearInboxHidden(convo.id);
+    } catch (e: any) {
+      // Keep locally hidden (iOS ConversationInboxStore.markArchived fallback).
+      this.conversationError = e?.message ?? String(e);
+    } finally {
+      this.inboxBusyId = null;
+      this.forceUi();
+    }
+  }
+
+  async deleteConversation(convo: Conversation): Promise<void> {
+    if (!convo?.id || this.inboxBusyId) return;
+    this.inboxBusyId = convo.id;
+    this.swipeOpenId = null;
+    this.removeConversationLocally(convo.id);
+    this.markInboxHidden(convo.id);
+    this.showInboxFeedback('Chat removed');
+    this.forceUi();
+    try {
+      await this.messagesService.deleteConversation(convo.id);
+      this.clearInboxHidden(convo.id);
+    } catch (e: any) {
+      this.conversationError = e?.message ?? String(e);
+    } finally {
+      this.inboxBusyId = null;
+      this.forceUi();
+    }
+  }
+
+  private removeConversationLocally(convoId: string): void {
+    this.conversations = this.conversations.filter((c) => c.id !== convoId);
+    if (this.activeConversationId === convoId) {
+      this.activeConversation = null;
+      this.activeConversationId = null;
+      this.messages = [];
+      this.mobileThreadOnly = false;
+    }
+    if (this.pendingConversation?.id === convoId) {
+      this.pendingConversation = null;
+      this.messagesService.clearPendingConversation();
+    }
+  }
+
+  private showInboxFeedback(text: string): void {
+    this.inboxFeedback = text;
+    if (this.inboxFeedbackTimer) clearTimeout(this.inboxFeedbackTimer);
+    this.inboxFeedbackTimer = setTimeout(() => {
+      this.inboxFeedback = '';
+      this.inboxFeedbackTimer = null;
+      this.forceUi();
+    }, 2200);
+  }
+
+  private readHiddenInboxIds(): Set<string> {
+    if (typeof window === 'undefined') return new Set();
+    try {
+      const raw = window.localStorage.getItem(this.hiddenInboxKey);
+      if (!raw) return new Set();
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return new Set();
+      return new Set(parsed.map((id) => String(id)).filter(Boolean));
+    } catch {
+      return new Set();
+    }
+  }
+
+  private writeHiddenInboxIds(ids: Set<string>): void {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(this.hiddenInboxKey, JSON.stringify([...ids]));
+    } catch {
+      // ignore quota
+    }
+  }
+
+  private markInboxHidden(convoId: string): void {
+    const ids = this.readHiddenInboxIds();
+    ids.add(convoId);
+    this.writeHiddenInboxIds(ids);
+  }
+
+  private clearInboxHidden(convoId: string): void {
+    const ids = this.readHiddenInboxIds();
+    if (!ids.delete(convoId)) return;
+    this.writeHiddenInboxIds(ids);
+  }
+
+  async loadConversations(selectId?: string | null, silent = false): Promise<void> {
+    if (!silent) {
+      this.loadingConversations = true;
+      this.conversationError = '';
+      this.forceUi();
+    }
+
+    try {
+      const inbox = this.inboxFolder === 'requests' ? 'requests' : 'primary';
+      const serverConvos = await this.messagesService.listConversations(40, inbox);
+      if (this.destroyed) return;
+      const hidden = this.readHiddenInboxIds();
+      const pending = this.pendingConversation;
+      const serverHasPending =
+        !!pending && serverConvos.some((item) => item.id === pending.id);
+      const merged = serverConvos.filter((c) => !hidden.has(c.id));
+      const seen = new Set(merged.map((item) => item.id));
+
+      // Only merge pending/active into Primary — Requests is a strict API folder.
+      if (inbox === 'primary') {
+        if (pending && !seen.has(pending.id) && !hidden.has(pending.id)) {
+          merged.unshift(pending);
+          seen.add(pending.id);
+        }
+
+        if (
+          this.activeConversation &&
+          !seen.has(this.activeConversation.id) &&
+          !hidden.has(this.activeConversation.id)
+        ) {
+          merged.unshift(this.activeConversation);
+          seen.add(this.activeConversation.id);
+        }
+      }
+
+      this.conversations = merged;
+
+      if (serverHasPending) {
+        this.pendingConversation = null;
+        this.messagesService.clearPendingConversation();
+      }
+      const targetId = selectId ?? this.activeConversationId;
+      if (targetId) {
+        let convo = this.conversations.find((item) => item.id === targetId) ?? null;
+        if (convo) {
+          this.activeConversation = convo;
+          this.activeConversationId = convo.id;
+        } else if (this.pendingConversation?.id === targetId) {
+          this.activeConversation = this.pendingConversation;
+          this.activeConversationId = targetId;
+        } else {
+          const fetched = await this.fetchConversationById(targetId);
+          if (fetched) {
+            this.upsertConversation(fetched);
+            this.activeConversation = fetched;
+            this.activeConversationId = fetched.id;
+            convo = fetched;
+          }
+        }
+      }
+      if (
+        this.activeConversationId &&
+        (!this.messages.length || this.messages[0]?.conversation_id !== this.activeConversationId)
+      ) {
+        void this.loadMessages(this.activeConversationId, true);
+      }
+    } catch (e: any) {
+      if (!silent) {
+        this.conversationError = e?.message ?? String(e);
+      } else {
+        console.warn('[messages] poll conversations failed', e);
+      }
+    } finally {
+      if (!silent) this.loadingConversations = false;
+      this.forceUi();
+    }
+  }
+
+  private startPolling(): void {
+    if (this.pollTimer) return;
+    this.pollTimer = window.setInterval(() => {
+      void this.loadConversations(undefined, true);
+      void this.refreshUnreadConversations();
+      if (this.activeConversationId && !this.messageBusy && !this.editBusy) {
+        void this.loadMessages(this.activeConversationId, true);
+      }
+    }, 6000);
+  }
+
+  get callUiOpen(): boolean {
+    return (
+      this.callActive ||
+      this.callConnecting ||
+      this.callIncoming ||
+      this.callReconnecting ||
+      !!this.callError
+    );
+  }
+
+  hasRemoteMedia(): boolean {
+    return !!(this.remoteStream && this.remoteStream.getTracks().length > 0);
+  }
+
+  canStartCall(): boolean {
+    return !!(
+      this.activeConversationId &&
+      this.wsConnected &&
+      !this.callActive &&
+      !this.callConnecting &&
+      !this.callIncoming
+    );
+  }
+
+  callPeer(): PostAuthor | null {
+    if (!this.activeConversation) return null;
+    if (this.callFromId) {
+      return (
+        this.activeConversation.members.find((member) => member.user_id === this.callFromId) ??
+        this.otherMember(this.activeConversation)
+      );
+    }
+    return this.otherMember(this.activeConversation);
+  }
+
+  callPeerAvatar(): string {
+    return this.callPeer()?.avatar_url ?? '';
+  }
+
+  callPeerName(): string {
+    const peer = this.callPeer();
+    return peer ? this.displayNameFor(peer) : 'Member';
+  }
+
+  callTitle(): string {
+    const kind = this.callType === 'video' ? 'Video call' : 'Voice call';
+    return `${this.callPeerName()} · ${kind}`;
+  }
+
+  callAriaLabel(): string {
+    return this.callTitle();
+  }
+
+  private isOutgoingCaller(): boolean {
+    return !!this.meId && this.callFromId === this.meId && !this.callIncoming;
+  }
+
+  callStatusText(): string {
+    if (this.callError) return this.callError;
+    if (this.callReconnecting) return 'Reconnecting…';
+    if (this.callIncoming) {
+      return this.callType === 'video' ? 'Incoming video call' : 'Incoming voice call';
+    }
+    if (this.callActive) return 'In call';
+    if (this.isOutgoingCaller()) {
+      if (this.callConnecting) return 'Calling…';
+      return 'Ringing…';
+    }
+    if (this.callConnecting) return 'Connecting…';
+    return 'Calling…';
+  }
+
+  canRetryCall(): boolean {
+    return !!(this.lastCallType && (this.lastCallConversationId || this.activeConversationId));
+  }
+
+  dismissCallError(): void {
+    this.callError = '';
+    this.callReconnecting = false;
+    if (!this.callActive && !this.callConnecting && !this.callIncoming) {
+      this.cleanupCall(true);
+    } else {
+      this.forceUi();
+    }
+  }
+
+  async retryLastCall(): Promise<void> {
+    const type = this.lastCallType;
+    const convoId = this.lastCallConversationId || this.activeConversationId;
+    this.callError = '';
+    this.callReconnecting = false;
+    if (!type || !convoId) {
+      this.cleanupCall(true);
+      return;
+    }
+    if (this.activeConversationId !== convoId) {
+      await this.activateConversationById(convoId);
+    }
+    await this.startCall(type);
+  }
+
+  callTimerLabel(): string {
+    if (!this.callStartAt) return '00:00';
+    return this.formatDuration(this.callTimerSeconds);
+  }
+
+  private markCallActive(): void {
+    if (!this.callStartAt) {
+      this.callStartAt = Date.now();
+    }
+    this.startCallTimer();
+  }
+
+  private getCallLogMeta(): {
+    conversationId: string | null;
+    kind: 'audio' | 'video' | null;
+    startedAt: number | null;
+  } {
+    return {
+      conversationId: this.callConversationId,
+      kind: this.callType,
+      startedAt: this.callStartAt,
+    };
+  }
+
+  private maybeShowCallFromParams(): void {
+    if (!this.pendingCallType || !this.pendingCallConversationId) return;
+    if (this.pendingCallConversationId !== this.activeConversationId) return;
+    if (this.callActive || this.callConnecting || this.callIncoming) return;
+    this.callType = this.pendingCallType;
+    this.callConversationId = this.pendingCallConversationId;
+    this.callFromId = this.pendingCallFrom;
+    this.callSessionId = this.pendingCallId;
+    this.callRoomName =
+      this.pendingCallRoom ||
+      (this.pendingCallId
+        ? `call_${this.pendingCallConversationId}_${this.pendingCallId}`
+        : this.pendingCallFrom
+          ? `call_${this.pendingCallConversationId}_${this.pendingCallFrom}`
+          : null);
+    this.callError = '';
+    const autoAccept = this.pendingCallAutoAccept;
+    this.pendingCallType = null;
+    this.pendingCallFrom = null;
+    this.pendingCallConversationId = null;
+    this.pendingCallId = null;
+    this.pendingCallRoom = null;
+    this.pendingCallAutoAccept = false;
+    this.clearCallParams();
+
+    if (autoAccept && this.callRoomName && this.callType) {
+      this.incomingOffer = {
+        conversationId: this.callConversationId,
+        from: this.callFromId || '',
+        callType: this.callType,
+        callId: this.callSessionId,
+        roomName: this.callRoomName,
+      };
+      void this.acceptCall();
+      return;
+    }
+
+    this.callIncoming = true;
+    this.callConnecting = false;
+    this.callActive = false;
+    this.forceUi();
+  }
+
+  private clearCallParams(): void {
+    void this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { call: null, from: null, callId: null, room: null, accept: null },
+      queryParamsHandling: 'merge',
+    });
+  }
+
+  private newCallSessionId(): string {
+    try {
+      return crypto.randomUUID();
+    } catch {
+      return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+  }
+
+  private resolveCallRoomName(offer: {
+    conversationId: string;
+    from: string;
+    callId?: string | null;
+    roomName?: string | null;
+  }): string {
+    const explicit =
+      typeof offer.roomName === 'string' ? offer.roomName.trim() : '';
+    if (explicit) return explicit;
+    if (this.callRoomName) return this.callRoomName;
+    if (offer.callId) return `call_${offer.conversationId}_${offer.callId}`;
+    // Prefer shared call session id over "from" so caller/callee join the same room.
+    if (this.callSessionId) return `call_${offer.conversationId}_${this.callSessionId}`;
+    return `call_${offer.conversationId}_${offer.from}`;
+  }
+
+  async startCall(type: 'audio' | 'video'): Promise<void> {
+    if (!this.activeConversationId) {
+      this.callError = 'Open a conversation first.';
+      this.forceUi();
+      return;
+    }
+    if (!this.wsConnected) {
+      this.callError = 'Connecting to call service… try again in a moment.';
+      this.forceUi();
+      this.callService.reconnect();
+      return;
+    }
+    if (!this.canStartCall()) return;
+    if (this.callActive || this.callConnecting || this.callIncoming) {
+      this.cleanupCall();
+    }
+    this.callType = type;
+    this.lastCallType = type;
+    this.callConversationId = this.activeConversationId;
+    this.lastCallConversationId = this.activeConversationId;
+    this.callSessionId = this.newCallSessionId();
+    this.callRoomName = `call_${this.callConversationId}_${this.callSessionId}`;
+    this.callConnecting = true;
+    this.callIncoming = false;
+    this.callActive = false;
+    this.callReconnecting = false;
+    this.callFromId = this.meId;
+    this.callError = '';
+    this.callStartAt = null;
+    this.callLogSent = false;
+    this.forceUi();
+    try {
+      // Announce first so the peer has roomName/callId before we finish joining.
+      this.sendSignal('call-offer', this.callConversationId, {
+        callType: type,
+        callId: this.callSessionId,
+        roomName: this.callRoomName,
+      });
+      await this.ensureLiveKitConnected(type, this.callRoomName);
+      this.callConnecting = true;
+      this.forceUi();
+    } catch (e: any) {
+      this.callError = e?.message ?? 'Call failed.';
+      this.callConnecting = false;
+      this.callActive = false;
+      this.forceUi();
+    }
+  }
+
+  async acceptCall(): Promise<void> {
+    if (!this.incomingOffer) {
+      const type = this.callType ?? 'audio';
+      if (this.callConversationId && this.activeConversationId !== this.callConversationId) {
+        await this.activateConversationById(this.callConversationId);
+      }
+      if (this.callConversationId) {
+        this.callConnecting = true;
+        this.callIncoming = false;
+        this.callActive = false;
+        this.callError = '';
+        this.callSessionId = null;
+        this.awaitingOffer = true;
+        this.sendSignal('call-accept', this.callConversationId, { callType: type, to: this.callFromId });
+      }
+      this.callService.clearIncomingCall();
+      this.forceUi();
+      return;
+    }
+    const offer = this.incomingOffer;
+    this.callConversationId = offer.conversationId;
+    this.lastCallConversationId = offer.conversationId;
+    this.callType = offer.callType;
+    this.lastCallType = offer.callType;
+    this.callFromId = offer.from;
+    this.callSessionId = offer.callId ?? this.callSessionId;
+    this.callIncoming = false;
+    this.callConnecting = true;
+    this.callActive = false;
+    this.callReconnecting = false;
+    this.callError = '';
+    this.callService.clearIncomingCall();
+    this.callStartAt = null;
+    this.callLogSent = false;
+    this.awaitingOffer = false;
+    this.forceUi();
+    try {
+      const roomName = this.resolveCallRoomName(offer);
+      this.callRoomName = roomName;
+      await this.ensureLiveKitConnected(offer.callType, roomName);
+      this.sendSignal('call-accept', offer.conversationId, {
+        callType: offer.callType,
+        roomName,
+      });
+      this.incomingOffer = null;
+    } catch (e: any) {
+      this.callError = e?.message ?? 'Call failed.';
+      this.callConnecting = false;
+      this.callActive = false;
+      this.forceUi();
+    }
+  }
+
+  declineCall(): void {
+    if (!this.incomingOffer) return;
+    this.sendSignal('call-decline', this.incomingOffer.conversationId);
+    this.callService.clearIncomingCall();
+    this.cleanupCall();
+  }
+
+  toggleMute(): void {
+    const next = !this.callMuted;
+    if (this.livekitRoom) {
+      void this.livekitRoom.localParticipant.setMicrophoneEnabled(!next);
+    } else if (this.localStream) {
+      this.localStream.getAudioTracks().forEach((track) => {
+        track.enabled = !next;
+      });
+    }
+    this.callMuted = next;
+    this.forceUi();
+  }
+
+  toggleCamera(): void {
+    const next = !this.callCameraOff;
+    if (this.livekitRoom) {
+      void this.livekitRoom.localParticipant.setCameraEnabled(!next);
+    } else if (this.localStream) {
+      this.localStream.getVideoTracks().forEach((track) => {
+        track.enabled = !next;
+      });
+    }
+    this.callCameraOff = next;
+    this.forceUi();
+  }
+
+  endCall(): void {
+    const meta = this.getCallLogMeta();
+    const status = this.callActive || this.callStartAt ? 'ended' : 'missed';
+    void this.sendCallLog(status, meta);
+    this.cleanupCall(true, true);
+  }
+
+  private async sendCallLog(
+    status: 'ended' | 'missed',
+    meta: { conversationId: string | null; kind: 'audio' | 'video' | null; startedAt: number | null }
+  ): Promise<void> {
+    if (this.callLogSent) return;
+    const conversationId = meta.conversationId;
+    if (!conversationId) return;
+    const kind: 'audio' | 'video' = meta.kind === 'video' ? 'video' : 'audio';
+    const durationSeconds = meta.startedAt ? Math.round((Date.now() - meta.startedAt) / 1000) : 0;
+    const body = this.buildCallLogBody(status, kind, durationSeconds);
+    try {
+      const sent = await this.messagesService.sendMessage(conversationId, body);
+      if (sent) {
+        this.messages = [...this.messages, sent];
+        this.bumpConversation(sent);
+        this.scrollToBottom();
+        this.forceUi();
+      }
+    } catch {}
+    this.callLogSent = true;
+  }
+
+  private sendSignal(type: string, conversationId: string | null, payload?: Record<string, any>): void {
+    this.callService.sendSignal(type, conversationId, {
+      from: this.meId,
+      ...(this.callSessionId ? { callId: this.callSessionId } : {}),
+      ...(payload ?? {}),
+    });
+  }
+
+  private async handleSignalMessage(msg: CallSignal): Promise<void> {
+    const type = String(msg?.type ?? '');
+    const conversationId = String(msg?.conversationId ?? '');
+    const from = String(msg?.from ?? '');
+    const msgCallId = typeof (msg as any)?.callId === 'string' ? String((msg as any).callId) : '';
+    const callIdMatches = this.callSessionId ? msgCallId === this.callSessionId : true;
+    if (!type || !conversationId || !from || from === this.meId) return;
+
+    if (type === 'call-offer') {
+      const expectingOffer = this.awaitingOffer && conversationId === this.callConversationId;
+      if (
+        !expectingOffer &&
+        (this.callActive ||
+          this.callIncoming ||
+          (this.callConnecting && this.callFromId && this.callFromId !== from))
+      ) {
+        this.sendSignal('call-busy', conversationId, { callId: msgCallId });
+        return;
+      }
+      if (!expectingOffer && this.callConnecting && this.callFromId === this.meId) {
+        this.cleanupCall(false);
+      }
+      const callType = msg.callType === 'video' ? 'video' : 'audio';
+      const callId = msgCallId || null;
+      if (callId) {
+        this.callSessionId = callId;
+      }
+      const roomName = this.resolveCallRoomName({
+        conversationId,
+        from,
+        callId,
+        roomName:
+          typeof (msg as any)?.roomName === 'string'
+            ? String((msg as any).roomName)
+            : null,
+      });
+      this.incomingOffer = { conversationId, from, callType, callId, roomName };
+      this.awaitingOffer = false;
+      if (this.callConnecting && (this.callFromId === from || expectingOffer)) {
+        this.callIncoming = false;
+        await this.acceptCall();
+        return;
+      }
+      this.callConversationId = conversationId;
+      this.lastCallConversationId = conversationId;
+      this.callType = callType;
+      this.lastCallType = callType;
+      this.callFromId = from;
+      this.callIncoming = true;
+      this.callConnecting = false;
+      this.callActive = false;
+      this.callReconnecting = false;
+      this.callStartAt = null;
+      this.callLogSent = false;
+      this.callService.clearIncomingCall();
+      this.forceUi();
+      if (conversationId !== this.activeConversationId) {
+        await this.activateConversationById(conversationId);
+      }
+      return;
+    }
+
+    if (type === 'call-accept') {
+      if (this.callFromId !== this.meId || !this.callConversationId) return;
+      if (conversationId !== this.callConversationId) return;
+      try {
+        const callType = msg.callType === 'video' ? 'video' : (this.callType ?? 'audio');
+        this.callType = callType;
+        const roomName = this.resolveCallRoomName({
+          conversationId,
+          from,
+          callId: msgCallId || this.callSessionId,
+          roomName:
+            typeof (msg as any)?.roomName === 'string'
+              ? String((msg as any).roomName)
+              : this.callRoomName,
+        });
+        this.callRoomName = roomName;
+        await this.ensureLiveKitConnected(callType, roomName);
+      } catch {}
+      return;
+    }
+
+    if (conversationId !== this.callConversationId) return;
+
+    if (type === 'call-decline' || type === 'call-busy') {
+      if (!callIdMatches) return;
+      if (this.callFromId === this.meId) {
+        void this.sendCallLog('missed', this.getCallLogMeta());
+      }
+      this.cleanupCall();
+      return;
+    }
+
+    if (type === 'call-end') {
+      if (!callIdMatches) return;
+      this.cleanupCall();
+    }
+  }
+
+    private async ensureLiveKitConnected(callType: 'audio' | 'video', roomName: string): Promise<void> {
+      if (this.livekitRoom && this.livekitRoom.name === roomName) return;
+      await this.disconnectLiveKit();
+      this.callMuted = false;
+      this.callCameraOff = callType !== 'video';
+
+      const urlBase = environment.livekitUrl;
+      if (!urlBase) {
+        throw new Error('Calling is unavailable in this build. Media credentials are not configured.');
+      }
+
+      await this.ensureLiveKitLoaded();
+      const LiveKit = this.livekitModule || (window as any).LiveKit;
+      if (!LiveKit) throw new Error('Call media failed to load. Check your connection and try again.');
+    const { Room, RoomEvent, createLocalTracks } = LiveKit;
+
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) {
+        await this.disconnectLiveKit();
+        await new Promise((resolve) => setTimeout(resolve, 600));
+      }
+
+      const tokenInfo = await this.fetchLiveKitToken(roomName, attempt);
+      const url = tokenInfo.url || urlBase;
+
+    const room = new Room({ adaptiveStream: true, dynacast: true });
+    this.livekitRoom = room;
+    this.remoteStream = new MediaStream();
+
+    room.on(RoomEvent.TrackSubscribed, (track: any) => {
+      const mediaTrack = (track as any)?.mediaStreamTrack as MediaStreamTrack | undefined;
+      if (!mediaTrack) return;
+      if (!this.remoteStream) this.remoteStream = new MediaStream();
+      if (!this.remoteStream.getTracks().some((t) => t.id === mediaTrack.id)) {
+        this.remoteStream.addTrack(mediaTrack);
+      }
+      this.attachRemoteStream();
+      if (!this.callActive) {
+        this.callActive = true;
+        this.callConnecting = false;
+        this.markCallActive();
+        this.clearDisconnectTimer();
+        this.forceUi();
+      }
+    });
+
+    room.on(RoomEvent.TrackUnsubscribed, (track: any) => {
+      const mediaTrack = (track as any)?.mediaStreamTrack as MediaStreamTrack | undefined;
+      if (!mediaTrack || !this.remoteStream) return;
+      this.remoteStream.removeTrack(mediaTrack);
+    });
+
+    room.on(RoomEvent.ParticipantConnected, () => {
+      if (!this.callActive) {
+        this.callActive = true;
+        this.callConnecting = false;
+        this.markCallActive();
+        this.clearDisconnectTimer();
+        this.forceUi();
+      }
+    });
+
+    room.on(RoomEvent.ParticipantDisconnected, () => {
+      if (this.callActive) {
+        this.startDisconnectTimer();
+      }
+    });
+
+    if (RoomEvent.Reconnecting) {
+      room.on(RoomEvent.Reconnecting, () => {
+        this.callReconnecting = true;
+        this.forceUi();
+      });
+    }
+    if (RoomEvent.Reconnected) {
+      room.on(RoomEvent.Reconnected, () => {
+        this.callReconnecting = false;
+        this.clearDisconnectTimer();
+        this.forceUi();
+      });
+    }
+
+    room.on(RoomEvent.Disconnected, () => {
+      if (!this.destroyed) {
+        this.callError = this.callError || 'Call disconnected.';
+        this.callReconnecting = false;
+        this.cleanupCall(false);
+        this.forceUi();
+      }
+    });
+
+    try {
+      await room.connect(url, tokenInfo.token);
+      this.callConnecting = true;
+      this.callReconnecting = false;
+      this.callError = '';
+
+      const tracks = await createLocalTracks({
+        audio: true,
+        video: callType === 'video',
+      });
+      this.livekitLocalTracks = tracks;
+      this.localStream = new MediaStream();
+      for (const track of tracks) {
+        const mediaTrack = (track as any)?.mediaStreamTrack as MediaStreamTrack | undefined;
+        if (mediaTrack) this.localStream.addTrack(mediaTrack);
+        await room.localParticipant.publishTrack(track);
+      }
+      this.startVoiceDetection();
+      this.forceUi();
+      requestAnimationFrame(() => {
+        this.attachLocalStream();
+      });
+      return;
+    } catch (e) {
+      lastError = e;
+      try {
+        room.removeAllListeners();
+        await room.disconnect();
+      } catch {}
+      this.livekitRoom = undefined;
+    }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error('Could not join call room.');
+  }
+
+  private liveKitConnectInstance(attempt: number): string {
+    this.liveKitConnectGeneration += 1;
+    const base = this.callSessionId ?? `${Date.now()}`;
+    return `${base}-${this.liveKitConnectGeneration}-${attempt}`;
+  }
+
+  private async fetchLiveKitToken(roomName: string, attempt = 0): Promise<{ token: string; url: string }> {
+    const token = await this.auth.getAccessToken();
+    if (!token) throw new Error('Missing auth token.');
+    const res = await fetch(`${environment.apiBaseUrl}/livekit/token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        room: roomName,
+        instance: this.liveKitConnectInstance(attempt),
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = typeof data?.error === 'string' ? data.error : 'LiveKit auth failed.';
+      throw new Error(msg);
+    }
+    const url = typeof data?.url === 'string' ? data.url : environment.livekitUrl;
+    const lkToken = typeof data?.token === 'string' ? data.token : '';
+    if (!lkToken) throw new Error('Missing LiveKit token.');
+    return { token: lkToken, url: url ?? '' };
+  } 
+
+  private async disconnectLiveKit(): Promise<void> {
+    if (this.livekitRoom) {
+      try {
+        this.livekitRoom.removeAllListeners();
+        await this.livekitRoom.disconnect(true);
+      } catch {}
+      this.livekitRoom = undefined;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    if (this.livekitLocalTracks.length) {
+      for (const track of this.livekitLocalTracks) {
+        try {
+          track.stop();
+        } catch {}
+      }
+      this.livekitLocalTracks = [];
+    }
+  }
+
+  private attachLocalStream(): void {
+    if (!this.localStream || this.callType !== 'video') return;
+    const video = this.localVideo?.nativeElement;
+    if (!video) return;
+    video.srcObject = this.localStream;
+    void video.play().catch(() => {});
+  }
+
+  private remoteAudio?: HTMLAudioElement;
+
+  private attachRemoteStream(): void {
+    if (!this.remoteStream) return;
+    if (this.callType === 'video') {
+      const video = this.remoteVideo?.nativeElement;
+      if (!video) return;
+      video.srcObject = this.remoteStream;
+      void video.play().catch(() => {});
+      return;
+    }
+    if (!this.remoteAudio) {
+      this.remoteAudio = new Audio();
+      this.remoteAudio.autoplay = true;
+    }
+    this.remoteAudio.srcObject = this.remoteStream as unknown as MediaStream;
+    void this.remoteAudio.play().catch(() => {});
+  }
+
+  private cleanupCall(resetError = true, notifyRemote = false): void {
+    if (notifyRemote && this.callConversationId) {
+      this.sendSignal('call-end', this.callConversationId);
+    }
+    if (resetError) this.callError = '';
+    this.callActive = false;
+    this.callConnecting = false;
+    this.callIncoming = false;
+    this.callReconnecting = false;
+    this.callType = null;
+    this.callConversationId = null;
+    this.callMuted = false;
+    this.callCameraOff = false;
+    this.callFromId = null;
+    this.incomingOffer = null;
+    this.callStartAt = null;
+    this.callLogSent = false;
+    this.callSpeaking = false;
+    this.callTimerSeconds = 0;
+    this.awaitingOffer = false;
+    this.callSessionId = null;
+    this.callRoomName = null;
+    this.liveKitConnectGeneration = 0;
+    this.stopCallTimer();
+    this.clearDisconnectTimer();
+    this.stopVoiceDetection();
+
+    void this.disconnectLiveKit();
+
+    if (this.localStream) {
+      this.localStream.getTracks().forEach((track) => track.stop());
+      this.localStream = undefined;
+    }
+    if (this.remoteStream) {
+      this.remoteStream.getTracks().forEach((track) => track.stop());
+      this.remoteStream = undefined;
+    }
+    if (this.localVideo?.nativeElement) {
+      this.localVideo.nativeElement.srcObject = null;
+    }
+    if (this.remoteVideo?.nativeElement) {
+      this.remoteVideo.nativeElement.srcObject = null;
+    }
+    if (this.remoteAudio) {
+      this.remoteAudio.srcObject = null;
+    }
+    this.forceUi();
+  }
+
+  private startCallTimer(): void {
+    if (this.callTimerId) return;
+    this.callTimerId = window.setInterval(() => {
+      if (!this.callStartAt) {
+        this.callTimerSeconds = 0;
+      } else {
+        this.callTimerSeconds = Math.max(0, Math.floor((Date.now() - this.callStartAt) / 1000));
+      }
+      this.forceUi();
+    }, 1000);
+  }
+
+  private stopCallTimer(): void {
+    if (!this.callTimerId) return;
+    window.clearInterval(this.callTimerId);
+    this.callTimerId = null;
+  }
+
+  private startDisconnectTimer(): void {
+    if (this.callDisconnectTimer) return;
+    this.callReconnecting = true;
+    this.forceUi();
+    this.callDisconnectTimer = window.setTimeout(() => {
+      this.callDisconnectTimer = null;
+      if (this.callActive || this.callConnecting) {
+        this.callError = 'Call disconnected.';
+        this.callReconnecting = false;
+        if (this.callConversationId) {
+          this.sendSignal('call-end', this.callConversationId);
+        }
+        this.cleanupCall(false);
+      } else {
+        this.callReconnecting = false;
+        this.forceUi();
+      }
+    }, 8000);
+  }
+
+  private clearDisconnectTimer(): void {
+    if (!this.callDisconnectTimer) return;
+    window.clearTimeout(this.callDisconnectTimer);
+    this.callDisconnectTimer = null;
+    if (this.callReconnecting && (this.callActive || this.callConnecting)) {
+      this.callReconnecting = false;
+      this.forceUi();
+    }
+  }
+
+  private startVoiceDetection(): void {
+    if (!this.localStream || this.audioContext) return;
+    const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    try {
+      this.audioContext = new AudioCtx();
+      const context = this.audioContext;
+      if (!context) return;
+      const source = context.createMediaStreamSource(this.localStream);
+      this.audioAnalyser = context.createAnalyser();
+      this.audioAnalyser.fftSize = 512;
+      source.connect(this.audioAnalyser);
+      this.audioData = new Uint8Array(this.audioAnalyser.fftSize);
+      void context.resume().catch(() => {});
+      const tick = () => {
+        if (!this.audioAnalyser || !this.audioData) return;
+        this.audioAnalyser.getByteTimeDomainData(this.audioData);
+        let sum = 0;
+        for (let i = 0; i < this.audioData.length; i += 1) {
+          const sample = (this.audioData[i] - 128) / 128;
+          sum += sample * sample;
+        }
+        const rms = Math.sqrt(sum / this.audioData.length);
+        const speaking = rms > 0.03;
+        if (speaking !== this.callSpeaking) {
+          this.callSpeaking = speaking;
+          this.forceUi();
+        }
+        this.speakingRafId = requestAnimationFrame(tick);
+      };
+      tick();
+    } catch {
+      this.stopVoiceDetection();
+    }
+  }
+
+  private stopVoiceDetection(): void {
+    if (this.speakingRafId) {
+      cancelAnimationFrame(this.speakingRafId);
+      this.speakingRafId = null;
+    }
+    if (this.audioAnalyser) {
+      try { this.audioAnalyser.disconnect(); } catch {}
+    }
+    this.audioAnalyser = undefined;
+    this.audioData = undefined;
+    if (this.audioContext) {
+      void this.audioContext.close().catch(() => {});
+      this.audioContext = undefined;
+    }
+  }
+
+  async selectConversation(convo: Conversation, syncUrl: boolean): Promise<void> {
+    const switching =
+      !!this.activeConversationId && this.activeConversationId !== convo.id;
+    this.activeConversation = convo;
+    this.activeConversationId = convo.id;
+    if (switching) {
+      this.messages = [];
+      this.messageError = '';
+      this.replyingTo = null;
+      this.cancelEditMessage();
+    }
+    this.enterThreadView();
+    this.forceUi();
+    if (syncUrl) {
+      void this.router.navigate([], {
+        relativeTo: this.route,
+        queryParams: { c: convo.id },
+        queryParamsHandling: 'merge',
+      });
+    }
+    await this.loadMessages(convo.id, false);
+    this.maybeShowCallFromParams();
+    this.scrollToBottom();
+    window.setTimeout(() => this.scrollToBottom(), 80);
+  }
+
+  private async activateConversationById(convoId: string): Promise<void> {
+    if (!convoId) return;
+    if (!this.conversations.length) {
+      await this.loadConversations(convoId);
+    }
+    const convo = this.conversations.find((item) => item.id === convoId) ?? null;
+    if (convo) {
+      await this.selectConversation(convo, false);
+      return;
+    }
+    if (this.pendingConversation?.id === convoId) {
+      await this.selectConversation(this.pendingConversation, false);
+      return;
+    }
+    const fetched = await this.fetchConversationById(convoId);
+    if (fetched) {
+      this.upsertConversation(fetched);
+      await this.selectConversation(fetched, false);
+      return;
+    }
+    if (this.activeConversationId !== convoId) {
+      this.messages = [];
+      this.messageError = '';
+      this.replyingTo = null;
+      this.cancelEditMessage();
+    }
+    this.activeConversationId = convoId;
+    this.enterThreadView();
+    this.forceUi();
+    await this.loadMessages(convoId, false);
+    this.scrollToBottom();
+    window.setTimeout(() => this.scrollToBottom(), 80);
+  }
+
+  private upsertConversation(convo: Conversation): void {
+    const existingIndex = this.conversations.findIndex((item) => item.id === convo.id);
+    if (existingIndex >= 0) return;
+    this.conversations = [convo, ...this.conversations];
+  }
+
+  private async fetchConversationById(convoId: string): Promise<Conversation | null> {
+    try {
+      return await this.messagesService.getConversationById(convoId);
+    } catch {
+      return null;
+    }
+  }
+
+  private async loadMessages(conversationId: string, silent: boolean): Promise<void> {
+    if (!conversationId) return;
+    const loadToken = ++this.messagesLoadToken;
+    if (!silent) {
+      this.loadingMessages = true;
+      this.messageError = '';
+      this.forceUi();
+    }
+    const prevLastId = this.messages[this.messages.length - 1]?.id ?? null;
+    let shouldScroll = false;
+    try {
+      const limit = silent ? 80 : 300;
+      const fetched = await this.messagesService.listMessages(conversationId, limit);
+      if (this.destroyed || loadToken !== this.messagesLoadToken) return;
+      if (this.activeConversationId !== conversationId) return;
+      if (silent) {
+        this.messages = this.mergeMessages(conversationId, this.messages, fetched, 200);
+      } else {
+        const pending = this.messages.filter(
+          (msg) =>
+            msg.conversation_id === conversationId && String(msg.id || '').startsWith('pending-')
+        );
+        this.messages = pending.length
+          ? this.mergeMessages(conversationId, pending, fetched, 300)
+          : fetched;
+      }
+      this.rebuildReactions();
+      const nextLastId = this.messages[this.messages.length - 1]?.id ?? null;
+      shouldScroll = nextLastId !== prevLastId || !silent;
+      if (!silent) {
+        await this.markConversationNotificationsRead(conversationId);
+      }
+    } catch (e: any) {
+      if (this.destroyed || loadToken !== this.messagesLoadToken) return;
+      if (this.activeConversationId !== conversationId) return;
+      if (!silent) {
+        this.messageError = e?.message ?? String(e);
+      } else {
+        console.warn('[messages] poll messages failed', e);
+      }
+    } finally {
+      if (!silent && loadToken === this.messagesLoadToken) {
+        this.loadingMessages = false;
+      }
+      this.forceUi();
+      if (shouldScroll && this.activeConversationId === conversationId) {
+        this.scrollToBottom();
+      }
+    }
+  }
+
+  async sendMessage(): Promise<void> {
+    if (!this.activeConversationId || this.messageBusy || !this.meId) return;
+    const conversationId = this.activeConversationId;
+    const draft = this.messageDraft.trim();
+    const mediaFile = this.messageMediaFile;
+    const mediaPreview = this.messageMediaPreview;
+    const mediaType = this.messageMediaType;
+    if (!draft && !mediaFile) return;
+
+    let body = draft;
+    if (this.replyingTo) {
+      body = this.buildReplyBody(this.replyingTo, body);
+    }
+
+    const pendingId = `pending-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const optimistic: Message = {
+      id: pendingId,
+      conversation_id: conversationId,
+      sender_id: this.meId,
+      body,
+      media_type: mediaType,
+      media_path: null,
+      media_url: mediaPreview || null,
+      media_name: mediaFile?.name ?? null,
+      media_mime: mediaFile?.type ?? null,
+      media_size: mediaFile?.size ?? null,
+      created_at: new Date().toISOString(),
+      sender: null,
+    };
+
+    this.messageBusy = true;
+    this.messageError = '';
+    this.messageMediaError = '';
+    this.messageDraft = '';
+    this.replyingTo = null;
+    this.messages = [...this.messages, optimistic];
+    this.bumpConversation(optimistic);
+    this.resetMessageInput();
+    // Keep local preview until upload finishes; clear file handle after queueing UI.
+    this.messageMediaFile = null;
+    this.forceUi();
+    this.scrollToBottom();
+
+    try {
+      let media:
+        | { type: string; path: string; name?: string | null; mime?: string | null; size?: number | null }
+        | undefined;
+      if (mediaFile) {
+        try {
+          const uploaded = await this.mediaService.uploadMessageMedia(mediaFile, conversationId);
+          const type = mediaFile.type.startsWith('video/') ? 'video' : 'image';
+          media = {
+            type,
+            path: uploaded.path,
+            name: uploaded.name,
+            mime: uploaded.mime,
+            size: uploaded.size,
+          };
+        } catch (uploadError: any) {
+          this.messages = this.messages.filter((msg) => msg.id !== pendingId);
+          this.messageDraft = draft;
+          this.messageMediaFile = mediaFile;
+          this.messageMediaType = mediaType;
+          this.messageMediaPreview = mediaPreview;
+          this.messageMediaError =
+            uploadError?.message ?? 'Upload failed. Check your bucket policy and file type.';
+          this.messageBusy = false;
+          this.forceUi();
+          return;
+        }
+      }
+
+      const sent = await this.messagesService.sendMessage(conversationId, body, media);
+      if (this.destroyed) return;
+      this.clearMedia();
+      if (this.activeConversationId === conversationId) {
+        const withoutPending = this.messages.filter((msg) => msg.id !== pendingId);
+        this.messages = this.mergeMessages(conversationId, withoutPending, [sent], 200);
+        this.bumpConversation(sent);
+        this.scrollToBottom();
+      }
+    } catch (e: any) {
+      this.messages = this.messages.filter((msg) => msg.id !== pendingId);
+      if (this.activeConversationId === conversationId) {
+        this.messageDraft = draft;
+        if (mediaFile) {
+          this.messageMediaFile = mediaFile;
+          this.messageMediaType = mediaType;
+          this.messageMediaPreview = mediaPreview;
+        }
+        this.messageError = e?.message ?? String(e);
+      }
+    } finally {
+      this.messageBusy = false;
+      this.forceUi();
+    }
+  }
+
+  canSendMessage(): boolean {
+    return !!(this.messageDraft.trim() || this.messageMediaFile);
+  }
+
+  onComposerEnter(event: Event): void {
+    const keyEvent = event as KeyboardEvent;
+    if (keyEvent.shiftKey) return;
+    keyEvent.preventDefault();
+    void this.sendMessage();
+  }
+
+  onMessageInput(event?: Event): void {
+    const input = (event?.target as HTMLTextAreaElement | undefined) ?? this.messageInput?.nativeElement;
+    if (!input) return;
+    input.style.height = 'auto';
+    const maxHeight = 160;
+    const minHeight = 32;
+    const next = Math.min(Math.max(input.scrollHeight, minHeight), maxHeight);
+    input.style.height = `${next}px`;
+    input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }
+
+  private scrollToBottom(retry = 0): void {
+    const list = this.messageList?.nativeElement;
+    if (!list) {
+      if (retry < 2) {
+        window.setTimeout(() => this.scrollToBottom(retry + 1), 60);
+      }
+      return;
+    }
+    const doScroll = () => {
+      list.scrollTop = list.scrollHeight;
+    };
+    requestAnimationFrame(() => {
+      doScroll();
+      requestAnimationFrame(doScroll);
+    });
+    if (retry === 0) {
+      window.setTimeout(doScroll, 0);
+    }
+  }
+
+  private mergeMessages(
+    conversationId: string,
+    existing: Message[],
+    incoming: Message[],
+    maxItems: number
+  ): Message[] {
+    const map = new Map<string, Message>();
+    for (const msg of existing) {
+      if (!msg?.id || msg.conversation_id !== conversationId) continue;
+      map.set(msg.id, msg);
+    }
+    for (const msg of incoming) {
+      if (!msg?.id || msg.conversation_id !== conversationId) continue;
+      map.set(msg.id, msg);
+    }
+    const merged = Array.from(map.values());
+    merged.sort((a, b) => this.messageEpoch(a.created_at) - this.messageEpoch(b.created_at));
+    if (merged.length <= maxItems) return merged;
+    const pending = merged.filter((msg) => String(msg.id || '').startsWith('pending-'));
+    const solid = merged.filter((msg) => !String(msg.id || '').startsWith('pending-'));
+    const keepSolid = Math.max(0, maxItems - pending.length);
+    return [...solid.slice(-keepSolid), ...pending];
+  }
+
+  private messageEpoch(value: string): number {
+    if (!value) return 0;
+    const asNumber = Number(value);
+    if (Number.isFinite(asNumber)) return asNumber;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  trackMessageById(index: number, message: Message): string | number {
+    return message?.id ?? index;
+  }
+
+  trackConversationById(index: number, convo: Conversation): string | number {
+    return convo?.id ?? index;
+  }
+
+  isPendingMessage(message: Message | null | undefined): boolean {
+    return !!message && String(message.id || '').startsWith('pending-');
+  }
+
+  triggerMediaPicker(): void {
+    this.mediaInput?.nativeElement.click();
+  }
+
+  onMediaSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0] ?? null;
+    if (!file) return;
+    const type = file.type || '';
+    const allowedImage = ['image/png', 'image/jpeg', 'image/webp'];
+    const allowedVideo = ['video/mp4', 'video/webm', 'video/quicktime'];
+    if (!allowedImage.includes(type) && !allowedVideo.includes(type)) {
+      this.messageMediaError = 'Only PNG/JPG/WebP images or MP4/WebM/MOV videos are supported.';
+      input.value = '';
+      this.forceUi();
+      return;
+    }
+    this.clearMedia();
+    this.messageMediaFile = file;
+    this.messageMediaType = type.startsWith('video/') ? 'video' : 'image';
+    this.messageMediaPreview = URL.createObjectURL(file);
+    this.messageMediaError = '';
+    input.value = '';
+    this.forceUi();
+  }
+
+  clearMedia(): void {
+    if (this.messageMediaPreview) {
+      try { URL.revokeObjectURL(this.messageMediaPreview); } catch {}
+    }
+    this.messageMediaFile = null;
+    this.messageMediaType = null;
+    this.messageMediaPreview = '';
+    this.messageMediaError = '';
+  }
+
+  openImageLightbox(url: string): void {
+    this.lightboxUrl = url;
+    this.forceUi();
+  }
+
+  closeImageLightbox(): void {
+    this.lightboxUrl = null;
+    this.forceUi();
+  }
+
+  messageText(message: Message): string {
+    const body = String(message?.body ?? '');
+    const trimmed = body.trim();
+    if (!trimmed) return '';
+    if (this.isReactionMessage(message)) return '';
+    const callLog = this.parseCallLog(trimmed);
+    if (callLog) return this.formatCallLog(callLog);
+    const reply = this.parseReply(trimmed);
+    if (reply) {
+      const cleaned = reply.body.trim();
+      if (cleaned) return cleaned;
+      return '';
+    }
+    if (message?.id && trimmed === message.id) return '';
+    if (this.looksLikeId(trimmed)) return '';
+    if (this.stripTrailingMeta(trimmed) !== trimmed) {
+      return this.stripTrailingMeta(trimmed);
+    }
+    return body;
+  }
+
+  /** Bubble body with `**bold**` rendered (HTML-escaped first). */
+  messageHtml(message: Message): SafeHtml | null {
+    const text = this.messageText(message);
+    if (!text) return null;
+    return this.sanitizer.bypassSecurityTrustHtml(formatInlineBold(text));
+  }
+
+  /** Inbox list preview — bold content without `**` markers. */
+  messagePreviewPlain(message: Message): string {
+    return stripInlineBold(this.messageText(message));
+  }
+
+  startReply(message: Message): void {
+    if (!message) return;
+    this.replyingTo = message;
+    this.forceUi();
+  }
+
+  cancelReply(): void {
+    this.replyingTo = null;
+    this.forceUi();
+  }
+
+  replyPreview(message: Message): { id: string; name: string; text: string } | null {
+    const parsed = this.parseReply(String(message?.body ?? ''));
+    if (!parsed) return null;
+    const target = this.messages.find((m) => m.id === parsed.targetId) ?? null;
+    const name = target ? this.displayNameFor(this.senderInfo(target)) : 'Message';
+    let text = parsed.text || (target ? this.messageText(target) : '');
+    if (!text && target?.media_type) {
+      text = target.media_type === 'video' ? 'Video' : 'Photo';
+    }
+    if (!text) return null;
+    return { id: parsed.targetId, name, text };
+  }
+
+  scrollToMessage(messageId: string): void {
+    if (!messageId) return;
+    const el = document.getElementById(`msg-${messageId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('message-highlight');
+      window.setTimeout(() => el.classList.remove('message-highlight'), 900);
+      return;
+    }
+    this.scrollToBottom();
+  }
+
+  replySnippet(message: Message | null): string {
+    if (!message) return '';
+    const text = this.messageText(message);
+    if (text) return text;
+    if (message.media_type === 'video') return 'Video';
+    if (message.media_type === 'image') return 'Photo';
+    return '';
+  }
+
+  isReactionMessage(message: Message): boolean {
+    return !!this.parseReaction(String(message?.body ?? ''));
+  }
+
+  messageLikeCount(message: Message): number {
+    const data = this.reactionsByMessage.get(message.id);
+    return data?.count ?? 0;
+  }
+
+  isMessageLikedByMe(message: Message): boolean {
+    const data = this.reactionsByMessage.get(message.id);
+    return !!data?.likedByMe;
+  }
+
+  async toggleMessageLike(message: Message): Promise<void> {
+    if (!this.activeConversationId || !message?.id) return;
+    const liked = this.isMessageLikedByMe(message);
+    const body = this.buildReactionBody(message.id, liked ? 0 : 1);
+    try {
+      const sent = await this.messagesService.sendMessage(this.activeConversationId, body);
+      this.messages = [...this.messages, sent];
+      this.bumpConversation(sent);
+      this.rebuildReactions();
+      this.forceUi();
+    } catch {}
+  }
+
+  isCallLogMessage(message: Message): boolean {
+    const body = String(message?.body ?? '').trim();
+    return body.includes(this.callLogPrefix) || !!this.parseCallLog(body);
+  }
+
+  private buildCallLogBody(
+    status: 'ended' | 'missed',
+    kind: 'audio' | 'video',
+    durationSeconds: number
+  ): string {
+    const duration = Math.max(0, Math.floor(durationSeconds));
+    return `${this.callLogPrefix}status=${status}|kind=${kind}|duration=${duration}`;
+  }
+
+  private parseCallLog(body: string): { status: string; kind: 'audio' | 'video'; duration: number } | null {
+    const cleaned = body.replace(/\uFEFF/g, '').trim();
+    const unquoted =
+      (cleaned.startsWith('"') && cleaned.endsWith('"')) || (cleaned.startsWith("'") && cleaned.endsWith("'"))
+        ? cleaned.slice(1, -1)
+        : cleaned;
+    const match = unquoted.match(/__call__\|status=([^|]+)\|kind=(audio|video)\|duration=([0-9]+)/i);
+    if (!match) return null;
+    const status = String(match[1] ?? '').trim().toLowerCase();
+    const kind = match[2] === 'video' ? 'video' : 'audio';
+    const duration = Number(match[3] ?? 0);
+    if (!status) return null;
+    return {
+      status,
+      kind,
+      duration: Number.isFinite(duration) ? duration : 0,
+    };
+  }
+
+  private buildReplyBody(target: Message, body: string): string {
+    const targetId = target?.id ?? '';
+    const text = this.messageText(target) || '';
+    const encoded = this.encodeBase64(text.slice(0, 160));
+    return `${this.REPLY_PREFIX}id=${targetId}|text=${encoded}||${body}`;
+  }
+
+  private parseReply(body: string): { targetId: string; text: string; body: string } | null {
+    const trimmed = String(body ?? '').trim();
+    if (!trimmed.startsWith(this.REPLY_PREFIX)) return null;
+    const parts = trimmed.split('||');
+    const meta = parts[0] ?? '';
+    const rest = parts.slice(1).join('||');
+    const idMatch = meta.match(/id=([^|]+)/i);
+    const textMatch = meta.match(/text=([^|]+)/i);
+    const targetId = idMatch ? String(idMatch[1]) : '';
+    const text = textMatch ? this.decodeBase64(String(textMatch[1])) : '';
+    return { targetId, text, body: rest };
+  }
+
+  private buildReactionBody(targetId: string, state: 0 | 1): string {
+    return `${this.REACTION_PREFIX}target=${targetId}|emoji=❤|state=${state}`;
+  }
+
+  private parseReaction(body: string): { targetId: string; emoji: string; state: number } | null {
+    const trimmed = String(body ?? '').trim();
+    if (!trimmed.startsWith(this.REACTION_PREFIX)) return null;
+    const targetMatch = trimmed.match(/target=([^|]+)/i);
+    const emojiMatch = trimmed.match(/emoji=([^|]+)/i);
+    const stateMatch = trimmed.match(/state=([01])/i);
+    if (!targetMatch) return null;
+    return {
+      targetId: String(targetMatch[1]),
+      emoji: emojiMatch ? String(emojiMatch[1]) : '❤',
+      state: stateMatch ? Number(stateMatch[1]) : 1,
+    };
+  }
+
+  private rebuildReactions(): void {
+    const perMessage = new Map<string, Map<string, number>>();
+    for (const msg of this.messages) {
+      const reaction = this.parseReaction(msg.body);
+      if (!reaction) continue;
+      const targetId = reaction.targetId;
+      const senderId = msg.sender_id || '';
+      if (!targetId || !senderId) continue;
+      if (!perMessage.has(targetId)) perMessage.set(targetId, new Map());
+      perMessage.get(targetId)!.set(senderId, reaction.state);
+    }
+    const summary = new Map<string, { count: number; likedByMe: boolean }>();
+    for (const [targetId, states] of perMessage.entries()) {
+      let count = 0;
+      let likedByMe = false;
+      for (const [userId, state] of states.entries()) {
+        if (state === 1) count += 1;
+        if (userId === this.meId && state === 1) likedByMe = true;
+      }
+      summary.set(targetId, { count, likedByMe });
+    }
+    this.reactionsByMessage = summary;
+  }
+
+  private encodeBase64(value: string): string {
+    try {
+      return btoa(unescape(encodeURIComponent(value)));
+    } catch {
+      return '';
+    }
+  }
+
+  private decodeBase64(value: string): string {
+    try {
+      return decodeURIComponent(escape(atob(value)));
+    } catch {
+      return '';
+    }
+  }
+
+  private formatCallLog(log: { status: string; kind: 'audio' | 'video'; duration: number }): string {
+    const kindLabel = log.kind === 'video' ? 'Video call' : 'Voice call';
+    let label = '';
+    if (log.status === 'ended') {
+      label = `${kindLabel} ended`;
+      if (log.duration > 0) {
+        label += ` (${this.formatDuration(log.duration)})`;
+      }
+      return label;
+    }
+    if (log.status === 'missed') {
+      return `Missed ${kindLabel}`;
+    }
+    if (log.status === 'busy') {
+      return `Missed ${kindLabel}`;
+    }
+    if (log.status === 'declined') {
+      return `${kindLabel} declined`;
+    }
+    return `${kindLabel} call`;
+  }
+
+  private formatDuration(totalSeconds: number): string {
+    const seconds = Math.max(0, Math.floor(totalSeconds));
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    if (hours > 0) {
+      return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
+    return `${minutes}:${String(secs).padStart(2, '0')}`;
+  }
+
+  private stripTrailingMeta(value: string): string {
+    const parts = value.split(/\s+/).filter(Boolean);
+    if (parts.length < 2) return value;
+    const last = parts[parts.length - 1];
+    if (this.looksLikeId(last)) {
+      return parts.slice(0, -1).join(' ');
+    }
+    return value;
+  }
+
+  private resetMessageInput(): void {
+    const input = this.messageInput?.nativeElement;
+    if (!input) return;
+    const minHeight = 32;
+    input.style.height = `${minHeight}px`;
+    input.style.overflowY = 'hidden';
+  }
+
+  conversationSnippet(convo: Conversation): string {
+    const last = convo.last_message;
+    if (!last) return 'Start a conversation';
+    const body = String(last.body || '').trim();
+    const reaction = this.parseReaction(body);
+    if (reaction) return 'Liked a message';
+    const callLog = this.parseCallLog(body);
+    if (callLog) return this.formatCallLog(callLog);
+    const reply = this.parseReply(body);
+    if (reply) {
+      const cleaned = reply.body.trim();
+      if (cleaned) return stripInlineBold(cleaned);
+    }
+    if (body && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body)) {
+      return stripInlineBold(body);
+    }
+    if (last.media_type === 'video') return 'Video';
+    if (last.media_type === 'image') return 'Photo';
+    return 'Media message';
+  }
+
+  private bumpConversation(sent: Message): void {
+    const convoId = sent.conversation_id;
+    const idx = this.conversations.findIndex((c) => c.id === convoId);
+    if (idx < 0) return;
+    const updated = {
+      ...this.conversations[idx],
+      last_message: sent,
+      last_message_at: sent.created_at,
+    };
+    const next = [...this.conversations];
+    next.splice(idx, 1);
+    this.conversations = [updated, ...next];
+    this.activeConversation = updated;
+    this.forceUi();
+  }
+
+  otherMember(convo: Conversation | null): PostAuthor | null {
+    if (!convo) return null;
+    if (!this.meId) return convo.members[0] ?? null;
+    return convo.members.find((member) => member.user_id !== this.meId) ?? convo.members[0] ?? null;
+  }
+
+  displayNameFor(user: PostAuthor | null | undefined): string {
+    if (!user) return 'Conversation';
+    const display =
+      this.cleanDisplayValue(user.display_name) || this.cleanDisplayValue(user.username);
+    return display || 'Member';
+  }
+
+  displayHandleFor(user: PostAuthor | null | undefined): string {
+    const handle = this.cleanDisplayValue(user?.username);
+    if (!handle) return '';
+    return `@${handle}`;
+  }
+
+  isConversationUnread(convo: Conversation): boolean {
+    return this.unreadConversationIds.has(convo.id);
+  }
+
+  get messagesBadgeCount(): number {
+    return this.unreadConversationIds.size;
+  }
+
+  private async refreshUnreadConversations(): Promise<void> {
+    if (!this.meId) {
+      this.messageNotifications = [];
+      this.unreadConversationIds.clear();
+      this.forceUi();
+      return;
+    }
+
+    try {
+      const { notifications } = await this.notificationsService.list(80);
+      const unread = (notifications ?? []).filter(
+        (notif) =>
+          !notif.read_at &&
+          this.isMessageNotification(notif) &&
+          typeof notif.entity_id === 'string'
+      );
+      this.messageNotifications = unread;
+      this.unreadConversationIds = new Set(unread.map((notif) => String(notif.entity_id)));
+    } catch {}
+
+    this.forceUi();
+  }
+
+  private async markConversationNotificationsRead(convoId: string): Promise<void> {
+    if (!convoId || !this.messageNotifications.length) {
+      this.unreadConversationIds.delete(convoId);
+      return;
+    }
+    const pending = this.messageNotifications.filter((notif) => notif.entity_id === convoId);
+    if (!pending.length) {
+      this.unreadConversationIds.delete(convoId);
+      this.forceUi();
+      return;
+    }
+    try {
+      await Promise.all(pending.map((notif) => this.notificationsService.markRead(notif.id)));
+    } catch {}
+    this.messageNotifications = this.messageNotifications.filter(
+      (notif) => notif.entity_id !== convoId
+    );
+    this.unreadConversationIds.delete(convoId);
+    this.forceUi();
+  }
+
+  private isMessageNotification(notif: NotificationItem): boolean {
+    return String(notif?.type ?? '').toLowerCase() === 'message';
+  }
+
+  senderInfo(message: Message): PostAuthor | null {
+    if (message.sender) return message.sender;
+    const convo = this.activeConversation;
+    if (!convo) return null;
+    return convo.members.find((member) => member.user_id === message.sender_id) ?? null;
+  }
+
+  senderAvatarUrl(message: Message): string {
+    return this.senderInfo(message)?.avatar_url ?? '';
+  }
+
+  private cleanDisplayValue(value?: string | null): string {
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed) return '';
+    if (this.looksLikeId(trimmed)) return '';
+    return trimmed;
+  }
+
+  private looksLikeId(value: string): boolean {
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+      return true;
+    }
+    if (/^\d{8,}$/.test(value)) {
+      return true;
+    }
+    return false;
+  }
+
+  initialsFor(user: PostAuthor | null | undefined): string {
+    const name = this.displayNameFor(user);
+    const parts = name.split(/\s+/).filter(Boolean);
+    const a = parts[0]?.[0] ?? 'M';
+    const b = parts.length > 1 ? parts[parts.length - 1]?.[0] ?? '' : '';
+    return (a + b).toUpperCase();
+  }
+
+  formatTime(value?: string | null): string {
+    if (!value) return '';
+    const raw = String(value).trim();
+    const parsed = this.parseTimestamp(raw);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return parsed.toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
+  formatTimestamp(value: string): string {
+    const raw = String(value ?? '').trim();
+    const parsed = this.parseTimestamp(raw);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return parsed.toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
+  formatDayLabel(value: string): string {
+    const parsed = this.parseTimestamp(String(value ?? '').trim());
+    if (Number.isNaN(parsed.getTime())) return String(value ?? '');
+    const now = new Date();
+    const sameYear = parsed.getFullYear() === now.getFullYear();
+    const sameDay =
+      parsed.getFullYear() === now.getFullYear() &&
+      parsed.getMonth() === now.getMonth() &&
+      parsed.getDate() === now.getDate();
+    if (sameDay) return 'Today';
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    const isYesterday =
+      parsed.getFullYear() === yesterday.getFullYear() &&
+      parsed.getMonth() === yesterday.getMonth() &&
+      parsed.getDate() === yesterday.getDate();
+    if (isYesterday) return 'Yesterday';
+    return parsed.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      ...(sameYear ? {} : { year: 'numeric' }),
+    });
+  }
+
+  showDaySeparator(index: number): boolean {
+    if (!this.messages.length || index < 0) return false;
+    if (index === 0) return true;
+    const current = this.dayKey(this.messages[index]?.created_at);
+    const previous = this.dayKey(this.messages[index - 1]?.created_at);
+    return current !== previous;
+  }
+
+  showDaySeparatorVisible(index: number): boolean {
+    if (!this.messages.length || index < 0) return false;
+    const currentMsg = this.messages[index];
+    if (!currentMsg || this.isReactionMessage(currentMsg)) return false;
+    let prevIdx = index - 1;
+    while (prevIdx >= 0) {
+      const prevMsg = this.messages[prevIdx];
+      if (prevMsg && !this.isReactionMessage(prevMsg)) {
+        const current = this.dayKey(currentMsg.created_at);
+        const previous = this.dayKey(prevMsg.created_at);
+        return current !== previous;
+      }
+      prevIdx -= 1;
+    }
+    return true;
+  }
+
+  messageStatus(message: Message): 'sent' | 'read' | null {
+    if (!this.meId || message.sender_id !== this.meId) return null;
+    const other = this.otherMember(this.activeConversation);
+    if (!other) return 'sent';
+    const lastRead = other.last_read_at ? this.parseTimestamp(other.last_read_at).getTime() : 0;
+    const created = this.parseTimestamp(message.created_at).getTime();
+    if (lastRead && created && lastRead >= created) return 'read';
+    return 'sent';
+  }
+
+  statusGlyph(status: 'sent' | 'read'): string {
+    return status === 'read' ? '&#10003;&#10003;' : '&#10003;';
+  }
+
+  isEdited(message: Message): boolean {
+    if (!message?.updated_at) return false;
+    const created = this.parseTimestamp(message.created_at).getTime();
+    const updated = this.parseTimestamp(message.updated_at).getTime();
+    if (!created || !updated) return false;
+    return updated > created + 1000;
+  }
+
+  isEditing(message: Message): boolean {
+    return !!message && this.editingMessageId === message.id;
+  }
+
+  startEditMessage(message: Message): void {
+    if (!this.meId || message.sender_id !== this.meId) return;
+    if (this.isPendingMessage(message) || this.isCallLogMessage(message)) return;
+    const body = String(message.body ?? '').trim();
+    if (!body) return;
+    this.editingMessageId = message.id;
+    this.editingDraft = body;
+    this.forceUi();
+  }
+
+  cancelEditMessage(): void {
+    this.editingMessageId = null;
+    this.editingDraft = '';
+    this.editBusy = false;
+    this.forceUi();
+  }
+
+  async saveEditMessage(message: Message): Promise<void> {
+    if (!this.editingMessageId || this.editBusy) return;
+    if (!this.meId || message.sender_id !== this.meId) return;
+    const body = this.editingDraft.trim();
+    if (!body) return;
+    this.editBusy = true;
+    this.messageError = '';
+    this.forceUi();
+    try {
+      const updated = await this.messagesService.updateMessage(message.id, body);
+      this.messages = this.messages.map((item) => (item.id === message.id ? updated : item));
+      this.editingMessageId = null;
+      this.editingDraft = '';
+      this.bumpConversation(updated);
+      await this.loadConversations(this.activeConversationId);
+    } catch (e: any) {
+      this.messageError = e?.message ?? String(e);
+    } finally {
+      this.editBusy = false;
+      this.forceUi();
+    }
+  }
+
+  async deleteMessage(message: Message): Promise<void> {
+    if (!this.meId || message.sender_id !== this.meId) return;
+    if (this.isPendingMessage(message)) return;
+    const confirmed = typeof window !== 'undefined' ? window.confirm('Delete this message?') : true;
+    if (!confirmed) return;
+    this.messageError = '';
+    this.forceUi();
+    try {
+      const deleted = await this.messagesService.deleteMessage(message.id);
+      if (!deleted) return;
+      this.messages = this.messages.filter((item) => item.id !== message.id);
+      await this.loadConversations(this.activeConversationId);
+    } catch (e: any) {
+      this.messageError = e?.message ?? String(e);
+    } finally {
+      this.forceUi();
+    }
+  }
+
+  private parseTimestamp(value: string): Date {
+    if (!value) return new Date('');
+    if (/^\d{10,}$/.test(value)) {
+      const numeric = Number(value);
+      const ms = value.length === 10 ? numeric * 1000 : numeric;
+      return new Date(ms);
+    }
+    return new Date(value);
+  }
+
+  private dayKey(value?: string | null): string {
+    const parsed = this.parseTimestamp(String(value ?? '').trim());
+    if (Number.isNaN(parsed.getTime())) return '';
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, '0');
+    const day = String(parsed.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  private enterThreadView(): void {
+    if (typeof window === 'undefined') return;
+    // Only stack list/thread below 900px. Desktop (≥900) keeps both panes.
+    this.mobileThreadOnly = window.innerWidth < 900;
+    this.updateViewportFlag();
+    this.forceUi();
+  }
+
+  showConversationList(): void {
+    this.mobileThreadOnly = false;
+    this.updateViewportFlag();
+    this.forceUi();
+  }
+
+  private updateViewportFlag(): void {
+    if (typeof window === 'undefined') return;
+    const narrow = window.innerWidth < 900;
+    this.isNarrow = narrow;
+    // Leaving phone width → always show list again (side-by-side)
+    if (!narrow) {
+      this.mobileThreadOnly = false;
+    }
+  }
+
+  private ensureLiveKitLoaded(): Promise<void> {
+    if (this.livekitModule || (window as any).LiveKit || (window as any).livekit) {
+      this.livekitModule = this.livekitModule || (window as any).LiveKit || (window as any).livekit;
+      return Promise.resolve();
+    }
+    if (this.livekitLoadPromise) return this.livekitLoadPromise;
+
+    this.livekitLoadPromise = (async () => {
+      try {
+        const mod = await import('livekit-client');
+        this.livekitModule = mod;
+        (window as any).LiveKit = mod;
+        return;
+      } catch {}
+
+      return new Promise<void>((resolve, reject) => {
+        const existing = document.querySelector('script[data-livekit]') as HTMLScriptElement | null;
+        const pickGlobal = () =>
+          (window as any).LiveKit || (window as any).livekit || (window as any).Livekit;
+        if (existing) {
+          const global = pickGlobal();
+          if (global) {
+            this.livekitModule = global;
+            resolve();
+            return;
+          }
+        }
+
+        const script = document.createElement('script');
+        script.src = 'https://unpkg.com/livekit-client@2.17.1/dist/livekit-client.umd.min.js';
+        script.async = true;
+        script.defer = true;
+        script.dataset['livekit'] = '1';
+        script.onload = () => {
+          const global = pickGlobal();
+          if (global) {
+            this.livekitModule = global;
+            resolve();
+            return;
+          }
+          reject(new Error('LiveKit not loaded.'));
+        };
+        script.onerror = () => {
+          const fallback = document.createElement('script');
+          fallback.src =
+            'https://cdn.jsdelivr.net/npm/livekit-client@2.17.1/dist/livekit-client.umd.min.js';
+          fallback.async = true;
+          fallback.defer = true;
+          fallback.dataset['livekit'] = '1-fallback';
+          fallback.onload = () => {
+            const global = pickGlobal();
+            if (global) {
+              this.livekitModule = global;
+              resolve();
+              return;
+            }
+            reject(new Error('LiveKit not loaded.'));
+          };
+          fallback.onerror = () => reject(new Error('LiveKit not loaded.'));
+          document.head.appendChild(fallback);
+        };
+        document.head.appendChild(script);
+      });
+    })();
+
+    return this.livekitLoadPromise;
+  }
+
+  private forceUi(): void {
+    this.zone.run(() => this.cdr.detectChanges());
+  }
+
+  goBack(): void {
+    void this.router.navigate(['/anonymous']);
+  }
+
+  /** iOS MessagesView compose → People */
+  goPeople(): void {
+    void this.router.navigate(['/people']);
+  }
+
+  goHome(): void {
+    void this.router.navigate(['/anonymous']);
+  }
+
+  /**
+   * iOS: show the word “Read” only under the latest of my messages
+   * the peer has read — no tick glyphs.
+   */
+  isLastReadOwn(message: Message): boolean {
+    if (!this.meId || message.sender_id !== this.meId) return false;
+    if (this.isCallLogMessage(message)) return false;
+    if (String(message.id || '').startsWith('pending-')) return false;
+    const other = this.otherMember(this.activeConversation);
+    const lastRead = other?.last_read_at
+      ? this.parseTimestamp(other.last_read_at).getTime()
+      : 0;
+    if (!lastRead) return false;
+    const created = this.parseTimestamp(message.created_at).getTime();
+    if (!created || lastRead + 2000 < created) return false;
+
+    let lastId: string | null = null;
+    for (const m of this.messages) {
+      if (this.isReactionMessage(m) || this.isCallLogMessage(m)) continue;
+      if (m.sender_id !== this.meId) continue;
+      if (String(m.id || '').startsWith('pending-')) continue;
+      const t = this.parseTimestamp(m.created_at).getTime();
+      if (t && lastRead + 2000 >= t) lastId = m.id;
+    }
+    return lastId === message.id;
+  }
+
+  openNotifications(): void {
+    this.notificationsUi.open();
+  }
+
+  openSearch(): void {
+    void this.router.navigate(['/search']);
+  }
+}

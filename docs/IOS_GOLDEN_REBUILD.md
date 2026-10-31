@@ -37,12 +37,12 @@
 ## File inventory
 See `docs/ios-golden-file-inventory.txt` (~194 Swift files).
 
-## Status
-- [ ] Wipe old clients
-- [ ] Scaffold empty Angular + Compose shells
-- [ ] Theme + Copy
-- [ ] Surfaces (checklist above)
-- [ ] QA vs iOS
+## Status (live)
+- [x] Wipe old clients (commit 80c48b3e)
+- [x] Scaffold / restore Compose + Angular trees as infrastructure base
+- [x] Theme + MatteryaCopy from iOS (accent=ink, never brown/gold; UI name Masquerade)
+- [ ] Surfaces — agents porting Feed/Sparks/Hubs/Masquerade/Messages against iOS
+- [ ] QA vs iOS (emulator + gh-pages)
 
 ## Wipe
 - Removed `apps/web` and `apps/mobile/android-app` at commit after this plan.

@@ -1,0 +1,1169 @@
+import { CommonModule } from '@angular/common';
+import {
+  AfterViewChecked,
+  ChangeDetectorRef,
+  Component,
+  ElementRef,
+  OnDestroy,
+  OnInit,
+  ViewChild,
+} from '@angular/core';
+import { Router } from '@angular/router';
+import { Subscription } from 'rxjs';
+
+import { BottomTabsComponent } from '../components/bottom-tabs.component';
+import { MatteryaPostCardComponent } from '../components/matterya-post-card.component';
+import { MatteryaTopbarComponent } from '../components/matterya-topbar.component';
+import { SparksStripComponent } from '../components/sparks-strip.component';
+import { MatteryaCopy } from '../core/copy/matterya-copy';
+import { AuthService } from '../core/services/auth.service';
+import { NotificationsUiService } from '../core/services/notifications-ui.service';
+import { LocationService } from '../core/services/location.service';
+import { Frame0PosterService } from '../core/services/frame0-poster.service';
+import { MediaSessionService } from '../core/services/media-session.service';
+import { PostsService } from '../core/services/posts.service';
+import { ProfileService } from '../core/services/profile.service';
+import { R2PlaybackService } from '../core/services/r2-playback.service';
+import { SurfacePageService } from '../core/services/surface-page.service';
+import { HubsPlaybackService } from '../hubs/hubs-playback.service';
+import { HubsCatalogService } from '../hubs/hubs-catalog.service';
+import type { CountryPost } from '../core/models/post.model';
+import { isAdultPost } from '../core/utils/content-sanitize';
+import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util';
+
+@Component({
+  selector: 'app-feed-page',
+  standalone: true,
+  imports: [
+    CommonModule,
+    BottomTabsComponent,
+    MatteryaTopbarComponent,
+    MatteryaPostCardComponent,
+    SparksStripComponent,
+  ],
+  template: `
+    <div class="feed-shell">
+      <app-matterya-topbar
+        title="Matterya"
+        (search)="openSearch()"
+        (notifications)="openNotifications()"
+      ></app-matterya-topbar>
+
+      <div class="feed-layout">
+        <main class="feed-body" #feedBody>
+          <!-- iOS FeedView: Sparks for you horizontal strip -->
+          <app-sparks-strip
+            *ngIf="sparksRail.length"
+            [title]="copy.sparksForYou"
+            subtitle="Swipe the world on Matterya"
+            [posts]="sparksRail"
+            [showsBrand]="false"
+            (open)="openSpark($event)"
+            (brandTap)="openSparks()"
+          ></app-sparks-strip>
+
+          <!-- iOS FeedView: Continue watching (Hubs long-form history) -->
+          <section class="continue-strip" *ngIf="continueWatching.length">
+            <div class="continue-head">
+              <div class="continue-title">Continue watching</div>
+              <button type="button" class="continue-link" (click)="openHubs()">Matterya Hubs</button>
+            </div>
+            <div class="continue-rail">
+              <button
+                type="button"
+                class="continue-card"
+                *ngFor="let p of continueWatching; trackBy: trackById"
+                (click)="openContinue(p)"
+              >
+                <div class="continue-thumb">
+                  <img *ngIf="posterForRail(p)" [src]="posterForRail(p)!" alt="" loading="lazy" />
+                </div>
+                <div class="continue-card-title">{{ continueHeadline(p) }}</div>
+                <div class="continue-progress" *ngIf="continueProgress(p) > 0">
+                  <span [style.width.%]="continueProgress(p)"></span>
+                </div>
+              </button>
+            </div>
+          </section>
+
+          <div class="feed-state" *ngIf="loading">Loading feed…</div>
+          <div class="feed-state error" *ngIf="!loading && error">{{ error }}</div>
+          <div class="feed-state" *ngIf="!loading && !error && !posts.length">
+            Your feed is quiet. Posts from everywhere will show up here as people share.
+          </div>
+
+          <!-- iOS FacebookPostCard parity — Sparks as cards; AV only on focus winner -->
+          <div
+            class="feed-card-slot"
+            *ngFor="let post of posts; trackBy: trackById"
+            [attr.data-post-id]="post.id"
+            [attr.data-has-video]="isVideoPost(post) ? '1' : null"
+          >
+            <app-matterya-post-card
+              [post]="post"
+              [edgeToEdge]="false"
+              [playGate]="focusPostId === post.id && isVideoPost(post)"
+              (changed)="onPostChanged($event)"
+              (requestPlay)="onRequestPlay($event)"
+            ></app-matterya-post-card>
+          </div>
+        </main>
+
+        <!-- Desktop right rail (≥1280px) — Facebook-web style companion column -->
+        <aside class="feed-rail" aria-label="Suggestions">
+          <section class="rail-card" *ngIf="sparksRail.length">
+            <div class="rail-head">
+              <span class="rail-title">{{ copy.sparks }}</span>
+              <button type="button" class="rail-link" (click)="openSparks()">Open</button>
+            </div>
+            <button
+              type="button"
+              class="rail-spark"
+              *ngFor="let spark of sparksRail.slice(0, 4); trackBy: trackById"
+              (click)="openSpark(spark)"
+            >
+              <img *ngIf="posterForRail(spark)" [src]="posterForRail(spark)!" alt="" />
+              <span class="rail-spark-copy">
+                <span class="rail-spark-name">{{ displayName(spark) }}</span>
+                <span class="rail-spark-place" *ngIf="spark.country_name || spark.country_code">
+                  {{ spark.country_name || spark.country_code }}
+                </span>
+              </span>
+            </button>
+          </section>
+
+          <section class="rail-card" *ngIf="railPeople.length">
+            <div class="rail-head">
+              <span class="rail-title">People</span>
+              <button type="button" class="rail-link" (click)="openPeople()">Browse</button>
+            </div>
+            <button
+              type="button"
+              class="rail-person"
+              *ngFor="let person of railPeople"
+              (click)="openRailPerson(person)"
+            >
+              <span class="rail-avatar">
+                <img *ngIf="person.avatar" [src]="person.avatar" alt="" />
+                <span *ngIf="!person.avatar">{{ person.initials }}</span>
+              </span>
+              <span class="rail-person-copy">
+                <span class="rail-person-name">{{ person.name }}</span>
+                <span class="rail-person-meta">@{{ person.username }}</span>
+              </span>
+            </button>
+          </section>
+
+          <section class="rail-card">
+            <div class="rail-head">
+              <span class="rail-title">Explore</span>
+            </div>
+            <button type="button" class="rail-nav" (click)="openHubs()">Matterya Hubs</button>
+            <button type="button" class="rail-nav" (click)="openAnonymous()">Masquerade</button>
+            <button type="button" class="rail-nav" (click)="openSearch()">Search</button>
+          </section>
+        </aside>
+      </div>
+
+      <app-bottom-tabs></app-bottom-tabs>
+    </div>
+  `,
+  styles: [
+    `
+      :host {
+        display: block;
+        min-height: 100%;
+        background: var(--m-paper, #f8f6f2);
+        color: var(--m-ink, #2c2825);
+      }
+      .feed-shell {
+        min-height: 100%;
+        padding-bottom: calc(var(--tabs-safe, 72px) + 12px);
+        background:
+          radial-gradient(900px 420px at 50% -10%, rgba(255, 255, 255, 0.9), transparent 60%),
+          var(--m-paper, #f8f6f2);
+      }
+      .feed-layout {
+        width: 100%;
+        max-width: 1280px;
+        margin: 0 auto;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+        align-items: start;
+        box-sizing: border-box;
+      }
+      .feed-body {
+        max-width: 100%;
+        margin: 0 auto;
+        padding: 0 0 24px;
+        width: 100%;
+        box-sizing: border-box;
+        --m-feed-card-gap: 0px;
+        min-width: 0;
+      }
+      .feed-rail {
+        display: none;
+      }
+      .feed-state {
+        padding: 48px 24px;
+        text-align: center;
+        color: var(--m-ink-muted, #948b82);
+        font-size: 15px;
+        line-height: 1.45;
+      }
+      .feed-state.error {
+        color: var(--m-danger, #ea000b);
+      }
+      .feed-card-slot {
+        content-visibility: auto;
+        contain-intrinsic-size: 720px;
+      }
+      .rail-card {
+        background: var(--m-surface, #fffcf8);
+        border: 1px solid var(--m-border, #ddd8d1);
+        border-radius: 16px;
+        padding: 14px;
+        display: grid;
+        gap: 10px;
+        box-shadow: 0 10px 28px rgba(44, 40, 37, 0.05);
+      }
+      .rail-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .rail-title {
+        font-family: ui-serif, Georgia, serif;
+        font-size: 1.05rem;
+        font-weight: 500;
+        color: var(--m-ink, #2c2825);
+      }
+      .rail-link,
+      .rail-nav {
+        border: 0;
+        background: transparent;
+        color: var(--m-accent, #2c2825);
+        font: inherit;
+        font-size: 0.85rem;
+        font-weight: 650;
+        cursor: pointer;
+        text-align: left;
+        padding: 0;
+      }
+      .rail-nav {
+        padding: 8px 10px;
+        border-radius: 10px;
+        background: var(--m-canvas-muted, #f2f0ec);
+        border: 1px solid var(--m-border, #ddd8d1);
+      }
+      .rail-nav:hover,
+      .rail-link:hover {
+        text-decoration: underline;
+      }
+      .rail-spark,
+      .rail-person {
+        display: grid;
+        grid-template-columns: 48px 1fr;
+        gap: 10px;
+        align-items: center;
+        width: 100%;
+        border: 0;
+        background: transparent;
+        cursor: pointer;
+        text-align: left;
+        padding: 0;
+        color: inherit;
+        font: inherit;
+      }
+      .rail-spark img {
+        width: 48px;
+        height: 64px;
+        object-fit: cover;
+        border-radius: 10px;
+        background: #111;
+      }
+      .rail-spark-copy,
+      .rail-person-copy {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+      }
+      .rail-spark-name,
+      .rail-person-name {
+        font-weight: 650;
+        font-size: 0.9rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .rail-spark-place,
+      .rail-person-meta {
+        color: var(--m-ink-muted, #948b82);
+        font-size: 0.78rem;
+      }
+      .rail-avatar {
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        overflow: hidden;
+        display: grid;
+        place-items: center;
+        background: var(--m-canvas-muted, #f2f0ec);
+        border: 1px solid var(--m-border, #ddd8d1);
+        font-weight: 700;
+        font-size: 0.85rem;
+      }
+      .rail-avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      @media (min-width: 900px) {
+        .feed-shell {
+          padding-bottom: 40px;
+          background: var(--m-canvas-muted, #f2f0ec);
+          min-height: 100dvh;
+        }
+        .feed-layout {
+          padding: 16px 20px 48px;
+        }
+        .feed-body {
+          width: 100%;
+          max-width: 680px;
+          margin: 0 auto;
+          padding: 0;
+          --m-feed-card-gap: 0px;
+        }
+      }
+
+      .continue-strip {
+        padding: 4px 0 18px;
+      }
+      .continue-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 0 16px 10px;
+      }
+      .continue-title {
+        font-size: 17px;
+        font-weight: 650;
+        color: var(--m-ink, #2c2825);
+      }
+      .continue-link {
+        border: 0;
+        background: transparent;
+        color: var(--m-accent, #2c2825);
+        font: inherit;
+        font-size: 0.82rem;
+        font-weight: 650;
+        cursor: pointer;
+        padding: 0;
+      }
+      .continue-rail {
+        display: flex;
+        gap: 12px;
+        overflow-x: auto;
+        padding: 0 16px;
+        scrollbar-width: none;
+      }
+      .continue-rail::-webkit-scrollbar { display: none; }
+      .continue-card {
+        flex: 0 0 268px;
+        width: 268px;
+        border: 0;
+        background: transparent;
+        padding: 0;
+        text-align: left;
+        color: inherit;
+        cursor: pointer;
+        font: inherit;
+      }
+      .continue-thumb {
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        border-radius: 12px;
+        overflow: hidden;
+        background: #171412;
+        border: 1px solid var(--m-border, #ddd8d1);
+      }
+      .continue-thumb img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      .continue-card-title {
+        margin-top: 8px;
+        font-size: 0.9rem;
+        font-weight: 650;
+        line-height: 1.25;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .continue-progress {
+        margin-top: 6px;
+        height: 3px;
+        border-radius: 99px;
+        background: rgba(44, 40, 37, 0.12);
+        overflow: hidden;
+      }
+      .continue-progress span {
+        display: block;
+        height: 100%;
+        background: var(--m-accent, #2c2825);
+      }
+
+      @media (min-width: 1280px) {
+        .feed-layout {
+          grid-template-columns: minmax(0, 1fr) 320px;
+          gap: 22px;
+          padding: 20px 28px 56px;
+        }
+        .feed-body {
+          max-width: none;
+          margin: 0;
+        }
+        .feed-rail {
+          display: grid;
+          gap: 14px;
+          position: sticky;
+          top: 72px;
+        }
+      }
+    `,
+  ],
+})
+export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
+  @ViewChild('feedBody') feedBody?: ElementRef<HTMLElement>;
+
+  posts: CountryPost[] = [];
+  sparksRail: CountryPost[] = [];
+  continueWatching: CountryPost[] = [];
+  railPeople: Array<{
+    id: string;
+    name: string;
+    username: string;
+    avatar: string | null;
+    initials: string;
+  }> = [];
+  loading = true;
+  error = '';
+  homeCountry: string | null = null;
+  meId: string | null = null;
+  myAvatar: string | null = null;
+  myInitials = 'ME';
+  /** Single feed focus winner — only this card mounts AV (iOS playGate). */
+  focusPostId: string | null = null;
+  readonly copy = MatteryaCopy;
+
+  /** iOS FeedVideoFocus thresholds — play ~12%, keep ~8%, steal epsilon. */
+  private static readonly MIN_VISIBLE_TO_PLAY = 0.12;
+  private static readonly MIN_VISIBLE_TO_KEEP = 0.08;
+  private static readonly STEAL_EPSILON = 0.015;
+  private static readonly EMPTY_SILENCE_MS = 450;
+
+  private focusObserver: IntersectionObserver | null = null;
+  private observedIds = new Set<string>();
+  private ratios = new Map<string, number>();
+  private stickyRatios = new Map<string, number>();
+  private zeroStreak = new Map<string, number>();
+  private hubsSub?: Subscription;
+  private focusRaf = 0;
+  private emptySilenceTimer: ReturnType<typeof setTimeout> | null = null;
+  private visibilityListener?: () => void;
+  /** Session-viewed video ids — never silently reshuffle these to the front. */
+  private viewedVideoIds = new Set<string>();
+
+  constructor(
+    private postsService: PostsService,
+    private surface: SurfacePageService,
+    private playback: R2PlaybackService,
+    private frame0: Frame0PosterService,
+    private mediaSession: MediaSessionService,
+    private hubsPlayback: HubsPlaybackService,
+    private catalog: HubsCatalogService,
+    private auth: AuthService,
+    private profiles: ProfileService,
+    private location: LocationService,
+    private notificationsUi: NotificationsUiService,
+    private router: Router,
+    private cdr: ChangeDetectorRef
+  ) {}
+
+  async ngOnInit(): Promise<void> {
+    // Fire-and-forget so a hung network never blocks bootstrap forever.
+    void this.refresh();
+    this.hubsSub = this.hubsPlayback.changes$.subscribe((s) => {
+      if (s.post) {
+        this.mediaSession.claimHubs(s.post.id);
+        // Mini/expanded hubs owns AV — clear feed focus so cards stay posters.
+        if (this.focusPostId) {
+          this.focusPostId = null;
+          this.paint();
+        }
+      } else if (this.mediaSession.hubsOwns) {
+        this.mediaSession.releaseHubs();
+      }
+    });
+    // iOS MediaPlaybackCoordinator: silence feed AV when the tab/document hides.
+    this.visibilityListener = () => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        this.silenceFeedForHiddenTab();
+      } else {
+        this.scheduleFocusPick();
+      }
+    };
+    document.addEventListener('visibilitychange', this.visibilityListener);
+  }
+
+  ngAfterViewChecked(): void {
+    this.ensureFocusObserver();
+  }
+
+  ngOnDestroy(): void {
+    this.hubsSub?.unsubscribe();
+    this.focusObserver?.disconnect();
+    this.focusObserver = null;
+    if (this.focusRaf) cancelAnimationFrame(this.focusRaf);
+    if (this.emptySilenceTimer) {
+      clearTimeout(this.emptySilenceTimer);
+      this.emptySilenceTimer = null;
+    }
+    if (this.visibilityListener) {
+      document.removeEventListener('visibilitychange', this.visibilityListener);
+      this.visibilityListener = undefined;
+    }
+    this.mediaSession.releaseFeed(this.focusPostId);
+  }
+
+  private paint(): void {
+    // Angular 21 is zoneless here — async state must be pushed into the view.
+    try {
+      this.cdr.detectChanges();
+    } catch {
+      // component may be destroyed mid-request
+    }
+  }
+
+  trackById(_: number, post: CountryPost): string {
+    return post.id;
+  }
+
+  isVideoPost(post: CountryPost): boolean {
+    return this.isVideo(post);
+  }
+
+  onRequestPlay(post: CountryPost): void {
+    if (!post?.id || this.hubsPlayback.isActive) return;
+    this.setFocus(post.id);
+  }
+
+  onPostChanged(post: CountryPost): void {
+    const i = this.posts.findIndex((p) => p.id === post.id);
+    if (i >= 0) {
+      this.posts[i] = post;
+      this.paint();
+    }
+  }
+
+  private ensureFocusObserver(): void {
+    const root = this.feedBody?.nativeElement;
+    if (!root || typeof IntersectionObserver === 'undefined') return;
+    if (!this.focusObserver) {
+      // Dense thresholds around iOS play/keep bands (12% / 8%).
+      const thresholds: number[] = [];
+      for (let i = 0; i <= 100; i += 2) thresholds.push(i / 100);
+      this.focusObserver = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            const id = (entry.target as HTMLElement).dataset['postId'];
+            if (!id) continue;
+            this.reportFocusRatio(id, entry.intersectionRatio);
+          }
+          this.scheduleFocusPick();
+        },
+        {
+          root: null,
+          // Full viewport (iOS safe-area viewport) — no center-band rootMargin.
+          rootMargin: '0px',
+          threshold: thresholds,
+        }
+      );
+    }
+    const slots = root.querySelectorAll<HTMLElement>('.feed-card-slot[data-has-video="1"]');
+    for (const el of Array.from(slots)) {
+      const id = el.dataset['postId'];
+      if (!id || this.observedIds.has(id)) continue;
+      this.focusObserver.observe(el);
+      this.observedIds.add(id);
+    }
+  }
+
+  /** Port of FeedVideoFocus.report — sticky ratios ignore single-frame 0 glitches. */
+  private reportFocusRatio(id: string, raw: number): void {
+    const clamped = Math.max(0, Math.min(1, raw));
+    if (clamped < 0.02) {
+      const streak = (this.zeroStreak.get(id) || 0) + 1;
+      this.zeroStreak.set(id, streak);
+      const sticky = this.stickyRatios.get(id);
+      if (streak < 6 && sticky != null && sticky >= FeedPageComponent.MIN_VISIBLE_TO_KEEP) {
+        this.ratios.set(id, sticky);
+        return;
+      }
+      this.ratios.delete(id);
+      this.stickyRatios.delete(id);
+      this.zeroStreak.delete(id);
+      return;
+    }
+    this.zeroStreak.set(id, 0);
+    this.ratios.set(id, clamped);
+    this.stickyRatios.set(id, clamped);
+  }
+
+  private scheduleFocusPick(): void {
+    if (typeof document !== 'undefined' && document.hidden) return;
+    if (this.focusRaf) return;
+    this.focusRaf = requestAnimationFrame(() => {
+      this.focusRaf = 0;
+      this.pickFocusWinner();
+    });
+  }
+
+  private pickFocusWinner(): void {
+    if (typeof document !== 'undefined' && document.hidden) {
+      this.silenceFeedForHiddenTab();
+      return;
+    }
+    if (this.hubsPlayback.isActive || this.mediaSession.sparksOwns) {
+      if (this.focusPostId) {
+        this.clearFocusImmediate();
+      }
+      return;
+    }
+
+    const playMin = FeedPageComponent.MIN_VISIBLE_TO_PLAY;
+    const keepMin = FeedPageComponent.MIN_VISIBLE_TO_KEEP;
+    const steal = FeedPageComponent.STEAL_EPSILON;
+
+    const current = this.focusPostId;
+    const currentRatio = current ? this.ratios.get(current) ?? 0 : 0;
+
+    // Sticky winner holds while still ≥ keep band; yield only to a clearly more-visible challenger.
+    if (current && currentRatio >= keepMin) {
+      const challenger = this.bestCandidate(playMin);
+      if (
+        challenger &&
+        challenger.id !== current &&
+        challenger.ratio >= currentRatio + steal
+      ) {
+        this.setFocus(challenger.id, challenger.ratio);
+      } else {
+        this.mediaSession.claimFeed(current, currentRatio);
+        if (this.emptySilenceTimer) {
+          clearTimeout(this.emptySilenceTimer);
+          this.emptySilenceTimer = null;
+        }
+      }
+      return;
+    }
+
+    const best = this.bestCandidate(playMin);
+    if (best) {
+      if (best.id !== this.focusPostId) {
+        this.setFocus(best.id, best.ratio);
+      } else {
+        this.mediaSession.claimFeed(best.id, best.ratio);
+      }
+      if (this.emptySilenceTimer) {
+        clearTimeout(this.emptySilenceTimer);
+        this.emptySilenceTimer = null;
+      }
+      return;
+    }
+
+    // Debounce empty election — layout flaps used to kill in-frame audio (iOS 450ms).
+    if (!this.focusPostId) return;
+    if (this.emptySilenceTimer) return;
+    this.emptySilenceTimer = setTimeout(() => {
+      this.emptySilenceTimer = null;
+      if (this.bestCandidate(playMin)) {
+        this.scheduleFocusPick();
+        return;
+      }
+      this.clearFocusImmediate();
+    }, FeedPageComponent.EMPTY_SILENCE_MS);
+  }
+
+  private bestCandidate(minRatio: number): { id: string; ratio: number } | null {
+    let bestId: string | null = null;
+    let bestRatio = 0;
+    for (const [id, ratio] of this.ratios) {
+      if (ratio < minRatio) continue;
+      if (ratio > bestRatio || (ratio === bestRatio && bestId != null && id < bestId)) {
+        bestRatio = ratio;
+        bestId = id;
+      }
+    }
+    return bestId ? { id: bestId, ratio: bestRatio } : null;
+  }
+
+  private clearFocusImmediate(): void {
+    if (this.emptySilenceTimer) {
+      clearTimeout(this.emptySilenceTimer);
+      this.emptySilenceTimer = null;
+    }
+    if (!this.focusPostId) return;
+    this.mediaSession.releaseFeed(this.focusPostId);
+    this.focusPostId = null;
+    this.paint();
+  }
+
+  private silenceFeedForHiddenTab(): void {
+    this.clearFocusImmediate();
+    // Pause any lingering feed videos (playGate may still be tearing down).
+    const root = this.feedBody?.nativeElement;
+    if (!root) return;
+    root.querySelectorAll('video').forEach((video) => {
+      try {
+        if (!video.paused) video.pause();
+      } catch {
+        // ignore
+      }
+    });
+  }
+
+  private setFocus(postId: string, score = 1): void {
+    if (this.focusPostId === postId) {
+      this.mediaSession.claimFeed(postId, score);
+      return;
+    }
+    if (!this.mediaSession.claimFeed(postId, score)) return;
+    this.focusPostId = postId;
+    this.viewedVideoIds.add(postId);
+    // Freshen play URL for the winner only (not the whole feed).
+    const post = this.posts.find((p) => p.id === postId);
+    if (post) {
+      void this.playback.freshenPosts([post], 1).then((rows) => {
+        const fresh = rows[0];
+        if (!fresh) return;
+        const i = this.posts.findIndex((p) => p.id === fresh.id);
+        if (i >= 0) this.posts[i] = fresh;
+        this.paint();
+      });
+    }
+    this.paint();
+  }
+
+  displayName(post: CountryPost): string {
+    return post.author?.display_name || post.author?.username || 'Member';
+  }
+
+  displayBody(post: CountryPost): string {
+    return String(post.body || '')
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('__story__|'))
+      .join('\n')
+      .trim();
+  }
+
+  initialsFor(post: CountryPost): string {
+    return this.displayName(post).slice(0, 2).toUpperCase();
+  }
+
+  avatarFor(post: CountryPost): string | null {
+    const seed = post.author?.username || post.author?.user_id || post.author_id || null;
+    const resolved = resolveAvatarUrl(post.author?.avatar_url, seed);
+    return resolved || null;
+  }
+
+  isImage(post: CountryPost): boolean {
+    const t = String(post.media_type || '').toLowerCase();
+    if (t === 'story' || t === 'moment') {
+      const url = this.mediaUrl(post).toLowerCase();
+      return !/\.(mp4|webm|mov|m4v)(\?|#|$)/.test(url);
+    }
+    return t === 'image' || t === 'photo' || (!!post.media_url && !this.isVideo(post));
+  }
+
+  isVideo(post: CountryPost): boolean {
+    const t = String(post.media_type || '').toLowerCase();
+    if (t === 'story' || t === 'moment') {
+      const url = this.mediaUrl(post).toLowerCase();
+      return /\.(mp4|webm|mov|m4v)(\?|#|$)/.test(url);
+    }
+    return t === 'video' || t === 'reel' || t === 'spark';
+  }
+
+  mediaUrl(post: CountryPost): string {
+    return resolveMediaUrl(post.media_url || post.thumb_url || '');
+  }
+
+  openSearch(): void {
+    void this.router.navigate(['/search']);
+  }
+
+  openNotifications(): void {
+    this.notificationsUi.open();
+  }
+
+  openAuthor(post: CountryPost): void {
+    const username = post.author?.username?.trim();
+    if (username) {
+      void this.router.navigate(['/user', username]);
+      return;
+    }
+    if (post.author_id) {
+      void this.router.navigate(['/user', post.author_id]);
+    }
+  }
+
+  openPost(post: CountryPost): void {
+    void this.router.navigate(['/post', post.id]);
+  }
+
+  openCountry(post: CountryPost): void {
+    const code = post.country_code?.trim().toUpperCase();
+    if (!code) return;
+    void this.router.navigate(['/country', code]);
+  }
+
+  openSparks(): void {
+    const code = this.homeCountry || this.sparksRail[0]?.country_code || 'WORLD';
+    // Prefer unwatched sparks up front (iOS endless unwatched).
+    const seeds = this.preferUnwatched(this.sparksRail).slice(0, 24);
+    void this.router.navigate(['/sparks', code], {
+      state: { seedPosts: seeds, seedCountry: code },
+    });
+  }
+
+  openSpark(post: CountryPost): void {
+    const country = post.country_code || this.homeCountry || 'WORLD';
+    // Feed→Sparks mid-clip handoff when this card is the focus winner.
+    const continueAt = this.focusPostId === post.id ? this.readFocusCurrentTime(post.id) : 0;
+    const rest = this.preferUnwatched(this.sparksRail.filter((p) => p.id !== post.id));
+    void this.router.navigate(['/sparks', country], {
+      queryParams: { post: post.id },
+      state: {
+        seedPosts: [post, ...rest].slice(0, 24),
+        seedCountry: country,
+        countryName: post.country_name,
+        continueAt: continueAt > 0.35 ? continueAt : 0,
+        continuePostId: post.id,
+      },
+    });
+  }
+
+  /** Current playhead of the focused feed video (for Sparks handoff). */
+  private readFocusCurrentTime(postId: string): number {
+    const root = this.feedBody?.nativeElement;
+    if (!root) return 0;
+    const slot = root.querySelector(`.feed-card-slot[data-post-id="${postId}"]`);
+    const video = slot?.querySelector('video') as HTMLVideoElement | null;
+    if (!video) return 0;
+    const t = Number(video.currentTime);
+    return Number.isFinite(t) && t > 0 ? t : 0;
+  }
+
+  /** Unwatched first; viewed videos stay eligible but trail (no silent reshuffle to front). */
+  private preferUnwatched(posts: CountryPost[]): CountryPost[] {
+    if (!this.viewedVideoIds.size) return posts.slice();
+    const fresh: CountryPost[] = [];
+    const seen: CountryPost[] = [];
+    for (const p of posts) {
+      if (this.viewedVideoIds.has(p.id) && this.isVideo(p)) seen.push(p);
+      else fresh.push(p);
+    }
+    return [...fresh, ...seen];
+  }
+
+  openHubs(): void {
+    void this.router.navigate(['/hubs']);
+  }
+
+  openContinue(post: CountryPost): void {
+    if (!post?.id) return;
+    this.catalog.recordWatch(post.id);
+    void this.router.navigate(['/hubs/watch', post.id], {
+      state: { post, seedPosts: this.continueWatching },
+    });
+  }
+
+  continueHeadline(post: CountryPost): string {
+    return this.catalog.displayHeadline(post);
+  }
+
+  continueProgress(post: CountryPost): number {
+    const pos = this.catalog.playbackPosition(post.id);
+    const dur = Number((post as any).duration_seconds || (post as any).duration || 0);
+    if (!pos || !dur || dur < 1) return 0;
+    return Math.max(0, Math.min(100, (pos / dur) * 100));
+  }
+
+  private async loadContinueWatching(): Promise<void> {
+    try {
+      const videos = await this.catalog.loadCatalog({
+        forceRefresh: false,
+        viewerCountry: this.homeCountry,
+      });
+      const primary = this.catalog.historyVideos(videos).slice(0, 10);
+      this.continueWatching = primary.length
+        ? primary
+        : this.catalog.continueWatchingFeed(videos, 8);
+      this.paint();
+    } catch {
+      // strip is optional
+    }
+  }
+
+  openPeople(): void {
+    void this.router.navigate(['/people']);
+  }
+
+  openAnonymous(): void {
+    void this.router.navigate(['/anonymous']);
+  }
+
+  openRailPerson(person: { username: string; id: string }): void {
+    const slug = person.username?.trim() || person.id;
+    if (!slug) return;
+    void this.router.navigate(['/user', slug]);
+  }
+
+  posterForRail(post: CountryPost): string | null {
+    const raw = post.thumb_url || post.media_url || '';
+    const url = resolveMediaUrl(raw);
+    if (!url || url.trim().startsWith('{')) return null;
+    return url;
+  }
+
+  private rebuildRailPeople(): void {
+    const seen = new Set<string>();
+    const out: FeedPageComponent['railPeople'] = [];
+    for (const post of this.posts) {
+      const id = post.author_id || post.author?.user_id || post.author?.username || '';
+      if (!id || seen.has(id) || id === this.meId) continue;
+      seen.add(id);
+      const name = this.displayName(post);
+      out.push({
+        id,
+        name,
+        username: post.author?.username || id.slice(0, 8),
+        avatar: this.avatarFor(post),
+        initials: name.slice(0, 2).toUpperCase(),
+      });
+      if (out.length >= 6) break;
+    }
+    this.railPeople = out;
+  }
+
+  async toggleLike(post: CountryPost): Promise<void> {
+    try {
+      if (post.liked_by_me) {
+        await this.postsService.unlikePost(post.id);
+        post.liked_by_me = false;
+        post.like_count = Math.max(0, (post.like_count || 0) - 1);
+      } else {
+        await this.postsService.likePost(post.id);
+        post.liked_by_me = true;
+        post.like_count = (post.like_count || 0) + 1;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  private async refresh(): Promise<void> {
+    this.loading = true;
+    this.error = '';
+    this.paint();
+
+    // Absolute ceiling: never leave Home on "Loading feed…" forever.
+    const hardStop = window.setTimeout(() => {
+      if (!this.loading) return;
+      this.loading = false;
+      if (!this.posts.length && !this.error) {
+        this.error = 'Feed is taking too long. Pull to refresh or try again.';
+      }
+      this.paint();
+    }, 10000);
+
+    try {
+      const user = await this.withTimeout(this.auth.getUser(), 3000, 'auth').catch(() => null);
+      this.meId = user?.id ?? null;
+      let countryCode = this.location.getCachedLocation()?.countryCode?.trim().toUpperCase() || null;
+      let authorId = this.meId;
+      // followingIds stay off the critical path (iOS: refresh follows in parallel / after paint).
+      const followingIds: string[] = [];
+
+      if (this.meId) {
+        // Profile is best-effort and must not block thin /v1/feed.
+        void this.withTimeout(this.profiles.meProfile(), 4000, 'profile')
+          .then(({ meProfile }) => {
+            if (meProfile?.country_code) {
+              this.homeCountry = String(meProfile.country_code).trim().toUpperCase();
+            }
+            this.myAvatar =
+              resolveAvatarUrl(meProfile?.avatar_url, meProfile?.username || meProfile?.user_id || this.meId) ||
+              null;
+            const name = meProfile?.display_name || meProfile?.username || user?.email || 'ME';
+            this.myInitials = String(name).slice(0, 2).toUpperCase();
+            this.paint();
+          })
+          .catch(() => undefined);
+      }
+
+      this.homeCountry = countryCode;
+      this.paint();
+
+      // iOS path: thin /v1/feed first (Sparks + posts), GraphQL recent as fallback.
+      // Keep Sparks on Home (SparkFeedCard) — Moments only are excluded.
+      const thin = await this.withTimeout(
+        this.surface.fetchHomeFeed(36),
+        6000,
+        'thinFeed'
+      ).catch(() => null);
+
+      // iOS HomeFeedStore: Moments excluded; NSFW/adult never on Home.
+      let feed = (thin?.items || []).filter(
+        (p) => !this.postsService.isMoment(p) && !isAdultPost(p)
+      );
+      if (!feed.length) {
+        feed = await this.withTimeout(
+          this.postsService.listRecent(40),
+          8000,
+          'recentPosts'
+        )
+          .then((rows) =>
+            (rows || []).filter((p) => !this.postsService.isMoment(p) && !isAdultPost(p))
+          )
+          .catch(() => [] as CountryPost[]);
+      }
+
+      // Paint posters first — do NOT await AV URL freshen on the open path.
+      this.posts = feed;
+      this.sparksRail = this.preferUnwatched(
+        feed.filter((p) => this.postsService.isSpark(p) && !isAdultPost(p))
+      ).slice(0, 12);
+      this.rebuildRailPeople();
+      this.focusPostId = null;
+      this.ratios.clear();
+      this.observedIds.clear();
+      this.focusObserver?.disconnect();
+      this.focusObserver = null;
+      this.loading = false;
+      this.paint();
+
+      // After first paint: Frame0 thumbs only, then optional secondary top-up.
+      // Playback freshen happens for the focus winner in setFocus (no AV storm).
+      void this.warmPostersAfterPaint();
+      void this.loadContinueWatching();
+      void this.loadSecondary(authorId, countryCode, followingIds);
+    } catch (e: any) {
+      this.error = e?.message || 'Feed unavailable';
+      this.posts = [];
+      this.sparksRail = [];
+      this.loading = false;
+      this.paint();
+    } finally {
+      window.clearTimeout(hardStop);
+      this.loading = false;
+      this.paint();
+    }
+  }
+
+  /** Thumbs / Frame0 only — mirrors iOS warmHead(lite). */
+  private async warmPostersAfterPaint(): Promise<void> {
+    try {
+      const videoIds = this.posts.filter((p) => this.isVideo(p)).slice(0, 24).map((p) => p.id);
+      const railIds = this.sparksRail.map((p) => p.id);
+      await this.frame0.prefetch([...railIds, ...videoIds]);
+      this.paint();
+    } catch {
+      // best-effort
+    }
+  }
+
+  private async loadSecondary(
+    _authorId: string | null,
+    countryCode: string | null,
+    _followingIds: string[]
+  ): Promise<void> {
+    try {
+      const extras: CountryPost[] = [];
+      if (countryCode) {
+        const country = await this.withTimeout(
+          this.postsService.listByCountry(countryCode, 20, {
+            demoLimit: 10,
+            skipComments: true,
+          }),
+          6000,
+          'countryFeed'
+        ).catch(() => [] as CountryPost[]);
+        extras.push(...(country || []));
+      }
+
+      // World Sparks top-up for the rail (iOS discoverSparks /v1/sparks).
+      if (this.sparksRail.length < 8) {
+        const sparksPage = await this.withTimeout(
+          this.surface.fetchSparks(16),
+          6000,
+          'sparksRail'
+        ).catch(() => null);
+        if (sparksPage?.items?.length) {
+          // Posters only for rail top-up — no playback freshen storm.
+          extras.push(...sparksPage.items);
+          void this.frame0.prefetch(sparksPage.items.map((p) => p.id));
+        }
+      }
+
+      if (!extras.length) return;
+
+      // Soft-merge: append only — never re-sort / reshuffle already-painted cards
+      // (iOS: engaged/watched stay pinned; silent reshuffle was a product bug).
+      const seen = new Set(this.posts.map((p) => p.id));
+      const appended: CountryPost[] = [];
+      for (const post of extras) {
+        if (!post?.id || seen.has(post.id)) continue;
+        if (this.postsService.isMoment(post) || isAdultPost(post)) continue;
+        seen.add(post.id);
+        appended.push(post);
+      }
+      if (!appended.length) return;
+      this.posts = [...this.posts, ...appended].slice(0, 50);
+      if (this.sparksRail.length < 8) {
+        const moreSparks = appended.filter((p) => this.postsService.isSpark(p));
+        this.sparksRail = this.preferUnwatched([
+          ...this.sparksRail,
+          ...moreSparks.filter((p) => !this.sparksRail.some((s) => s.id === p.id)),
+        ]).slice(0, 12);
+      }
+      // Re-observe new video slots without wiping existing ratio state mid-scroll.
+      this.observedIds.clear();
+      this.focusObserver?.disconnect();
+      this.focusObserver = null;
+      this.paint();
+    } catch {
+      // secondary is best-effort
+    }
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`${label} timeout`)), ms);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+}
