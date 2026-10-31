@@ -505,8 +505,16 @@ function hateTree(): PolicyNode {
         },
         {
           key: '4',
-          label: 'Stereotypes without attack (borderline)',
-          node: leaf('hate.protected.stereotype', 'Borderline stereotype', 'hate', 'mark'),
+          label: 'Stereotypes without call to violence',
+          node: leaf(
+            'hate.protected.stereotype',
+            'Stereotyping protected group',
+            'hate',
+            'remove',
+            {
+              rationale: 'Meta Tier-2 / TikTok hate — demeaning stereotypes of protected groups',
+            }
+          ),
         },
       ]),
     },
