@@ -975,6 +975,31 @@ export async function openTicketCount(opts?: {
 }
 
 /** Display fields hydrated for the Claim-next UI (author + reporter + signed media). */
+/** Compact comment row for thread context under a reported post/comment. */
+export type TicketCommentSnippet = {
+  id: string;
+  body: string;
+  author_username: string | null;
+  author_avatar_seed: string | null;
+  author_avatar_url: string | null;
+  created_at: string | null;
+};
+
+/** Parent post chrome when the ticket target is a comment. */
+export type TicketParentPost = {
+  id: string;
+  title: string | null;
+  body: string | null;
+  media_type: string | null;
+  media_url: string | null;
+  thumb_url: string | null;
+  author_username: string | null;
+  author_avatar_seed: string | null;
+  author_avatar_url: string | null;
+  author_display_name: string | null;
+  is_text_post: boolean;
+};
+
 export type TicketDisplay = TicketRow & {
   author_username: string | null;
   author_avatar_seed: string | null;
@@ -997,6 +1022,12 @@ export type TicketDisplay = TicketRow & {
   /** Name tokens that appear in both reporter identity and post text. */
   name_matches: string[];
   is_text_post: boolean;
+  /** Sample comments under a reported post. */
+  context_comments: TicketCommentSnippet[];
+  /** Parent post when target_kind is comment. */
+  parent_post: TicketParentPost | null;
+  /** Direct replies to a reported comment. */
+  comment_replies: TicketCommentSnippet[];
 };
 
 /** Tokens from a reporter name that are worth matching in post text. */
@@ -1121,9 +1152,281 @@ async function hydrateReporter(
   return empty;
 }
 
+const CONTEXT_COMMENT_LIMIT = 8;
+const COMMENT_REPLY_LIMIT = 20;
+
+async function loadMasqueradeCommentsForPost(
+  postId: string,
+  limit = CONTEXT_COMMENT_LIMIT
+): Promise<TicketCommentSnippet[]> {
+  try {
+    const { rows } = await pool.query<{
+      id: string;
+      body: string | null;
+      username: string | null;
+      avatar_seed: string | null;
+      created_at: string | null;
+    }>(
+      `
+      select c.id::text as id, c.body, a.username, a.avatar_seed,
+             c.created_at::text as created_at
+      from anonymous.comments c
+      left join anonymous.profiles a on a.id = c.author_profile_id
+      where c.post_id = $1::uuid
+        and coalesce(c.state, 'active') = 'active'
+        and c.parent_comment_id is null
+      order by c.created_at asc, c.id asc
+      limit $2
+      `,
+      [postId, limit]
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      body: String(r.body || '').trim(),
+      author_username: r.username,
+      author_avatar_seed: r.avatar_seed || r.username,
+      author_avatar_url: null,
+      created_at: r.created_at,
+    }));
+  } catch (err: any) {
+    console.warn('[moderation/tickets] masquerade comments', err?.message ?? err);
+    return [];
+  }
+}
+
+async function loadFeedCommentsForPost(
+  postId: string,
+  limit = CONTEXT_COMMENT_LIMIT
+): Promise<TicketCommentSnippet[]> {
+  try {
+    const { rows } = await pool.query<{
+      id: string;
+      body: string | null;
+      username: string | null;
+      display_name: string | null;
+      avatar_url: string | null;
+      created_at: string | null;
+    }>(
+      `
+      select c.id::text as id, c.body,
+             pr.username, pr.display_name, pr.avatar_url,
+             c.created_at::text as created_at
+      from public.post_comments c
+      left join public.profiles pr on pr.user_id = c.author_id
+      where c.post_id = $1::uuid
+        and c.parent_id is null
+      order by c.created_at asc, c.id asc
+      limit $2
+      `,
+      [postId, limit]
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      body: String(r.body || '').trim(),
+      author_username: r.username || r.display_name,
+      author_avatar_seed: r.username || r.display_name,
+      author_avatar_url: r.avatar_url,
+      created_at: r.created_at,
+    }));
+  } catch (err: any) {
+    console.warn('[moderation/tickets] feed comments', err?.message ?? err);
+    return [];
+  }
+}
+
+async function loadMasqueradeCommentReplies(
+  commentId: string,
+  limit = COMMENT_REPLY_LIMIT
+): Promise<TicketCommentSnippet[]> {
+  try {
+    const { rows } = await pool.query<{
+      id: string;
+      body: string | null;
+      username: string | null;
+      avatar_seed: string | null;
+      created_at: string | null;
+    }>(
+      `
+      select c.id::text as id, c.body, a.username, a.avatar_seed,
+             c.created_at::text as created_at
+      from anonymous.comments c
+      left join anonymous.profiles a on a.id = c.author_profile_id
+      where c.parent_comment_id = $1::uuid
+        and coalesce(c.state, 'active') = 'active'
+      order by c.created_at asc, c.id asc
+      limit $2
+      `,
+      [commentId, limit]
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      body: String(r.body || '').trim(),
+      author_username: r.username,
+      author_avatar_seed: r.avatar_seed || r.username,
+      author_avatar_url: null,
+      created_at: r.created_at,
+    }));
+  } catch (err: any) {
+    console.warn('[moderation/tickets] masquerade replies', err?.message ?? err);
+    return [];
+  }
+}
+
+async function loadFeedCommentReplies(
+  commentId: string,
+  limit = COMMENT_REPLY_LIMIT
+): Promise<TicketCommentSnippet[]> {
+  try {
+    const { rows } = await pool.query<{
+      id: string;
+      body: string | null;
+      username: string | null;
+      display_name: string | null;
+      avatar_url: string | null;
+      created_at: string | null;
+    }>(
+      `
+      select c.id::text as id, c.body,
+             pr.username, pr.display_name, pr.avatar_url,
+             c.created_at::text as created_at
+      from public.post_comments c
+      left join public.profiles pr on pr.user_id = c.author_id
+      where c.parent_id = $1::uuid
+      order by c.created_at asc, c.id asc
+      limit $2
+      `,
+      [commentId, limit]
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      body: String(r.body || '').trim(),
+      author_username: r.username || r.display_name,
+      author_avatar_seed: r.username || r.display_name,
+      author_avatar_url: r.avatar_url,
+      created_at: r.created_at,
+    }));
+  } catch (err: any) {
+    console.warn('[moderation/tickets] feed replies', err?.message ?? err);
+    return [];
+  }
+}
+
+async function hydrateMasqueradeParentPost(
+  postId: string
+): Promise<TicketParentPost | null> {
+  const { rows } = await pool.query<{
+    id: string;
+    title: string | null;
+    body: string | null;
+    media_type: string | null;
+    media_url: string | null;
+    thumb_url: string | null;
+    username: string | null;
+    avatar_seed: string | null;
+  }>(
+    `
+    select p.id::text as id, p.title, p.body, p.media_type, p.media_url, p.thumb_url,
+           a.username, a.avatar_seed
+    from anonymous.posts p
+    left join anonymous.profiles a on a.id = p.author_profile_id
+    where p.id = $1::uuid
+    limit 1
+    `,
+    [postId]
+  );
+  const row = rows[0];
+  if (!row) return null;
+  const { resolveAnonymousMediaUrl } = await import('../anonymous/media.js');
+  const [media_url, thumb_url] = await Promise.all([
+    resolveAnonymousMediaUrl(row.media_url),
+    resolveAnonymousMediaUrl(row.thumb_url),
+  ]);
+  const mediaType = String(row.media_type || '').toLowerCase();
+  const hasMedia = !!(media_url || thumb_url);
+  return {
+    id: row.id,
+    title: row.title,
+    body: cleanPostBody(row.body),
+    media_type: row.media_type,
+    media_url,
+    thumb_url,
+    author_username: row.username,
+    author_avatar_seed: row.avatar_seed || row.username,
+    author_avatar_url: null,
+    author_display_name: row.username,
+    is_text_post:
+      !hasMedia || mediaType === 'none' || mediaType === 'text' || mediaType === '',
+  };
+}
+
+async function hydrateFeedParentPost(
+  postId: string
+): Promise<TicketParentPost | null> {
+  const { rows } = await pool.query<{
+    id: string;
+    title: string | null;
+    body: string | null;
+    media_type: string | null;
+    media_url: string | null;
+    thumb_url: string | null;
+    media_path: string | null;
+    username: string | null;
+    display_name: string | null;
+    avatar_url: string | null;
+  }>(
+    `
+    select p.id::text as id, p.title, p.body, p.media_type, p.media_url, p.thumb_url,
+           p.media_path, pr.username, pr.display_name, pr.avatar_url
+    from public.posts p
+    left join public.profiles pr on pr.user_id = p.author_id
+    where p.id = $1::uuid
+    limit 1
+    `,
+    [postId]
+  );
+  const row = rows[0];
+  if (!row) return null;
+  const { resolvePlaybackForPostRow, freshenThumbUrlString } = await import(
+    '../media/r2-playback.js'
+  );
+  const [playback, thumb_url] = await Promise.all([
+    resolvePlaybackForPostRow({
+      media_url: row.media_url,
+      media_path: row.media_path,
+    }),
+    freshenThumbUrlString(row.thumb_url, null, row.media_path),
+  ]);
+  let media_url = playback?.url || null;
+  if (!media_url && row.media_url && String(row.media_url).startsWith('http')) {
+    media_url = row.media_url;
+  }
+  if (!media_url && String(row.media_type || '').toLowerCase() === 'image') {
+    media_url =
+      thumb_url ||
+      (String(row.media_url || '').startsWith('http') ? row.media_url : null);
+  }
+  const mediaType = String(row.media_type || '').toLowerCase();
+  const hasMedia = !!(media_url || thumb_url);
+  return {
+    id: row.id,
+    title: row.title,
+    body: cleanPostBody(row.body),
+    media_type: row.media_type,
+    media_url,
+    thumb_url,
+    author_username: row.username || row.display_name,
+    author_avatar_seed: row.username || row.display_name,
+    author_avatar_url: row.avatar_url,
+    author_display_name: row.display_name || row.username,
+    is_text_post:
+      !hasMedia || mediaType === 'none' || mediaType === 'text' || mediaType === '',
+  };
+}
+
 /**
  * Load author chrome + reporter + signed media for a claimed ticket.
  * Masquerade posts use anonymous.profiles (username + avatar_seed).
+ * Comment tickets also load parent post + direct replies.
  */
 export async function hydrateTicketDisplay(
   ticket: TicketRow
@@ -1145,6 +1448,9 @@ export async function hydrateTicketDisplay(
     ...reporter,
     name_matches: [],
     is_text_post: false,
+    context_comments: [],
+    parent_post: null,
+    comment_replies: [],
   };
 
   const withMatches = (
@@ -1164,7 +1470,12 @@ export async function hydrateTicketDisplay(
     const mediaType = String(display.media_type || '').toLowerCase();
     const hasMedia = !!(display.media_url || display.thumb_url);
     const is_text_post =
-      !hasMedia || mediaType === 'none' || mediaType === 'text' || mediaType === '';
+      display.target_kind === 'comment'
+        ? false
+        : !hasMedia ||
+          mediaType === 'none' ||
+          mediaType === 'text' ||
+          mediaType === '';
     return {
       ...display,
       preview_title: display.preview_title || title,
@@ -1175,6 +1486,105 @@ export async function hydrateTicketDisplay(
   };
 
   try {
+    if (ticket.target_kind === 'comment' && ticket.platform === 'masquerade') {
+      const { rows } = await pool.query<{
+        body: string | null;
+        post_id: string | null;
+        author_profile_id: string | null;
+        username: string | null;
+        avatar_seed: string | null;
+      }>(
+        `
+        select c.body, c.post_id::text as post_id,
+               c.author_profile_id::text as author_profile_id,
+               a.username, a.avatar_seed
+        from anonymous.comments c
+        left join anonymous.profiles a on a.id = c.author_profile_id
+        where c.id = $1::uuid
+        limit 1
+        `,
+        [ticket.target_id]
+      );
+      const row = rows[0];
+      if (!row) return withMatches(base, ticket.preview_title, ticket.preview_body);
+
+      const [parent_post, comment_replies] = await Promise.all([
+        row.post_id ? hydrateMasqueradeParentPost(row.post_id) : Promise.resolve(null),
+        loadMasqueradeCommentReplies(ticket.target_id),
+      ]);
+
+      return withMatches(
+        {
+          ...base,
+          preview_title: ticket.preview_title || null,
+          preview_body: ticket.preview_body || row.body,
+          author_username: row.username,
+          author_avatar_seed: row.avatar_seed || row.username,
+          author_avatar_url: null,
+          author_profile_id: row.author_profile_id,
+          author_display_name: row.username,
+          media_type: null,
+          media_url: null,
+          thumb_url: null,
+          parent_post,
+          comment_replies,
+          is_text_post: false,
+        },
+        null,
+        row.body
+      );
+    }
+
+    if (ticket.target_kind === 'comment') {
+      const { rows } = await pool.query<{
+        body: string | null;
+        post_id: string | null;
+        author_id: string | null;
+        username: string | null;
+        display_name: string | null;
+        avatar_url: string | null;
+      }>(
+        `
+        select c.body, c.post_id::text as post_id,
+               c.author_id::text as author_id,
+               pr.username, pr.display_name, pr.avatar_url
+        from public.post_comments c
+        left join public.profiles pr on pr.user_id = c.author_id
+        where c.id = $1::uuid
+        limit 1
+        `,
+        [ticket.target_id]
+      );
+      const row = rows[0];
+      if (!row) return withMatches(base, ticket.preview_title, ticket.preview_body);
+
+      const [parent_post, comment_replies] = await Promise.all([
+        row.post_id ? hydrateFeedParentPost(row.post_id) : Promise.resolve(null),
+        loadFeedCommentReplies(ticket.target_id),
+      ]);
+
+      return withMatches(
+        {
+          ...base,
+          preview_title: ticket.preview_title || null,
+          preview_body: ticket.preview_body || row.body,
+          author_username: row.username || row.display_name,
+          author_avatar_seed: row.username || row.display_name,
+          author_avatar_url: row.avatar_url,
+          author_profile_id: row.author_id,
+          author_display_name: row.display_name || row.username,
+          media_type: null,
+          media_url: null,
+          thumb_url: null,
+          parent_post,
+          comment_replies,
+          is_text_post: false,
+        },
+        null,
+        row.body
+      );
+    }
+
     if (ticket.target_kind === 'post' && ticket.platform === 'masquerade') {
       const { rows } = await pool.query<{
         title: string | null;
@@ -1206,9 +1616,10 @@ export async function hydrateTicketDisplay(
       if (!row) return withMatches(base, ticket.preview_title, ticket.preview_body);
 
       const { resolveAnonymousMediaUrl } = await import('../anonymous/media.js');
-      const [media_url, thumb_url] = await Promise.all([
+      const [media_url, thumb_url, context_comments] = await Promise.all([
         resolveAnonymousMediaUrl(row.media_url),
         resolveAnonymousMediaUrl(row.thumb_url),
+        loadMasqueradeCommentsForPost(ticket.target_id),
       ]);
 
       return withMatches(
@@ -1228,6 +1639,7 @@ export async function hydrateTicketDisplay(
           media_type: row.media_type,
           media_url,
           thumb_url,
+          context_comments,
         },
         row.title,
         row.body
@@ -1264,12 +1676,13 @@ export async function hydrateTicketDisplay(
       const { resolvePlaybackForPostRow, freshenThumbUrlString } = await import(
         '../media/r2-playback.js'
       );
-      const [playback, thumb_url] = await Promise.all([
+      const [playback, thumb_url, context_comments] = await Promise.all([
         resolvePlaybackForPostRow({
           media_url: row.media_url,
           media_path: row.media_path,
         }),
         freshenThumbUrlString(row.thumb_url, null, row.media_path),
+        loadFeedCommentsForPost(ticket.target_id),
       ]);
       // Prefer plain playable URL (video tag cannot use JSON media packs).
       let media_url = playback?.url || null;
@@ -1298,6 +1711,7 @@ export async function hydrateTicketDisplay(
           media_type: row.media_type,
           media_url,
           thumb_url,
+          context_comments,
         },
         row.title,
         row.body

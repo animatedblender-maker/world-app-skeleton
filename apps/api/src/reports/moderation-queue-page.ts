@@ -22,7 +22,9 @@ import {
   openTicketCount,
   releaseTicket,
   resolveTicket,
+  type TicketCommentSnippet,
   type TicketDisplay,
+  type TicketParentPost,
   type TicketRow,
 } from '../moderation/tickets.js';
 import {
@@ -192,6 +194,46 @@ function renderShell(opts: {
     padding: 18px; display: grid; gap: 14px;
     box-shadow: 0 10px 28px rgba(44,40,37,.06);
   }
+  .card-stack { display: grid; gap: 12px; }
+  .reported {
+    background: #fffbeb;
+    border: 2px solid #fbbf24;
+    border-radius: 14px;
+    padding: 14px;
+    display: grid;
+    gap: 12px;
+    box-shadow: inset 0 0 0 1px #fde68a;
+  }
+  .reported-label {
+    font-size: 11px; font-weight: 800; letter-spacing: .12em;
+    text-transform: uppercase; color: #92400e;
+  }
+  .context-block {
+    background: var(--wash); border: 1px solid var(--border);
+    border-radius: 14px; padding: 14px; display: grid; gap: 10px;
+  }
+  .context-block .eyebrow {
+    font-size: 11px; font-weight: 700; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--accent);
+  }
+  .thread-list { display: grid; gap: 8px; }
+  .thread-item {
+    display: grid; grid-template-columns: 32px 1fr; gap: 10px;
+    padding: 10px 12px; border-radius: 12px;
+    background: #fff; border: 1px solid var(--border);
+  }
+  .thread-item img {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: #efe8dc; border: 1px solid var(--border); object-fit: cover;
+  }
+  .thread-item .who {
+    font-weight: 650; font-size: .82rem; margin-bottom: 2px;
+  }
+  .thread-item .txt {
+    color: var(--ink); font-size: .9rem; line-height: 1.4;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .thread-empty { color: var(--muted); font-size: .85rem; padding: 4px 2px; }
   .card-top {
     display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
   }
@@ -567,14 +609,25 @@ function renderReporter(ticket: TicketDisplay): string {
   </div>`;
 }
 
-function renderMedia(ticket: TicketDisplay): string {
-  const mediaType = String(ticket.media_type || '').toLowerCase();
-  const videoUrl = ticket.media_url;
-  const thumb = ticket.thumb_url || '';
-  const bodyText = String(ticket.preview_body || '').trim();
-  const titleText = String(ticket.preview_title || '').trim();
+type MediaSource = {
+  media_type: string | null;
+  media_url: string | null;
+  thumb_url: string | null;
+  preview_media_url?: string | null;
+  preview_body: string | null;
+  preview_title: string | null;
+  is_text_post: boolean;
+  name_matches: string[];
+};
 
-  if (ticket.is_text_post || ((!videoUrl && !thumb) && (bodyText || titleText))) {
+function renderMedia(src: MediaSource): string {
+  const mediaType = String(src.media_type || '').toLowerCase();
+  const videoUrl = src.media_url;
+  const thumb = src.thumb_url || '';
+  const bodyText = String(src.preview_body || '').trim();
+  const titleText = String(src.preview_title || '').trim();
+
+  if (src.is_text_post || ((!videoUrl && !thumb) && (bodyText || titleText))) {
     if (mediaType === 'video' && !videoUrl && thumb) {
       return `<img class="media" src="${escapeHtml(thumb)}" alt="Video poster"/>`;
     }
@@ -583,7 +636,7 @@ function renderMedia(ticket: TicketDisplay): string {
     } else if (!videoUrl && mediaType !== 'image') {
       const quote = highlightNames(
         bodyText || titleText || 'Empty text post',
-        ticket.name_matches
+        src.name_matches
       );
       return `
       <div class="text-post">
@@ -601,16 +654,16 @@ function renderMedia(ticket: TicketDisplay): string {
     return `<img class="media" src="${escapeHtml(thumb)}" alt="Video poster"/>`;
   }
   const img =
-    ticket.thumb_url ||
-    (mediaType === 'video' ? null : ticket.media_url) ||
-    ticket.preview_media_url;
+    src.thumb_url ||
+    (mediaType === 'video' ? null : src.media_url) ||
+    src.preview_media_url;
   if (img && !String(img).trim().startsWith('{')) {
     return `<img class="media" src="${escapeHtml(img)}" alt=""/>`;
   }
   if (bodyText || titleText) {
     const quote = highlightNames(
       bodyText || titleText || 'Empty text post',
-      ticket.name_matches
+      src.name_matches
     );
     return `
     <div class="text-post">
@@ -621,14 +674,118 @@ function renderMedia(ticket: TicketDisplay): string {
   return `<div class="media empty">No media preview</div>`;
 }
 
-function renderTicketCard(ticket: TicketDisplay): string {
-  const cat = labelForCategory(ticket.category);
+function commentAvatarUrl(c: TicketCommentSnippet): string {
+  const s =
+    (c.author_avatar_seed || c.author_username || 'anonymous').trim() ||
+    'anonymous';
+  return durableAvatarUrl(c.author_avatar_url, s);
+}
+
+function renderThreadList(
+  comments: TicketCommentSnippet[],
+  emptyLabel: string
+): string {
+  if (!comments.length) {
+    return `<div class="thread-empty">${escapeHtml(emptyLabel)}</div>`;
+  }
+  return `<div class="thread-list">${comments
+    .map((c) => {
+      const username = c.author_username || 'anonymous';
+      const body = escapeHtml((c.body || '').slice(0, 600)) || '<span class="muted">Empty</span>';
+      const avatar = commentAvatarUrl(c);
+      return `
+      <div class="thread-item">
+        <img src="${escapeHtml(avatar)}" alt="" width="32" height="32" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='${escapeHtml(
+          dicebearAvatar(username)
+        )}'"/>
+        <div>
+          <div class="who">@${escapeHtml(username)}</div>
+          <div class="txt">${body}</div>
+        </div>
+      </div>`;
+    })
+    .join('')}</div>`;
+}
+
+function renderParentPost(parent: TicketParentPost, nameMatches: string[]): string {
+  const username = parent.author_username || 'anonymous';
+  const displayName = parent.author_display_name;
+  const avatar = durableAvatarUrl(
+    parent.author_avatar_url,
+    (parent.author_avatar_seed || username).trim() || 'anonymous'
+  );
+  const titleRaw = parent.title || '';
+  const bodyRaw = (parent.body || '').slice(0, 800);
+  const showTitle = !parent.is_text_post || !!titleRaw;
+  const showBody = !parent.is_text_post;
+  const media = renderMedia({
+    media_type: parent.media_type,
+    media_url: parent.media_url,
+    thumb_url: parent.thumb_url,
+    preview_body: parent.body,
+    preview_title: parent.title,
+    is_text_post: parent.is_text_post,
+    name_matches: nameMatches,
+  });
+  return `
+  <div class="context-block">
+    <div class="eyebrow">Parent post</div>
+    <div class="author">
+      <img src="${escapeHtml(avatar)}" alt="" width="44" height="44" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='${escapeHtml(
+        dicebearAvatar(username)
+      )}'"/>
+      <div class="who">
+        <div class="name">@${escapeHtml(username)}${
+          displayName && displayName !== username
+            ? ` <span class="muted">· ${escapeHtml(displayName)}</span>`
+            : ''
+        }</div>
+      </div>
+    </div>
+    ${showTitle && titleRaw ? `<h2>${highlightNames(titleRaw, nameMatches)}</h2>` : ''}
+    ${showBody && bodyRaw ? `<p class="body">${highlightNames(bodyRaw, nameMatches)}</p>` : ''}
+    ${media}
+  </div>`;
+}
+
+function renderReportedPostBody(ticket: TicketDisplay): string {
   const titleRaw = ticket.preview_title || '';
   const bodyRaw = (ticket.preview_body || '').slice(0, 800);
-  const title = highlightNames(titleRaw || (ticket.is_text_post ? '' : '(no title)'), ticket.name_matches);
+  const title = highlightNames(
+    titleRaw || (ticket.is_text_post ? '' : '(no title)'),
+    ticket.name_matches
+  );
   const body = bodyRaw
     ? highlightNames(bodyRaw, ticket.name_matches)
     : '<span class="muted">No body</span>';
+  const showTitle = !ticket.is_text_post || !!titleRaw;
+  const showBody = !ticket.is_text_post;
+  const media = renderMedia({
+    media_type: ticket.media_type,
+    media_url: ticket.media_url,
+    thumb_url: ticket.thumb_url,
+    preview_media_url: ticket.preview_media_url,
+    preview_body: ticket.preview_body,
+    preview_title: ticket.preview_title,
+    is_text_post: ticket.is_text_post,
+    name_matches: ticket.name_matches,
+  });
+  return `
+    ${showTitle && titleRaw ? `<h2>${title}</h2>` : ''}
+    ${showBody ? `<p class="body">${body}</p>` : ''}
+    ${media}`;
+}
+
+function renderReportedCommentBody(ticket: TicketDisplay): string {
+  const bodyRaw = (ticket.preview_body || '').slice(0, 1200);
+  const body = bodyRaw
+    ? highlightNames(bodyRaw, ticket.name_matches)
+    : '<span class="muted">Empty comment</span>';
+  return `<p class="body">${body}</p>`;
+}
+
+function renderTicketCard(ticket: TicketDisplay): string {
+  const cat = labelForCategory(ticket.category);
   const username = ticket.author_username || 'anonymous';
   const displayName = ticket.author_display_name;
   const avatar = avatarUrlFor(ticket);
@@ -641,11 +798,35 @@ function renderTicketCard(ticket: TicketDisplay): string {
   const matchPill = ticket.name_matches.length
     ? `<span class="pill auto">name match</span>`
     : '';
-  const media = renderMedia(ticket);
   const reporter = renderReporter(ticket);
   const queueAbs = `https://api.matterya.com/reports?ticket=${encodeURIComponent(ticket.id)}`;
-  const showTitle = !ticket.is_text_post || !!titleRaw;
-  const showBody = !ticket.is_text_post; // text posts use the template block
+  const isComment = ticket.target_kind === 'comment';
+  const reportedLabel = isComment ? 'Reported comment' : 'Reported post';
+  const reportedInner = isComment
+    ? renderReportedCommentBody(ticket)
+    : renderReportedPostBody(ticket);
+
+  const parentBlock =
+    isComment && ticket.parent_post
+      ? renderParentPost(ticket.parent_post, ticket.name_matches)
+      : '';
+
+  const commentsUnderPost =
+    !isComment && ticket.context_comments
+      ? `
+    <div class="context-block">
+      <div class="eyebrow">Comments on this post</div>
+      ${renderThreadList(ticket.context_comments, 'No comments yet')}
+    </div>`
+      : '';
+
+  const repliesUnderComment = isComment
+    ? `
+    <div class="context-block">
+      <div class="eyebrow">Direct replies</div>
+      ${renderThreadList(ticket.comment_replies || [], 'No replies')}
+    </div>`
+    : '';
 
   return `
   <article class="card">
@@ -672,9 +853,28 @@ function renderTicketCard(ticket: TicketDisplay): string {
       ${matchPill}
       <span class="muted">×${ticket.report_count} reports</span>
     </div>
-    ${showTitle && titleRaw ? `<h2>${title}</h2>` : ''}
-    ${showBody ? `<p class="body">${body}</p>` : ''}
-    ${media}
+    <div class="card-stack">
+      ${parentBlock}
+      <div class="reported">
+        <div class="reported-label">${reportedLabel}</div>
+        ${
+          isComment
+            ? `<div class="author">
+          <img src="${escapeHtml(avatar)}" alt="" width="44" height="44" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='${escapeHtml(
+              dicebearAvatar(username)
+            )}'"/>
+          <div class="who">
+            <div class="name">@${escapeHtml(username)}</div>
+            <div class="sub">comment author</div>
+          </div>
+        </div>`
+            : ''
+        }
+        ${reportedInner}
+      </div>
+      ${commentsUnderPost}
+      ${repliesUnderComment}
+    </div>
   </article>
 
   <aside class="decision" id="decision-panel" data-ticket-id="${escapeHtml(ticket.id)}">
