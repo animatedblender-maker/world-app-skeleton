@@ -152,7 +152,7 @@ function escalationRootTree(): PolicyNode {
         'remove',
         {
           severity: 'severe',
-          rationale: 'Meta adult sexual exploitation / TikTok — escalate confirmed sextortion',
+          rationale: 'Confirmed sextortion with a concrete demand — escalate',
         }
       ),
     },
@@ -164,22 +164,25 @@ function escalationRootTree(): PolicyNode {
   ]);
 }
 
-/** Root of the live decision tree. */
+/**
+ * Root: actionable vs ignore only.
+ * Content that *stays* for a policy reason (e.g. self-harm recovery, news graphic,
+ * labeled adult Space) must go Yes → Step 2 → that leaf — never Ignore.
+ * Ignore = nothing wrong / clear false alarm only.
+ */
 export const POLICY_TREE: PolicyBranch = {
   kind: 'branch',
   id: 'root',
-  question: 'Is there a policy violation?',
+  question: 'Is it actionable?',
   options: [
     {
       key: '1',
-      label: 'Yes — there is a violation',
+      label: 'Yes',
       node: {
         kind: 'branch',
         id: 'violation_kind',
-        question: 'What kind of violation?',
+        question: 'What kind of issue?',
         // Ordered by harm priority (highest first).
-        // CSAM is its own #1 category (always severe; escalate in confirmed cases).
-        // Adult solicitation is separate from Mature (porn/nudity) and from CSAM.
         options: [
           { key: '1', label: 'CSAM', node: csamTree() },
           { key: '2', label: 'Self-harm / suicide', node: selfHarmTree() },
@@ -201,24 +204,27 @@ export const POLICY_TREE: PolicyBranch = {
               rationale: 'Catch-all until policy refined',
             }),
           },
+          {
+            key: 'E',
+            label: 'Escalate — special safety case',
+            node: escalationRootTree(),
+          },
         ],
       },
     },
     {
       key: '2',
-      label: 'No — allow / false positive',
+      label: 'Ignore',
       node: leaf(
         'allowed.false_positive',
-        'No violation / false positive',
+        'Ignore — nothing actionable',
         'other',
         'dismiss',
-        { rationale: 'Clears auto flags; content stays' }
+        {
+          rationale:
+            'Only for clear false alarms / normal content with nothing to decide. Recovery, news, labeled mature, satire, etc. must use Yes → the matching leaf.',
+        }
       ),
-    },
-    {
-      key: '3',
-      label: 'Escalate — special safety case',
-      node: escalationRootTree(),
     },
   ],
 };

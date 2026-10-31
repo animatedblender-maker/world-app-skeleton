@@ -26,10 +26,13 @@ Client JSON from `policyTreeForClient()` never includes outcomes.
 
 ## Escalation (specific cases only)
 
-Claim-next policy tree for posts and short-form. Longform video may use a separate queue later.
+Claim-next policy tree for posts and short-form.
 
-Step 2 includes standalone **CSAM**, **Terrorism**, **Servitude / domestic helpers**, and **Adult solicitation** kinds.  
-Step 2 options are ordered by **harm priority** (CSAM → Self-harm → Terrorism → Violence → Servitude → Harassment → Hate → Doxxing → Scam → Misinfo → Adult solicitation → Mature → Spam → Other).
+**Step 1:** Is it actionable? → **Yes** | **Ignore**  
+- **Ignore** = clear false alarm / nothing wrong only.  
+- Content that stays for a policy reason (recovery, news mark, labeled mature, satire) = **Yes** → matching leaf.
+
+**Step 2** (after Yes): issue kinds ordered by harm priority (CSAM → Self-harm → Terrorism → Violence → Servitude → Harassment → Hate → Doxxing → Scam → Misinfo → Adult solicitation → Mature → Spam → Other → Escalate).
 
 Root option **Escalate — special safety case**, plus gates inside mature / threats / stalking / blackmail / self-harm / terrorism threats / doxxing:
 

@@ -19,10 +19,26 @@ People report posts (or our systems flag them). You open one ticket at a time, l
 
 1. Open **Content queue** and log in with the shared password.
 2. You see one post (or comment): author, text, media, sometimes reporters.
-3. On the right, answer the questions with number keys (`1`, `2`, …) or by clicking.
-4. `Backspace` goes back a step. `Enter` confirms the final answer.
-5. `P` **passes** the ticket to another moderator if you are stuck or conflicted.
-6. The screen says **“Decision recorded”** and gives you the next ticket. You will not see whether content was removed — that is intentional.
+3. First question: **Is it actionable?**
+   - **Yes** → Step 2 (pick the kind of issue: CSAM, Self-harm, …).
+   - **Ignore** → only when nothing is wrong (clear false alarm / normal post).
+4. Answer the rest with number keys (`1`, `2`, …) or by clicking.
+5. `Backspace` goes back a step. `Enter` confirms the final answer.
+6. `P` **passes** the ticket to another moderator if you are stuck or conflicted.
+7. The screen says **“Decision recorded”** and gives you the next ticket. You will not see whether content was removed — that is intentional.
+
+### Important: Ignore vs a “keep” decision
+
+If content **stays up for a policy reason**, that is still **Yes → Step 2**, then the matching leaf (for example Self-harm → **Recovery**). Do **not** press Ignore.
+
+| Situation | Correct path |
+|---|---|
+| Cake photo wrongly auto-flagged | **Ignore** |
+| Empty / normal tourism clip, no issue | **Ignore** |
+| Suicide recovery story (should stay) | **Yes → Self-harm → Recovery** |
+| News graphic that should stay with a warning | **Yes → Violence → News** |
+| Adult porn in a labeled adult Space | **Yes → Mature → labeled** |
+| Clearly labeled satire | **Yes → Misinformation → Satire** |
 
 ### What happens after you answer
 
@@ -224,7 +240,7 @@ Step 2 → **7 Hate speech**.
 | Lazy demeaning stereotype of a protected group | Stereotype → remove |
 | Praise of a hate group or atrocity | Praise → remove (severe) |
 | Friend group reclaiming a slur about themselves, no attack on others | Reclaimed → dismiss |
-| **From our queue:** “Downtown Miami…” tourism clip wrongly tagged hate | Likely **false positive** → Step 1 “No — allow” or hate reclaimed/dismiss path after checking |
+| **From our queue:** “Downtown Miami…” tourism clip wrongly tagged hate | **Ignore** (nothing actionable) |
 
 ---
 
@@ -366,7 +382,7 @@ Step 2 → **S Spam**.
 
 ### Definition
 
-Escalate is **not** “I’m unsure of the category.” It is for rare, high-stakes safety cases only.
+After **Yes**, Step 2 includes **Escalate** (`E`). It is **not** “I’m unsure of the category,” and it is **not** Ignore. Use it only for rare, high-stakes safety cases.
 
 ### When to use it
 
@@ -408,6 +424,7 @@ Try these mentally before your first real ticket:
 1. Adult explicit caption in Masquerade adult Space → **Mature → labeled → mark**  
 2. “I’ll bomb the station at noon” → **Terrorism → threat → place/time → escalate**  
 3. Peru news report of a violent assault, labeled news → **Violence → news → mark**  
-4. Cake photo auto-flagged NSFW → **Mature → false positive → dismiss** or **No violation**  
-5. Unsure if rude comment is harassment → **`P` Pass**
+4. Cake photo auto-flagged NSFW → **Ignore**  
+5. Suicide recovery story → **Yes → Self-harm → Recovery** (not Ignore)  
+6. Unsure if rude comment is harassment → **`P` Pass**
 
