@@ -143,17 +143,18 @@ export const POLICY_TREE: PolicyBranch = {
         kind: 'branch',
         id: 'violation_kind',
         question: 'What kind of violation?',
-        // Ordered by harm priority (highest first) — matches training + keyboard 1→9.
+        // Ordered by harm priority (highest first). Mature is mid/low — child-safety
+        // still escalates via its own gate; unlabeled adult content is not top priority.
         options: [
-          { key: '1', label: 'Terrorism', node: terrorismTree() },
-          { key: '2', label: 'Mature / sexual content', node: matureTree() },
+          { key: '1', label: 'Self-harm / suicide', node: selfHarmTree() },
+          { key: '2', label: 'Terrorism', node: terrorismTree() },
           { key: '3', label: 'Violence / graphic harm', node: violenceTree() },
-          { key: '4', label: 'Self-harm / suicide', node: selfHarmTree() },
-          { key: '5', label: 'Harassment / bullying', node: harassmentTree() },
-          { key: '6', label: 'Hate speech', node: hateTree() },
-          { key: '7', label: 'Doxxing / privacy', node: doxxingTree() },
-          { key: '8', label: 'Scam / fraud', node: scamTree() },
-          { key: '9', label: 'Misinformation', node: misinfoTree() },
+          { key: '4', label: 'Harassment / bullying', node: harassmentTree() },
+          { key: '5', label: 'Hate speech', node: hateTree() },
+          { key: '6', label: 'Doxxing / privacy', node: doxxingTree() },
+          { key: '7', label: 'Scam / fraud', node: scamTree() },
+          { key: '8', label: 'Misinformation', node: misinfoTree() },
+          { key: '9', label: 'Mature / sexual content', node: matureTree() },
           { key: 'S', label: 'Spam', node: spamTree() },
           {
             key: '0',
