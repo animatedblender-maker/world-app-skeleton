@@ -25,6 +25,7 @@ import { ProfileService } from '../core/services/profile.service';
 import { R2PlaybackService } from '../core/services/r2-playback.service';
 import { SurfacePageService } from '../core/services/surface-page.service';
 import { HubsPlaybackService } from '../hubs/hubs-playback.service';
+import { HubsCatalogService } from '../hubs/hubs-catalog.service';
 import type { CountryPost } from '../core/models/post.model';
 import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util';
 
@@ -58,6 +59,30 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
             (open)="openSpark($event)"
             (brandTap)="openSparks()"
           ></app-sparks-strip>
+
+          <!-- iOS FeedView: Continue watching (Hubs long-form history) -->
+          <section class="continue-strip" *ngIf="continueWatching.length">
+            <div class="continue-head">
+              <div class="continue-title">Continue watching</div>
+              <button type="button" class="continue-link" (click)="openHubs()">Matterya Hubs</button>
+            </div>
+            <div class="continue-rail">
+              <button
+                type="button"
+                class="continue-card"
+                *ngFor="let p of continueWatching; trackBy: trackById"
+                (click)="openContinue(p)"
+              >
+                <div class="continue-thumb">
+                  <img *ngIf="posterForRail(p)" [src]="posterForRail(p)!" alt="" loading="lazy" />
+                </div>
+                <div class="continue-card-title">{{ continueHeadline(p) }}</div>
+                <div class="continue-progress" *ngIf="continueProgress(p) > 0">
+                  <span [style.width.%]="continueProgress(p)"></span>
+                </div>
+              </button>
+            </div>
+          </section>
 
           <div class="feed-state" *ngIf="loading">Loading feed…</div>
           <div class="feed-state error" *ngIf="!loading && error">{{ error }}</div>
@@ -310,6 +335,88 @@ import { resolveAvatarUrl, resolveMediaUrl } from '../core/utils/media-url.util'
           --m-feed-card-gap: 0px;
         }
       }
+
+      .continue-strip {
+        padding: 4px 0 18px;
+      }
+      .continue-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 0 16px 10px;
+      }
+      .continue-title {
+        font-size: 17px;
+        font-weight: 650;
+        color: var(--m-ink, #2c2825);
+      }
+      .continue-link {
+        border: 0;
+        background: transparent;
+        color: var(--m-accent, #7b6347);
+        font: inherit;
+        font-size: 0.82rem;
+        font-weight: 650;
+        cursor: pointer;
+        padding: 0;
+      }
+      .continue-rail {
+        display: flex;
+        gap: 12px;
+        overflow-x: auto;
+        padding: 0 16px;
+        scrollbar-width: none;
+      }
+      .continue-rail::-webkit-scrollbar { display: none; }
+      .continue-card {
+        flex: 0 0 268px;
+        width: 268px;
+        border: 0;
+        background: transparent;
+        padding: 0;
+        text-align: left;
+        color: inherit;
+        cursor: pointer;
+        font: inherit;
+      }
+      .continue-thumb {
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        border-radius: 12px;
+        overflow: hidden;
+        background: #171412;
+        border: 1px solid var(--m-border, #ddd6cc);
+      }
+      .continue-thumb img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      .continue-card-title {
+        margin-top: 8px;
+        font-size: 0.9rem;
+        font-weight: 650;
+        line-height: 1.25;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .continue-progress {
+        margin-top: 6px;
+        height: 3px;
+        border-radius: 99px;
+        background: rgba(44, 40, 37, 0.12);
+        overflow: hidden;
+      }
+      .continue-progress span {
+        display: block;
+        height: 100%;
+        background: var(--m-accent, #7b6347);
+      }
+
       @media (min-width: 1280px) {
         .feed-layout {
           grid-template-columns: minmax(0, 1fr) 320px;
@@ -335,6 +442,7 @@ export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
 
   posts: CountryPost[] = [];
   sparksRail: CountryPost[] = [];
+  continueWatching: CountryPost[] = [];
   railPeople: Array<{
     id: string;
     name: string;
@@ -364,6 +472,7 @@ export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
     private frame0: Frame0PosterService,
     private mediaSession: MediaSessionService,
     private hubsPlayback: HubsPlaybackService,
+    private catalog: HubsCatalogService,
     private auth: AuthService,
     private profiles: ProfileService,
     private location: LocationService,
@@ -623,6 +732,41 @@ export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
     void this.router.navigate(['/hubs']);
   }
 
+  openContinue(post: CountryPost): void {
+    if (!post?.id) return;
+    this.catalog.recordWatch(post.id);
+    void this.router.navigate(['/hubs/watch', post.id], {
+      state: { post, seedPosts: this.continueWatching },
+    });
+  }
+
+  continueHeadline(post: CountryPost): string {
+    return this.catalog.displayHeadline(post);
+  }
+
+  continueProgress(post: CountryPost): number {
+    const pos = this.catalog.playbackPosition(post.id);
+    const dur = Number((post as any).duration_seconds || (post as any).duration || 0);
+    if (!pos || !dur || dur < 1) return 0;
+    return Math.max(0, Math.min(100, (pos / dur) * 100));
+  }
+
+  private async loadContinueWatching(): Promise<void> {
+    try {
+      const videos = await this.catalog.loadCatalog({
+        forceRefresh: false,
+        viewerCountry: this.homeCountry,
+      });
+      const primary = this.catalog.historyVideos(videos).slice(0, 10);
+      this.continueWatching = primary.length
+        ? primary
+        : this.catalog.continueWatchingFeed(videos, 8);
+      this.paint();
+    } catch {
+      // strip is optional
+    }
+  }
+
   openPeople(): void {
     void this.router.navigate(['/people']);
   }
@@ -759,6 +903,7 @@ export class FeedPageComponent implements OnInit, AfterViewChecked, OnDestroy {
       // After first paint: Frame0 thumbs only, then optional secondary top-up.
       // Playback freshen happens for the focus winner in setFocus (no AV storm).
       void this.warmPostersAfterPaint();
+      void this.loadContinueWatching();
       void this.loadSecondary(authorId, countryCode, followingIds);
     } catch (e: any) {
       this.error = e?.message || 'Feed unavailable';

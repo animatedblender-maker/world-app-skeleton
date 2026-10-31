@@ -46,11 +46,14 @@
 | Messages | ≥900px | List \| thread; &lt;900 stacked like iOS |
 | Hubs watch | ≥900px | Player + sticky “More on Hubs” related |
 
+
+- **13:27Z:** Web Home feed **Continue watching** strip (iOS FeedView parity) — Hubs history/in-progress via HubsCatalogService; 16:9 rail + progress; opens `/hubs/watch/:id`.
+
 ## Remaining gaps (web)
 - Messages: archive/delete swipe actions; CallKit-grade call UX polish
 - Hubs: remount-free continuous player; autoplay-next related
 - Anonymous: Search profile deep-link / in-shell chat thread (Inbox now lists DMs + alerts)
-- Feed: continue-watching strip parity with iOS HomeFeedStore
+- Feed: continue-watching strip — **shipped 13:27Z**
 - Android Masquerade: deeper media/zoom, mod panel polish (DM threads wired)
 
 - **13:24Z Wave (scheduler):**
