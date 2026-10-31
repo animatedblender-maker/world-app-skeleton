@@ -117,6 +117,8 @@ data class AppStateSnapshot(
     val hubPlaybackPlaying: Boolean = true,
     val hubPlaybackMuted: Boolean = false,
     val hubPlaybackPullProgress: Float = 0f,
+    /** Same continuous player, full-window landscape + aspect-fit (iOS hubPlaybackLandscapeFullscreen). */
+    val hubPlaybackLandscapeFullscreen: Boolean = false,
     val hubWatchScrollCollapse: Float = 0f,
     val hubPlaybackVideoAspect: Float = 16f / 9f,
     val hubPlaybackReturnConversationId: String? = null,
@@ -1125,6 +1127,9 @@ class AppState(private val app: Application) {
         @Suppress("UNUSED_VARIABLE")
         val _a = animated
         if (_snapshot.value.hubPlaybackPost == null) return
+        if (_snapshot.value.hubPlaybackLandscapeFullscreen) {
+            exitHubLandscapeFullscreen()
+        }
         val conversationId = _snapshot.value.hubPlaybackReturnConversationId
         _snapshot.update {
             it.copy(
@@ -1132,6 +1137,7 @@ class AppState(private val app: Application) {
                 hubWatchScrollCollapse = 0f,
                 hubPlaybackPullProgress = max(it.hubPlaybackPullProgress, 1f),
                 hubPlaybackExpanded = false,
+                hubPlaybackLandscapeFullscreen = false,
             )
         }
         scope.launch {
@@ -1142,6 +1148,13 @@ class AppState(private val app: Application) {
                 userMuted = _snapshot.value.hubPlaybackMuted,
             )
             syncHubPlaybackChatReturnWithPath()
+            // Clear pull after ytMorph (~220ms) so chrome can settle.
+            delay(230)
+            _snapshot.update {
+                if (!it.hubPlaybackExpanded && it.hubPlaybackPullProgress > 0f) {
+                    it.copy(hubPlaybackPullProgress = 0f)
+                } else it
+            }
             if (returnToChat && conversationId != null) {
                 delay(120)
                 if (_snapshot.value.hubPlaybackPost != null && !_snapshot.value.hubPlaybackExpanded) {
@@ -1174,6 +1187,8 @@ class AppState(private val app: Application) {
                 hubPlaybackPlaying = true,
                 hubWatchScrollCollapse = 0f,
                 hubPlaybackExpanded = true,
+                hubPlaybackPullProgress = 0f,
+                hubPlaybackLandscapeFullscreen = false,
             )
         }
     }
@@ -1185,6 +1200,7 @@ class AppState(private val app: Application) {
                 hubPlaybackExpanded = false,
                 hubPlaybackPlaying = false,
                 hubPlaybackPullProgress = 0f,
+                hubPlaybackLandscapeFullscreen = false,
                 hubWatchScrollCollapse = 0f,
                 hubPlaybackVideoAspect = 16f / 9f,
                 hubPlaybackReturnConversationId = null,
@@ -1196,6 +1212,31 @@ class AppState(private val app: Application) {
 
     fun setHubPlaybackPlaying(playing: Boolean) {
         _snapshot.update { it.copy(hubPlaybackPlaying = playing) }
+    }
+
+    fun setHubPlaybackPullProgress(progress: Float) {
+        val p = progress.coerceIn(0f, 1f)
+        _snapshot.update {
+            if (kotlin.math.abs(p - it.hubPlaybackPullProgress) > 0.008f) {
+                it.copy(hubPlaybackPullProgress = p)
+            } else it
+        }
+    }
+
+    /** Landscape FS on the same continuous ExoPlayer (letterbox / aspect-fit). */
+    fun requestHubFullscreen() {
+        if (_snapshot.value.hubPlaybackPost == null) return
+        if (!_snapshot.value.hubPlaybackExpanded) {
+            expandHubPlayback()
+        }
+        _snapshot.update {
+            it.copy(hubPlaybackLandscapeFullscreen = true, hubPlaybackPullProgress = 0f)
+        }
+    }
+
+    fun exitHubLandscapeFullscreen() {
+        if (!_snapshot.value.hubPlaybackLandscapeFullscreen) return
+        _snapshot.update { it.copy(hubPlaybackLandscapeFullscreen = false) }
     }
 
     fun inviteFriendsFromMenu() {

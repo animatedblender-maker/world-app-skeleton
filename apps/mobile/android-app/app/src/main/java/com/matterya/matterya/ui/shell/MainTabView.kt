@@ -37,6 +37,7 @@ import com.matterya.matterya.data.messages.MessagesService
 import com.matterya.matterya.data.posts.PostsService
 import com.matterya.matterya.data.push.PushNotificationService
 import com.matterya.matterya.data.push.VoIPPushService
+import com.matterya.matterya.data.reels.MatteryaPullDownDismiss
 import com.matterya.matterya.data.reels.SparkDiscoveryEngine
 import com.matterya.matterya.data.social.BlockService
 import com.matterya.matterya.model.AppTab
@@ -286,7 +287,12 @@ fun MainTabView(
                             onOpenCountry = { iso -> navigate(NavRoutes.country(iso)) },
                             onOpenChat = { id -> navigate(NavRoutes.chat(id)) },
                             onOpenHubsWatch = { post ->
-                                vm.appState.openPost(post)
+                                // Always Hubs continuous player (never fall through to Feed post).
+                                vm.appState.openLivingVideo(
+                                    postId = post.id,
+                                    tab = com.matterya.matterya.data.hubs.YouTubeMainTab.Home,
+                                    post = post,
+                                )
                             },
                             onOpenAuthor = { post ->
                                 vm.appState.openPublicProfile(
@@ -1404,7 +1410,10 @@ fun MainTabView(
         // Continuous Hubs ExoPlayer — expand↔mini ytMorph; keep mounted across tabs/chat dock.
         val hubPost = appSnap.hubPlaybackPost
         if (hubPost != null && reelsCtx == null && storyCtx == null) {
-            if (appSnap.hubPlaybackExpanded) {
+            val hubFs = appSnap.hubPlaybackLandscapeFullscreen
+            val hubPull = appSnap.hubPlaybackPullProgress
+            // Watch chrome under the continuous stage; hide while pulling / landscape FS.
+            if (appSnap.hubPlaybackExpanded && !hubFs && hubPull < 0.05f) {
                 val related = state.hubStrip
                     .filter { it.id != hubPost.id && it.hasVideo && !it.isReel }
                     .distinctBy { it.id }
@@ -1416,7 +1425,13 @@ fun MainTabView(
                     isPlaying = appSnap.hubPlaybackPlaying,
                     isMuted = appSnap.hubPlaybackMuted,
                     onBack = { vm.appState.minimizeHubPlayback(returnToChat = false) },
-                    onOpenVideo = { vm.appState.openPost(it) },
+                    onOpenVideo = { related ->
+                        vm.appState.openLivingVideo(
+                            postId = related.id,
+                            tab = com.matterya.matterya.data.hubs.YouTubeMainTab.Home,
+                            post = related,
+                        )
+                    },
                     onLike = vm::toggleLike,
                     onShare = { vm.appState.presentShareSheet(it) },
                 )
@@ -1426,9 +1441,11 @@ fun MainTabView(
                 expanded = appSnap.hubPlaybackExpanded,
                 isPlaying = appSnap.hubPlaybackPlaying,
                 isMuted = appSnap.hubPlaybackMuted,
+                landscapeFullscreen = hubFs,
+                pullProgress = hubPull,
                 // Tab root: sit above tab bar. Chat dock / pushed routes: flush bottom.
                 bottomClearance = when {
-                    appSnap.hubPlaybackExpanded -> 0.dp
+                    appSnap.hubPlaybackExpanded || hubFs -> 0.dp
                     onTabsRoot && !appSnap.hubPlaybackDockInChat -> MatteryaDimens.tabBarHeight
                     else -> 0.dp
                 },
@@ -1437,6 +1454,23 @@ fun MainTabView(
                 onTogglePlay = {
                     vm.appState.setHubPlaybackPlaying(!appSnap.hubPlaybackPlaying)
                 },
+                onPullProgress = { vm.appState.setHubPlaybackPullProgress(it) },
+                onPullEnd = { progress ->
+                    val commit = progress >= MatteryaPullDownDismiss.releaseSnapBackProgress ||
+                        MatteryaPullDownDismiss.shouldMinimizeOnRelease(
+                            translationY = progress * MatteryaPullDownDismiss.chromeFadeDistance,
+                            predictedY = progress * MatteryaPullDownDismiss.chromeFadeDistance,
+                            pullProgress = progress,
+                        )
+                    if (commit) {
+                        vm.appState.setHubPlaybackPullProgress(1f)
+                        vm.appState.minimizeHubPlayback(returnToChat = false)
+                    } else {
+                        vm.appState.setHubPlaybackPullProgress(0f)
+                    }
+                },
+                onRequestFullscreen = { vm.appState.requestHubFullscreen() },
+                onExitFullscreen = { vm.appState.exitHubLandscapeFullscreen() },
             )
         }
 

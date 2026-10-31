@@ -5,6 +5,7 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -91,6 +93,10 @@ fun VideoPlayerView(
     onVideoSize: ((width: Int, height: Int) -> Unit)? = null,
     /** Mark as continuous Hubs player so tab silence spares this ExoPlayer. */
     protectAsContinuous: Boolean = false,
+    /** Absolute downward pull px while dragging (Hubs expand → mini). Same node as clickable. */
+    onPullDrag: ((translationY: Float) -> Unit)? = null,
+    onPullDragEnd: ((translationY: Float) -> Unit)? = null,
+    onPullDragCancel: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     var adFinished by remember(url, placement) { mutableStateOf(!adsEnabled || placement == null) }
@@ -110,6 +116,9 @@ fun VideoPlayerView(
     val seekConsumedCb by rememberUpdatedState(onSeekConsumed)
     val loopsLatest by rememberUpdatedState(loops)
     val mutedLatest by rememberUpdatedState(muted)
+    val onPullDragLatest by rememberUpdatedState(onPullDrag)
+    val onPullDragEndLatest by rememberUpdatedState(onPullDragEnd)
+    val onPullDragCancelLatest by rememberUpdatedState(onPullDragCancel)
 
     val shouldShowAd = adsEnabled && isActive && !adFinished && placement != null
 
@@ -384,7 +393,26 @@ fun VideoPlayerView(
             .background(Color.Black)
             .clickable(enabled = showsControls) {
                 showChrome = !showChrome
-            },
+            }
+            .then(
+                if (onPullDrag != null) {
+                    Modifier.pointerInput(Unit) {
+                        var totalY = 0f
+                        detectVerticalDragGestures(
+                            onDragStart = { totalY = 0f },
+                            onVerticalDrag = { change, amount ->
+                                change.consume()
+                                totalY = maxOf(0f, totalY + amount)
+                                onPullDragLatest?.invoke(totalY)
+                            },
+                            onDragEnd = { onPullDragEndLatest?.invoke(totalY) },
+                            onDragCancel = { onPullDragCancelLatest?.invoke() },
+                        )
+                    }
+                } else {
+                    Modifier
+                },
+            ),
     ) {
         // Static underlay (no crossfade — avoids blink on recompose).
         if (!posterUrl.isNullOrBlank() && (showPosterCover || !hasRenderedFrame)) {

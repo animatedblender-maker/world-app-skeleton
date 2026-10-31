@@ -97,7 +97,7 @@ fun YouTubeWatchView(
                         muted = isMuted,
                         showsControls = true,
                         allowsFullscreen = true,
-                        fillsFrame = true,
+                        fillsFrame = false,
                         modifier = Modifier
                             .fillMaxWidth()
                             .aspectRatio(YouTubeMediaLayout.aspect)

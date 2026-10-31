@@ -89,13 +89,15 @@ object SparksStageLayout {
     }
 }
 
-/** Pull-down dismiss math — iOS `MatteryaPullDownDismiss`. */
+/** Pull-down dismiss math — iOS `MatteryaPullDownDismiss` (Hubs expand → mini). */
 object MatteryaPullDownDismiss {
-    const val dismissDistance = 140f
-    const val predictedDismissDistance = 180f
-    const val chromeFadeDistance = 140f
-    const val releaseSnapBackProgress = 0.06f
-    const val releaseSnapBackTranslation = 14f
+    const val dismissDistance = 220f
+    const val predictedDismissDistance = 320f
+    const val chromeFadeDistance = 220f
+    /** Release ≥ ~1/3 of collapse track → mini (task band ~0.35–0.45). */
+    const val releaseSnapBackProgress = 0.35f
+    const val releaseSnapBackTranslation = 70f
+    const val flingCommitPredicted = 200f
 
     fun shouldDismiss(translationY: Float, predictedY: Float): Boolean =
         translationY > dismissDistance || predictedY > predictedDismissDistance
@@ -108,16 +110,11 @@ object MatteryaPullDownDismiss {
     ): Boolean {
         val progress = maxOf(pullProgress, pullProgressForVertical(translationY))
         val y = maxOf(0f, translationY)
-        val nearTop = progress < releaseSnapBackProgress &&
-            y < releaseSnapBackTranslation &&
-            dragOffset < releaseSnapBackTranslation &&
-            predictedY < 40f
-        if (nearTop) return false
-        return progress > 0.04f ||
-            y > 10f ||
-            dragOffset > 10f ||
-            predictedY > 48f ||
-            shouldDismiss(translationY, predictedY)
+        if (predictedY > flingCommitPredicted) return true
+        if (shouldDismiss(translationY, predictedY)) return true
+        if (progress >= releaseSnapBackProgress) return true
+        if (y >= releaseSnapBackTranslation && predictedY > 90f) return true
+        return false
     }
 
     fun pullProgressForVertical(translationY: Float): Float {
