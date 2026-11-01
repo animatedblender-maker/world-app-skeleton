@@ -1154,6 +1154,16 @@ class AppState(private val app: Application) {
                     it.copy(hubPlaybackPullProgress = 0f)
                 } else it
             }
+            // Re-assert continuous play after morph — TextureView rebind / tab silence
+            // can leave Exo paused while hubPlaybackPlaying stays true.
+            if (_snapshot.value.hubPlaybackPost != null &&
+                !_snapshot.value.hubPlaybackExpanded &&
+                _snapshot.value.hubPlaybackPlaying
+            ) {
+                MediaPlaybackCoordinator.shared.ensureContinuingHubsPlayback(
+                    userMuted = _snapshot.value.hubPlaybackMuted,
+                )
+            }
             if (returnToChat && conversationId != null) {
                 delay(120)
                 if (_snapshot.value.hubPlaybackPost != null && !_snapshot.value.hubPlaybackExpanded) {

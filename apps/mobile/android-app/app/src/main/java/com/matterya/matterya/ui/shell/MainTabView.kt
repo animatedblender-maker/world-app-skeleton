@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -285,7 +286,12 @@ fun MainTabView(
                                 )
                             },
                             onOpenCountry = { iso -> navigate(NavRoutes.country(iso)) },
-                            onOpenChat = { id -> navigate(NavRoutes.chat(id)) },
+                            onOpenChat = { id ->
+                                // Sync AppState path so hubPlaybackDockInChat is true
+                                // (continuous film docks into conversation hole).
+                                vm.appState.openConversation(id)
+                                navigate(NavRoutes.chat(id))
+                            },
                             onOpenHubsWatch = { post ->
                                 // Always Hubs continuous player (never fall through to Feed post).
                                 vm.appState.openLivingVideo(
@@ -966,7 +972,10 @@ fun MainTabView(
                                 val uid = profile?.userId ?: return@PublicProfileView
                                 scope.launch {
                                     runCatching { messagesService.startConversation(uid) }
-                                        .onSuccess { navigate(NavRoutes.chat(it.id)) }
+                                        .onSuccess {
+                                            vm.appState.openConversation(it.id, seed = it)
+                                            navigate(NavRoutes.chat(it.id))
+                                        }
                                         .onFailure { toast = it.message ?: "Could not start chat" }
                                 }
                             },
@@ -1024,7 +1033,10 @@ fun MainTabView(
                             onMessage = {
                                 scope.launch {
                                     runCatching { messagesService.startConversation(userId) }
-                                        .onSuccess { navigate(NavRoutes.chat(it.id)) }
+                                        .onSuccess {
+                                            vm.appState.openConversation(it.id, seed = it)
+                                            navigate(NavRoutes.chat(it.id))
+                                        }
                                         .onFailure { toast = it.message ?: "Could not start chat" }
                                 }
                             },
@@ -1234,6 +1246,19 @@ fun MainTabView(
                         var draft by remember(conversationId) { mutableStateOf("") }
                         var loading by remember(conversationId) { mutableStateOf(true) }
                         val seed = messagesService.cachedConversation(conversationId)
+
+                        // Keep AppState.navigationPath in sync with NavController so
+                        // hubPlaybackDockInChat flips and continuous film docks here.
+                        DisposableEffect(conversationId) {
+                            if (conversationId.isNotBlank()) {
+                                vm.appState.openConversation(conversationId, seed = seed)
+                            }
+                            onDispose {
+                                if (conversationId.isNotBlank()) {
+                                    vm.appState.closeConversation(conversationId)
+                                }
+                            }
+                        }
 
                         LaunchedEffect(conversationId) {
                             loading = true
@@ -1449,6 +1474,7 @@ fun MainTabView(
                     onTabsRoot && !appSnap.hubPlaybackDockInChat -> MatteryaDimens.tabBarHeight
                     else -> 0.dp
                 },
+                dockInChat = appSnap.hubPlaybackDockInChat,
                 onExpand = { vm.appState.expandHubPlayback() },
                 onClose = { vm.appState.stopHubPlayback() },
                 onTogglePlay = {

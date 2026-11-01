@@ -49,7 +49,10 @@ See `docs/ios-golden-file-inventory.txt` (~194 Swift files).
 - [x] Android Hubs pull-to-minimize (≥0.35) + landscape FS letterbox
 - [x] Android Hubs rails → `openLivingVideo` (no Feed fallthrough)
 - [x] Web Hubs 2-cycle looping Netflix rails
-- [ ] Remaining fidelity gaps (chat dock hole polish, gh-pages prod deploy, side-by-side QA)
+- [x] Android chat dock hole: continuous Hubs mini docks into conversation bar (HubContinuousDockSlot)
+- [x] Android chat open syncs `AppState.openConversation` so `hubPlaybackDockInChat` flips (mini above composer)
+- [x] Continuous Hubs: loop + survive VideoPlayerView remount; ENDED seek restart
+- [ ] Remaining fidelity gaps (gh-pages prod deploy, side-by-side QA)
 - [ ] Full QA pass vs iOS simulator side-by-side
 
 ## Verified on device (2026-10-31 → 2026-11-01)

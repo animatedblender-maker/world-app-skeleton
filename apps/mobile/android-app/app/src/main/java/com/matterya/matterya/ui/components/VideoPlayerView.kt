@@ -151,12 +151,28 @@ fun VideoPlayerView(
             else -> showPosterCover
         }
 
-    LaunchedEffect(url, postId) {
+    LaunchedEffect(url, postId, protectAsContinuous) {
         if (url.isNullOrBlank()) {
             player = null
             return@LaunchedEffect
         }
         if (player != null || handedOffToPool) return@LaunchedEffect
+        // Reclaim continuous Hubs Exo after VideoPlayerView remount (never release on dispose).
+        if (protectAsContinuous) {
+            val existing = MediaPlaybackCoordinator.shared.continuousHubPlayer as? ExoPlayer
+            if (existing != null && existing.mediaItemCount > 0) {
+                existing.repeatMode =
+                    if (loopsLatest) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+                existing.volume = if (mutedLatest) 0f else 1f
+                showPosterCover = false
+                hasRenderedFrame = true
+                currentMs = existing.currentPosition
+                MediaPlaybackCoordinator.shared.register(existing)
+                MediaPlaybackCoordinator.shared.protectContinuous(existing)
+                player = existing
+                return@LaunchedEffect
+            }
+        }
         val pool = SparkWarmPool.shared
         val claimed = postId?.let { pool.claim(it) } ?: pool.claimFirstContinuing()
         if (claimed != null) {
@@ -283,13 +299,13 @@ fun VideoPlayerView(
         }
         onDispose {
             try {
+                // Continuous Hubs Exo survives VideoPlayerView remounts; stopHubPlayback releases.
+                if (protectAsContinuous && p != null) {
+                    MediaPlaybackCoordinator.shared.protectContinuous(p)
+                    return@onDispose
+                }
                 if (handedOffLatest.value) {
                     // Pool owns the ExoPlayer now — do not release.
-                    if (protectAsContinuous && p != null &&
-                        MediaPlaybackCoordinator.shared.continuousHubPlayer === p
-                    ) {
-                        MediaPlaybackCoordinator.shared.clearContinuousProtection()
-                    }
                     return@onDispose
                 }
                 val id = postId
@@ -304,29 +320,14 @@ fun VideoPlayerView(
                     // Opening Sparks/Hubs marked continue → park mid-clip; else rewind park.
                     if (pool.shouldContinueFromCurrentTime(id) && sec > 0.45) {
                         pool.parkContinuing(id, p)
-                        if (protectAsContinuous &&
-                            MediaPlaybackCoordinator.shared.continuousHubPlayer === p
-                        ) {
-                            MediaPlaybackCoordinator.shared.clearContinuousProtection()
-                        }
                         return@onDispose
                     }
                     // Scroll-away: park silent t≈0 for instant reclaim (iOS park).
                     if (p.mediaItemCount > 0 && p.playbackState != Player.STATE_IDLE) {
                         pool.park(id, p)
-                        if (protectAsContinuous &&
-                            MediaPlaybackCoordinator.shared.continuousHubPlayer === p
-                        ) {
-                            MediaPlaybackCoordinator.shared.clearContinuousProtection()
-                        }
                         return@onDispose
                     }
                     pool.release(id)
-                }
-                if (protectAsContinuous && p != null &&
-                    MediaPlaybackCoordinator.shared.continuousHubPlayer === p
-                ) {
-                    MediaPlaybackCoordinator.shared.clearContinuousProtection()
                 }
                 if (p != null) MediaPlaybackCoordinator.shared.unregister(p)
                 p?.stop()
@@ -355,6 +356,36 @@ fun VideoPlayerView(
             }
             isPausedByUser -> p.pause()
             else -> p.play()
+        }
+    }
+
+    // Continuous Hubs mini: AppState can stay isActive while tab silence / surface rebind
+    // leaves Exo paused — re-assert play without waiting for an isActive edge.
+    LaunchedEffect(protectAsContinuous, isActive, isPausedByUser, player, shouldShowAd) {
+        if (!protectAsContinuous) return@LaunchedEffect
+        val p = player ?: return@LaunchedEffect
+        while (true) {
+            delay(400)
+            if (!isActiveLatest || isPausedLatest || shouldShowAd) continue
+            MediaPlaybackCoordinator.shared.protectContinuous(p)
+            if (loopsLatest) {
+                p.repeatMode = Player.REPEAT_MODE_ONE
+            }
+            val wantVol = if (mutedLatest) 0f else 1f
+            // hardSilence zeros volume; ENDED needs seek before play restarts.
+            val volWrong = kotlin.math.abs(p.volume - wantVol) > 0.02f
+            val ended = p.playbackState == Player.STATE_ENDED
+            if (!p.isPlaying || volWrong || ended) {
+                p.volume = wantVol
+                when {
+                    ended -> runCatching { p.seekTo(0); p.play() }
+                    p.playbackState == Player.STATE_IDLE && p.mediaItemCount > 0 -> {
+                        runCatching { p.prepare() }
+                        p.play()
+                    }
+                    !p.isPlaying -> p.play()
+                }
+            }
         }
     }
 
@@ -505,9 +536,10 @@ fun VideoPlayerView(
             Color.Black
         }
 
+    // Continuous Hubs mini: clipToBounds blanks TextureView at thumb size — skip it.
     Box(
         modifier
-            .clipToBounds()
+            .then(if (protectAsContinuous) Modifier else Modifier.clipToBounds())
             .background(stageFloor)
             .clickable(enabled = showsControls) {
                 showChrome = !showChrome

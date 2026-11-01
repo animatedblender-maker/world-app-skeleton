@@ -33,6 +33,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,6 +41,8 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -48,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.matterya.matterya.config.AppConfig
 import com.matterya.matterya.data.hubs.YouTubeChannel
+import com.matterya.matterya.data.media.HubContinuousDockSlot
 import com.matterya.matterya.model.CountryPost
 import com.matterya.matterya.ui.components.AvatarView
 import com.matterya.matterya.ui.components.HandDrawnMediaFrame
@@ -180,7 +184,11 @@ fun YouTubeChannelRow(
     }
 }
 
-/** Mini player bar under chat / tabs. [showsThumbnail]=false leaves a hole for continuous Exo. */
+/**
+ * Mini player bar under chat / tabs.
+ * [showsThumbnail]=false leaves a hole for the continuous ExoPlayer (iOS embedsVideo: false).
+ * When [reportDockSlot] is true, the hole reports [HubContinuousDockSlot] for morph docking.
+ */
 @Composable
 fun YouTubeMiniPlayerBar(
     post: CountryPost,
@@ -191,9 +199,17 @@ fun YouTubeMiniPlayerBar(
     onTogglePlay: () -> Unit = {},
     modifier: Modifier = Modifier,
     showsThumbnail: Boolean = true,
+    reportDockSlot: Boolean = !showsThumbnail,
 ) {
     @Suppress("UNUSED_VARIABLE")
     val _muted = isMuted
+    // Stable owner so floating-bar dispose cannot clear a chat hole that re-reported.
+    val dockOwner = remember { Any() }
+    DisposableEffect(reportDockSlot) {
+        onDispose {
+            if (reportDockSlot) HubContinuousDockSlot.clear(dockOwner)
+        }
+    }
     Row(
         modifier
             .fillMaxWidth()
@@ -208,7 +224,16 @@ fun YouTubeMiniPlayerBar(
             Modifier
                 .size(width = 72.dp, height = 40.dp)
                 .clip(RoundedCornerShape(6.dp))
-                .background(MatteryaColors.canvasMuted),
+                .background(MatteryaColors.canvasMuted)
+                .then(
+                    if (reportDockSlot) {
+                        Modifier.onGloballyPositioned { coords ->
+                            HubContinuousDockSlot.report(dockOwner, coords.boundsInWindow())
+                        }
+                    } else {
+                        Modifier
+                    },
+                ),
         ) {
             if (showsThumbnail) {
                 VideoThumbnailView(

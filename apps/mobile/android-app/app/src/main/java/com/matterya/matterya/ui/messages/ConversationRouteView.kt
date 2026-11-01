@@ -483,9 +483,13 @@ fun ConversationRouteView(
                 onOpenShare = { share ->
                     appState?.let { ChatShareRouting.open(share, it) }
                 },
-                // Continuous mini lives in MainTabView GlobalHubPlaybackLayer (avoid double chrome).
-                hubMiniPost = null,
+                // iOS ConversationView: chrome+hole under thread when hubs mini is docked.
+                // Continuous Exo stays in GlobalHubPlaybackLayer and morphs into the hole.
+                hubMiniPost = appSnap.hubPlaybackPost
+                    ?.takeIf { appSnap.hubPlaybackDockInChat },
                 hubMiniPlaying = appSnap.hubPlaybackPlaying,
+                hubMiniMuted = appSnap.hubPlaybackMuted,
+                hubMiniContinuousHole = true,
                 onHubMiniExpand = { appState?.expandHubPlayback() },
                 onHubMiniClose = { appState?.stopHubPlayback() },
                 onHubMiniTogglePlay = {

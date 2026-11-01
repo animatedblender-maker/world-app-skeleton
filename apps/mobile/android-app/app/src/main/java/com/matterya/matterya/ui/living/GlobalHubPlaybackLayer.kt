@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -34,11 +35,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.matterya.matterya.data.media.HubContinuousDockSlot
+import com.matterya.matterya.data.media.MediaPlaybackCoordinator
 import com.matterya.matterya.data.reels.MatteryaPullDownDismiss
 import com.matterya.matterya.model.CountryPost
 import com.matterya.matterya.theme.MatteryaColors
@@ -47,6 +52,7 @@ import com.matterya.matterya.theme.YouTubeMediaLayout
 import com.matterya.matterya.theme.YouTubeMiniPlayerBar
 import com.matterya.matterya.ui.components.VideoPlayerView
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 
 /**
  * iOS `GlobalHubPlaybackLayer` — single continuous ExoPlayer for Hubs.
@@ -63,6 +69,8 @@ fun GlobalHubPlaybackLayer(
     landscapeFullscreen: Boolean = false,
     pullProgress: Float = 0f,
     bottomClearance: Dp = 0.dp,
+    /** Chat owns mini chrome+hole — hide floating bar chrome; film docks into slot. */
+    dockInChat: Boolean = false,
     onTogglePlay: () -> Unit = {},
     onExpand: () -> Unit = {},
     onClose: () -> Unit = {},
@@ -102,6 +110,14 @@ fun GlobalHubPlaybackLayer(
 
     if (landscapeFullscreen) {
         BackHandler { onExitFullscreen() }
+    }
+
+    // Mini + playing: keep Exo rolling after morph/tab silence (chrome can show ❚❚ while paused).
+    LaunchedEffect(expanded, landscapeFullscreen, isPlaying, post.id) {
+        if (!expanded && !landscapeFullscreen && isPlaying) {
+            delay(260)
+            MediaPlaybackCoordinator.shared.ensureContinuingHubsPlayback(userMuted = isMuted)
+        }
     }
 
     var dragOffsetPx by remember { mutableFloatStateOf(0f) }
@@ -182,7 +198,13 @@ fun GlobalHubPlaybackLayer(
         onPullProgressLatest(0f)
     }
 
-    BoxWithConstraints(modifier.fillMaxSize()) {
+    var layerBoundsInWindow by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+
+    BoxWithConstraints(
+        modifier
+            .fillMaxSize()
+            .onGloballyPositioned { layerBoundsInWindow = it.boundsInWindow() },
+    ) {
         val density = LocalDensity.current
         val widthPx = with(density) { maxWidth.toPx() }
         val heightPx = with(density) { maxHeight.toPx() }
@@ -196,26 +218,59 @@ fun GlobalHubPlaybackLayer(
         val thumbPad = 10.dp
         val thumbTopInset = ((miniBarH - thumbH) / 2)
 
+        // iOS: prefer exact dock-slot hole when chat (or floating bar) reports it.
+        val dockFrame = HubContinuousDockSlot.frameInWindow
+        val layerFrame = layerBoundsInWindow
+        val dockedLayout = if (!expanded && !landscapeFullscreen &&
+            dockFrame != null && layerFrame != null &&
+            dockFrame.width > 8f && dockFrame.height > 8f
+        ) {
+            val x = dockFrame.left - layerFrame.left
+            val y = dockFrame.top - layerFrame.top
+            val inBottomBand = y >= heightPx * 0.45f
+            val looksLikeMini = dockFrame.height > 40f &&
+                dockFrame.height < heightPx * 0.42f &&
+                dockFrame.width > 40f &&
+                (inBottomBand || dockInChat)
+            if (looksLikeMini &&
+                y > -20f && y < heightPx + 20f &&
+                x > -20f && x < widthPx + 20f
+            ) {
+                Triple(
+                    with(density) { dockFrame.width.toDp() },
+                    with(density) { dockFrame.height.toDp() },
+                    with(density) { x.toDp() } to with(density) { y.toDp() },
+                )
+            } else {
+                null
+            }
+        } else {
+            null
+        }
+
         val targetW = when {
             landscapeFullscreen -> maxWidth
             expanded -> maxWidth
+            dockedLayout != null -> dockedLayout.first
             else -> thumbW
         }
         val targetH = when {
             landscapeFullscreen -> maxHeight
             expanded -> stageH
+            dockedLayout != null -> dockedLayout.second
             else -> thumbH
         }
         val targetX = when {
             landscapeFullscreen || expanded -> 0.dp
+            dockedLayout != null -> dockedLayout.third.first
             else -> thumbPad
         }
         val targetY = when {
             landscapeFullscreen -> 0.dp
             expanded -> 0.dp
+            dockedLayout != null -> dockedLayout.third.second
             else -> (maxHeight - bottomClearance - miniBarH + thumbTopInset).coerceAtLeast(0.dp)
         }
-
         val playerW by animateDpAsState(
             targetValue = targetW,
             animationSpec = morph,
@@ -262,9 +317,10 @@ fun GlobalHubPlaybackLayer(
             )
         }
 
-        // Mini chrome under the continuous thumb (hole via showsThumbnail=false).
+        // Mini chrome under continuous thumb (hole via showsThumbnail=false).
+        // Chat dock owns its own bar — skip floating chrome to avoid double strip.
         AnimatedVisibility(
-            visible = !expanded && !landscapeFullscreen,
+            visible = !expanded && !landscapeFullscreen && !dockInChat,
             enter = fadeIn(morphInt),
             exit = fadeOut(tween(140, easing = MatteryaMotion.ytMorphEasing)),
             modifier = Modifier
@@ -279,24 +335,38 @@ fun GlobalHubPlaybackLayer(
                 onClose = onClose,
                 onTogglePlay = onTogglePlay,
                 showsThumbnail = false,
+                reportDockSlot = true,
             )
         }
-
         // One continuous ExoPlayer — never remount on expand↔mini / FS.
+        // Mini: skip graphicsLayer/clip on the AndroidView ancestor — Compose clip +
+        // TextureView blanks the surface at thumb size (static black hole).
+        val mini = !expanded && !landscapeFullscreen
+        val pullingScale = expanded && !landscapeFullscreen &&
+            (isPulling || animatedPullScale < 0.999f)
         Box(
             Modifier
                 .offset(x = playerX, y = playerY)
                 .offset { IntOffset(0, pullYPx.roundToInt()) }
                 .size(playerW, playerH)
-                .graphicsLayer {
-                    scaleX = animatedPullScale
-                    scaleY = animatedPullScale
-                    transformOrigin = TransformOrigin(0.5f, 0f)
-                }
-                .clip(RoundedCornerShape(corner))
-                .background(Color.Black)
                 .then(
-                    if (!expanded && !landscapeFullscreen) Modifier.clickable(onClick = onExpand)
+                    if (pullingScale) {
+                        Modifier.graphicsLayer {
+                            scaleX = animatedPullScale
+                            scaleY = animatedPullScale
+                            transformOrigin = TransformOrigin(0.5f, 0f)
+                        }
+                    } else {
+                        Modifier
+                    },
+                )
+                .then(
+                    if (mini) Modifier
+                    else Modifier.clip(RoundedCornerShape(corner)),
+                )
+                .background(if (mini) Color.Transparent else Color.Black)
+                .then(
+                    if (mini) Modifier.clickable(onClick = onExpand)
                     else Modifier,
                 ),
         ) {
@@ -308,6 +378,7 @@ fun GlobalHubPlaybackLayer(
                 placement = if (expanded && !landscapeFullscreen) "hubs_preroll" else null,
                 adsEnabled = expanded && !landscapeFullscreen,
                 isActive = isPlaying,
+                loops = true,
                 muted = isMuted,
                 showsControls = (expanded || landscapeFullscreen) && !isPulling,
                 allowsFullscreen = expanded || landscapeFullscreen,

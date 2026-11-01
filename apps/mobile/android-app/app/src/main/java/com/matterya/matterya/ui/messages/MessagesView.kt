@@ -400,6 +400,9 @@ fun ConversationView(
     onOpenShare: (Message.ShareInfo) -> Unit = {},
     hubMiniPost: com.matterya.matterya.model.CountryPost? = null,
     hubMiniPlaying: Boolean = false,
+    hubMiniMuted: Boolean = false,
+    /** When true, bar is a chrome+hole for continuous Exo (iOS embedsVideo: false). */
+    hubMiniContinuousHole: Boolean = false,
     onHubMiniExpand: () -> Unit = {},
     onHubMiniClose: () -> Unit = {},
     onHubMiniTogglePlay: () -> Unit = {},
@@ -491,13 +494,17 @@ fun ConversationView(
         }
 
         hubMiniPost?.let { post ->
+            // iOS: fixed under thread, above composer — continuous film docks into the hole.
+            // showsThumbnail=false + reportDockSlot → GlobalHubPlaybackLayer morphs Exo here.
             com.matterya.matterya.theme.YouTubeMiniPlayerBar(
                 post = post,
                 isPlaying = hubMiniPlaying,
-                isMuted = false,
+                isMuted = hubMiniMuted,
                 onExpand = onHubMiniExpand,
                 onClose = onHubMiniClose,
                 onTogglePlay = onHubMiniTogglePlay,
+                showsThumbnail = !hubMiniContinuousHole,
+                reportDockSlot = hubMiniContinuousHole,
             )
         }
 
