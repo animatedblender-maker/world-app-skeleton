@@ -119,6 +119,8 @@ fun ReelsView(
     startIndex: Int = 0,
     /** When set, first paint of this post claims warm mid-clip ExoPlayer (no seek-to-0). */
     continueFromFeedPostId: String? = null,
+    /** Feed→Sparks open: transparent floor until handoff paints (see SparksScrollViewer). */
+    handoffSeeThrough: Boolean = false,
     showsOpenPostAction: Boolean = false,
     showsProgressRail: Boolean = false,
     bottomInsetDp: Int = 28,
@@ -139,7 +141,7 @@ fun ReelsView(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(if (handoffSeeThrough) Color.Transparent else Color.Black),
     ) {
         when {
             isLoading -> {
@@ -490,19 +492,29 @@ private fun ReelsPagerCard(
     // Bump once per focus — not every recompose (old page+1 token caused restart/poster blink).
     var focusGeneration by remember(post.id) { mutableIntStateOf(0) }
     var hasFocusedOnce by remember(post.id) { mutableStateOf(false) }
+    // iOS feedHandoffSticky: clearing pool flags mid-focus must not flip restart → seek-to-0 blink.
+    var feedHandoffSticky by remember(post.id) { mutableStateOf(continueFromFeed) }
     // Prefer parked ExoPlayer playhead; fall back to remembered seconds.
-    val handoffStartSec = remember(post.id, continueFromFeed) {
-        val pool = SparkWarmPool.shared
-        val parked = pool.parkedPlayer(post.id)
-        val parkedSec = parked?.currentPosition?.div(1000.0)
-        when {
-            parkedSec != null && parkedSec.isFinite() && parkedSec > 0.45 -> parkedSec
-            continueFromFeed || pool.shouldContinueFromCurrentTime(post.id) ||
-                pool.lastClaimWasContinuing || pool.hasContinuingParked ->
-                pool.peekPlayheadSeconds(post.id)
-            else -> null
-        }
+    // Cleared on inactive so swipe-back is a normal t=0 restart (iOS handoffResumeSeconds = 0).
+    var handoffStartSec by remember(post.id) {
+        mutableStateOf(
+            run {
+                val pool = SparkWarmPool.shared
+                val parked = pool.parkedPlayer(post.id)
+                val parkedSec = parked?.currentPosition?.div(1000.0)
+                when {
+                    parkedSec != null && parkedSec.isFinite() && parkedSec > 0.45 -> parkedSec
+                    continueFromFeed || pool.shouldContinueFromCurrentTime(post.id) ||
+                        pool.lastClaimWasContinuing || pool.hasContinuingParked ->
+                        pool.peekPlayheadSeconds(post.id)
+                    else -> null
+                }
+            },
+        )
     }
+    // Live sticky / pool flags only — never forever-null poster via remembered startSec.
+    val isFeedHandoffContinue = feedHandoffSticky ||
+        SparkWarmPool.shared.shouldContinueFromCurrentTime(post.id)
     val scope = rememberCoroutineScope()
 
     val muteIcon = if (feedVideosMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp
@@ -548,17 +560,21 @@ private fun ReelsPagerCard(
         if (!isActive) {
             pausedByUser = false
             showPauseGlyph = false
-            currentSec = 0.0
+            // Keep last frame / playhead — do not zero currentSec (avoids scrubber thrash).
             seekTo = null
             isScrubbing = false
+            // iOS: next focus is a normal swipe — allow t=0 restart again.
+            feedHandoffSticky = false
+            handoffStartSec = null
         } else {
             pausedByUser = false
             showPauseGlyph = false
             isScrubbing = false
             if (!hasFocusedOnce) {
                 hasFocusedOnce = true
+                if (continueFromFeed) feedHandoffSticky = true
                 val head = handoffStartSec
-                val claimedContinuing = continueFromFeed ||
+                val claimedContinuing = feedHandoffSticky ||
                     SparkWarmPool.shared.shouldContinueFromCurrentTime(post.id) ||
                     SparkWarmPool.shared.hasContinuingParked
                 if (head != null && head > 0.45) {
@@ -578,14 +594,18 @@ private fun ReelsPagerCard(
                     currentSec = 0.0
                     seekTo = null
                     if (!claimedContinuing) {
+                        feedHandoffSticky = false
                         SparkWarmPool.shared.clearContinuingHandoff(post.id)
                     }
                 }
             } else {
                 // Swipe away and back — restart from beginning (iOS page settle).
-                focusGeneration += 1
-                currentSec = 0.0
-                seekTo = null
+                // Never bump restart while sticky handoff is still settling.
+                if (!feedHandoffSticky) {
+                    focusGeneration += 1
+                    currentSec = 0.0
+                    seekTo = null
+                }
             }
             // iOS marks watched on page settle so discovery never re-serves early.
             SparkDiscoveryEngine.markWatched(post.id)
@@ -610,7 +630,8 @@ private fun ReelsPagerCard(
         // Landscape sources crop top/bottom; never letterbox (black bars were a major UX bug).
         VideoPlayerView(
             url = post.playableVideoUrl,
-            posterUrl = post.posterImageUrl,
+            // NEVER show poster during feed handoff — blinks t=0 then jumps mid-clip (iOS).
+            posterUrl = if (isFeedHandoffContinue) null else post.posterImageUrl,
             placement = "reel",
             countryCode = post.countryCode,
             contentCountryCode = post.countryCode,
@@ -622,14 +643,24 @@ private fun ReelsPagerCard(
             muted = feedVideosMuted,
             showsControls = false,
             fillsFrame = true,
-            restartFromBeginningToken = if (isActive && focusGeneration > 0) focusGeneration else 0,
-            startTime = handoffStartSec?.takeIf { it > 0.45 },
+            continueHandoff = isFeedHandoffContinue,
+            // Sticky handoff: never force seek-to-0 while continuing mid-clip (iOS).
+            restartFromBeginningToken = when {
+                isFeedHandoffContinue -> 0
+                isActive && focusGeneration > 0 -> focusGeneration
+                else -> 0
+            },
+            startTime = handoffStartSec?.takeIf { it > 0.45 && isFeedHandoffContinue },
             seekToSeconds = seekTo,
             onSeekConsumed = { seekTo = null },
             onProgress = { cur, dur ->
                 if (!isScrubbing) {
                     currentSec = cur
                     if (dur > 0.25) durationSec = dur
+                }
+                // First painted mid-clip frames — handoff sticky can clear after settle.
+                if (feedHandoffSticky && cur > 0.5) {
+                    feedHandoffSticky = false
                 }
             },
             modifier = Modifier.fillMaxSize(),

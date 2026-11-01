@@ -25,6 +25,7 @@ import com.matterya.matterya.model.CountryPost
 import com.matterya.matterya.model.Profile
 import com.matterya.matterya.theme.MatteryaCopy
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -263,10 +264,30 @@ fun SparksScrollViewer(
         ensureBulkQueueAhead()
     }
 
+    // Feed→Sparks open: keep stage transparent until handoff paints so Feed film
+    // shows through (black stage + surface transfer was the open blink).
+    var filmOpaque by remember(startingPost.id, continueFromFeed) {
+        mutableStateOf(!continueFromFeed)
+    }
+    LaunchedEffect(continueFromFeed, startingPost.id) {
+        if (!continueFromFeed || filmOpaque) return@LaunchedEffect
+        val paintJob = launch {
+            warmPool.handoffPainted.collect { id ->
+                if (id.isNotBlank()) {
+                    filmOpaque = true
+                }
+            }
+        }
+        // Fail-safe — emulator first-frame can be slow; prefer see-through over black.
+        delay(1800)
+        filmOpaque = true
+        paintJob.cancel()
+    }
+
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(if (filmOpaque) Color.Black else Color.Transparent),
     ) {
         if (posts.isEmpty()) {
             Text(
@@ -295,6 +316,7 @@ fun SparksScrollViewer(
                 onFeedVideosMutedChange = onFeedVideosMutedChange,
                 startIndex = activeIndex,
                 continueFromFeedPostId = if (continueFromFeed) startingPost.id else null,
+                handoffSeeThrough = continueFromFeed && !filmOpaque,
                 // iOS global Sparks omits Open; Keep / Chat / Send / ⋯ remain.
                 showsOpenPostAction = false,
                 showsProgressRail = false,

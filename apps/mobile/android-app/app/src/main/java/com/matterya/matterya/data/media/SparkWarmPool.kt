@@ -51,6 +51,14 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
     private val _exportTaken = MutableSharedFlow<Set<String>>(extraBufferCapacity = 4)
     /** Post IDs whose live ExoPlayer was parked into the pool (detach without release). */
     val exportTaken: SharedFlow<Set<String>> = _exportTaken.asSharedFlow()
+    private val _handoffPainted = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    /** Sparks mid-clip handoff painted — overlay may go opaque. */
+    val handoffPainted: SharedFlow<String> = _handoffPainted.asSharedFlow()
+    /**
+     * Feed surface IDs parked for handoff — detach ONLY after Sparks paints.
+     * Emitting on export blanked Feed before Sparks painted (open blink).
+     */
+    private val pendingHandoffDetach = mutableSetOf<String>()
 
     fun prepare(
         posts: List<CountryPost>,
@@ -136,11 +144,45 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
                 player.playWhenReady = true
                 player.play()
             }
+            // Keep pendingHandoffDetach until [notifyHandoffPainted] — Feed surface
+            // stays up until Sparks paints (open blink fix).
+            pendingHandoffDetach.add(postId)
+            // Safety: never leave Feed stuck if Sparks never signals paint.
+            scope.launch {
+                delay(480)
+                if (pendingHandoffDetach.isNotEmpty()) {
+                    notifyHandoffPainted(postId)
+                }
+            }
         } else {
             player.pause()
             player.playWhenReady = false
+            // Cold claim: detach any pending export immediately.
+            flushHandoffDetach(extra = postId)
         }
         return player
+    }
+
+    /**
+     * Sparks first painted frame after Feed→Sparks claim — now safe to blank Feed.
+     */
+    fun notifyHandoffPainted(postId: String) {
+        flushHandoffDetach(extra = postId)
+        if (postId.isNotBlank()) {
+            _handoffPainted.tryEmit(postId)
+        }
+    }
+
+    private fun flushHandoffDetach(extra: String? = null) {
+        val detach = LinkedHashSet<String>()
+        if (pendingHandoffDetach.isNotEmpty()) {
+            detach.addAll(pendingHandoffDetach)
+            pendingHandoffDetach.clear()
+        }
+        if (!extra.isNullOrBlank()) detach.add(extra)
+        if (detach.isNotEmpty()) {
+            _exportTaken.tryEmit(detach)
+        }
     }
 
     /** Claim any parked continuing handoff player (share/origin id race). */
@@ -261,8 +303,10 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
             }
             taken.add(id)
         }
+        // Park only — do NOT blank Feed yet. Sparks claim emits [exportTaken] after
+        // the new PlayerView binds so the open never flashes black between surfaces.
         if (taken.isNotEmpty()) {
-            _exportTaken.tryEmit(taken)
+            pendingHandoffDetach.addAll(taken)
         }
     }
 
@@ -273,6 +317,11 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
         if (old.isEmpty() || neu.isEmpty() || old == neu) return
 
         val oldIsContinuing = old in continuingIds
+        // Feed still listens under [old]; Sparks claims [neu] — keep both for detach.
+        if (old in pendingHandoffDetach || neu in pendingHandoffDetach || oldIsContinuing) {
+            pendingHandoffDetach.add(old)
+            pendingHandoffDetach.add(neu)
+        }
 
         if (slots[old] != null && slots[neu] != null) {
             if (oldIsContinuing) {
@@ -308,6 +357,9 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
     fun isParked(postId: String, player: ExoPlayer): Boolean =
         slots[postId]?.player === player
 
+    /** True after Sparks/Hubs [claim] — Feed must not re-bind the surface. */
+    fun isInUse(postId: String): Boolean = postId in inUse
+
     fun drain() {
         for (id in slots.keys.toList()) evict(id)
         warming.clear()
@@ -315,6 +367,7 @@ class SparkWarmPool private constructor(private val appContext: Context?) {
         continuingIds.clear()
         playheadsSec.clear()
         livePlayers.clear()
+        pendingHandoffDetach.clear()
     }
 
     fun silenceAllBuffered() {

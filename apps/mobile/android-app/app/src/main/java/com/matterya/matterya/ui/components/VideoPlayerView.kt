@@ -1,6 +1,7 @@
 package com.matterya.matterya.ui.components
 
 import android.graphics.Color as AndroidColor
+import android.view.LayoutInflater
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.compose.foundation.background
@@ -31,6 +32,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,6 +57,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.matterya.matterya.R
 import com.matterya.matterya.data.media.MediaPlaybackCoordinator
 import com.matterya.matterya.data.media.SparkWarmPool
 import com.matterya.matterya.theme.MatteryaColors
@@ -97,6 +100,11 @@ fun VideoPlayerView(
     onPullDrag: ((translationY: Float) -> Unit)? = null,
     onPullDragEnd: ((translationY: Float) -> Unit)? = null,
     onPullDragCancel: (() -> Unit)? = null,
+    /**
+     * Feed→Sparks mid-clip open — keep stage floor transparent from first composition
+     * (before claim flips [claimedContinuing]) so mount never paints black.
+     */
+    continueHandoff: Boolean = false,
 ) {
     val context = LocalContext.current
     var adFinished by remember(url, placement) { mutableStateOf(!adsEnabled || placement == null) }
@@ -105,10 +113,13 @@ fun VideoPlayerView(
     var isMuted by remember(muted) { mutableStateOf(muted) }
     var currentMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
-    // Poster only until the first ready frame — never re-flash on seek/restart (iOS).
+    // Poster until painted frames — never drop on readyToPlay alone (iOS blink fix).
     var showPosterCover by remember(url) { mutableStateOf(true) }
     var hasRenderedFrame by remember(url) { mutableStateOf(false) }
+    /** Keep poster on top while seek-to-0 runs so Exo shutter never flashes black. */
+    var isRestartSeeking by remember(url) { mutableStateOf(false) }
     var loadFailed by remember(url) { mutableStateOf(false) }
+    var lastHandledRestartToken by remember(url) { mutableIntStateOf(0) }
 
     val progressCb by rememberUpdatedState(onProgress)
     val viewedCb by rememberUpdatedState(onViewed)
@@ -119,6 +130,8 @@ fun VideoPlayerView(
     val onPullDragLatest by rememberUpdatedState(onPullDrag)
     val onPullDragEndLatest by rememberUpdatedState(onPullDragEnd)
     val onPullDragCancelLatest by rememberUpdatedState(onPullDragCancel)
+    val isActiveLatest by rememberUpdatedState(isActive)
+    val isPausedLatest by rememberUpdatedState(isPausedByUser)
 
     val shouldShowAd = adsEnabled && isActive && !adFinished && placement != null
 
@@ -126,7 +139,17 @@ fun VideoPlayerView(
     var player by remember(url) { mutableStateOf<ExoPlayer?>(null) }
     var handedOffToPool by remember(url) { mutableStateOf(false) }
     var claimedContinuing by remember(url) { mutableStateOf(false) }
+    var handoffPaintNotified by remember(url) { mutableStateOf(false) }
     val handedOffLatest = rememberUpdatedState(handedOffToPool)
+
+    // iOS shouldShowPosterCover: never cover just because !isPlaying; keep during restart seek.
+    val shouldShowPosterCover =
+        when {
+            isPausedByUser && player != null && !isRestartSeeking -> false
+            player == null -> true
+            isRestartSeeking -> true
+            else -> showPosterCover
+        }
 
     LaunchedEffect(url, postId) {
         if (url.isNullOrBlank()) {
@@ -145,23 +168,50 @@ fun VideoPlayerView(
                 androidx.media3.common.C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
             claimed.volume = if (mutedLatest) 0f else 1f
             claimedContinuing = wasContinuing && midClip
-            if (claimedContinuing) {
+            if (claimedContinuing || midClip) {
                 // Mid-clip Feed→Sparks: keep decoded frames, skip poster blink.
                 showPosterCover = false
                 hasRenderedFrame = true
+                isRestartSeeking = false
                 currentMs = claimed.currentPosition
                 postId?.let {
                     pool.clearContinueFlag(it)
                     pool.takePlayheadSeconds(it)
                 }
+                // Surface just transferred — treat as painted once time proves (below).
+                // Do NOT flip hasRenderedFrame false; Sparks stage stays see-through until progress.
             } else if (postId != null && pool.shouldContinueFromCurrentTime(postId)) {
                 val head = pool.peekPlayheadSeconds(postId)
                 if (head != null && head > 0.45) {
                     runCatching { claimed.seekTo((head * 1000).toLong()) }
                     currentMs = (head * 1000).toLong()
+                    // Keep poster until paint proof after handoff seek.
+                    isRestartSeeking = true
+                    showPosterCover = true
                 }
+            } else if (claimed.playbackState == Player.STATE_READY &&
+                claimed.bufferedPosition > 0
+            ) {
+                // Warm t≈0 claim: still wait for painted frames before dropping poster.
+                showPosterCover = true
             }
             MediaPlaybackCoordinator.shared.register(claimed)
+            // First frame on the NEW TextureView — not readyToPlay / playhead alone.
+            if (claimedContinuing || midClip) {
+                val paintOnce = java.util.concurrent.atomic.AtomicBoolean(false)
+                val notifyId = postId
+                claimed.addListener(object : Player.Listener {
+                    override fun onRenderedFirstFrame() {
+                        if (!paintOnce.compareAndSet(false, true)) return
+                        handoffPaintNotified = true
+                        showPosterCover = false
+                        isRestartSeeking = false
+                        hasRenderedFrame = true
+                        notifyId?.let { SparkWarmPool.shared.notifyHandoffPainted(it) }
+                        claimed.removeListener(this)
+                    }
+                })
+            }
             player = claimed
             return@LaunchedEffect
         }
@@ -312,57 +362,116 @@ fun VideoPlayerView(
         player?.volume = if (isMuted) 0f else 1f
     }
 
-    // Restart seek only — do NOT re-show poster (that caused Sparks blinking).
+    // Restart seek: cover with poster first (iOS isRestartSeeking) — black shutter was the blink.
     // Skip seek-to-0 when this clip is a mid-clip Feed→Sparks handoff.
     LaunchedEffect(restartFromBeginningToken, player, postId) {
-        if (restartFromBeginningToken > 0) {
-            val continuing = postId != null &&
-                SparkWarmPool.shared.shouldContinueFromCurrentTime(postId)
-            if (continuing) {
-                val head = postId?.let { SparkWarmPool.shared.peekPlayheadSeconds(it) }
-                if (head != null && head > 0.45) {
-                    runCatching {
-                        player?.seekTo((head * 1000).toLong())
-                        if (isActive && !isPausedByUser && !shouldShowAd) player?.play()
-                    }
-                    return@LaunchedEffect
-                }
-                // Marked continuing but near 0 — just play without rewind thrash.
-                if (isActive && !isPausedByUser && !shouldShowAd) {
-                    runCatching { player?.play() }
+        if (restartFromBeginningToken <= 0) return@LaunchedEffect
+        if (restartFromBeginningToken == lastHandledRestartToken) return@LaunchedEffect
+        lastHandledRestartToken = restartFromBeginningToken
+        val p = player ?: return@LaunchedEffect
+        val continuing = claimedContinuing ||
+            (postId != null && SparkWarmPool.shared.shouldContinueFromCurrentTime(postId))
+        if (continuing) {
+            val head = postId?.let { SparkWarmPool.shared.peekPlayheadSeconds(it) }
+            if (head != null && head > 0.45) {
+                runCatching {
+                    p.seekTo((head * 1000).toLong())
+                    if (isActiveLatest && !isPausedLatest && !shouldShowAd) p.play()
                 }
                 return@LaunchedEffect
             }
-            runCatching {
-                player?.seekTo(0)
-                if (isActive && !isPausedByUser && !shouldShowAd) player?.play()
+            if (isActiveLatest && !isPausedLatest && !shouldShowAd) {
+                runCatching { p.play() }
             }
+            return@LaunchedEffect
+        }
+        // Poster underlay while Exo seeks to 0 — never reveal black shutter.
+        if (!posterUrl.isNullOrBlank()) {
+            isRestartSeeking = true
+            showPosterCover = true
+        }
+        runCatching {
+            p.seekTo(0)
+            if (isActiveLatest && !isPausedLatest && !shouldShowAd) p.play()
         }
     }
 
     LaunchedEffect(seekToSeconds, player) {
         val seek = seekToSeconds ?: return@LaunchedEffect
-        player?.seekTo((seek * 1000).toLong())
+        val p = player ?: return@LaunchedEffect
+        // Skip redundant seek that fights a mid-clip claim (blink).
+        if (claimedContinuing) {
+            seekConsumedCb?.invoke()
+            return@LaunchedEffect
+        }
+        val cur = p.currentPosition / 1000.0
+        if (kotlin.math.abs(cur - seek) < 0.35) {
+            seekConsumedCb?.invoke()
+            return@LaunchedEffect
+        }
+        if (!posterUrl.isNullOrBlank() && !hasRenderedFrame) {
+            isRestartSeeking = true
+            showPosterCover = true
+        }
+        p.seekTo((seek * 1000).toLong())
         seekConsumedCb?.invoke()
     }
 
     LaunchedEffect(startTime, player) {
         val start = startTime ?: return@LaunchedEffect
-        player?.seekTo((start * 1000).toLong())
+        val p = player ?: return@LaunchedEffect
+        // Claimed mid-clip already at playhead — never re-seek (iOS handoff).
+        if (claimedContinuing) return@LaunchedEffect
+        val cur = p.currentPosition / 1000.0
+        if (cur.isFinite() && kotlin.math.abs(cur - start) < 0.35) return@LaunchedEffect
+        if (!posterUrl.isNullOrBlank()) {
+            isRestartSeeking = true
+            showPosterCover = true
+        }
+        p.seekTo((start * 1000).toLong())
     }
 
     LaunchedEffect(player, isActive) {
         val p = player ?: return@LaunchedEffect
         var reportedView = false
+        var paintedAtMs = 0L
         while (true) {
             currentMs = p.currentPosition
             durationMs = p.duration.coerceAtLeast(0)
             isPlaying = p.isPlaying
-            if (p.playbackState == Player.STATE_READY &&
-                (p.currentPosition > 40 || p.bufferedPosition > 0)
-            ) {
+            // iOS playerHasPaintedFrames: playing AND time advanced — not readyToPlay alone.
+            val tSec = p.currentPosition / 1000.0
+            val painted = p.playbackState == Player.STATE_READY &&
+                (p.isPlaying || p.playWhenReady) &&
+                tSec.isFinite() &&
+                tSec >= 0.08
+            val midClipPainted = claimedContinuing &&
+                tSec.isFinite() &&
+                tSec >= 0.25 &&
+                p.playbackState == Player.STATE_READY
+            if ((painted || midClipPainted) && (showPosterCover || isRestartSeeking || claimedContinuing)) {
                 hasRenderedFrame = true
-                showPosterCover = false
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (isRestartSeeking) {
+                    if (paintedAtMs == 0L) paintedAtMs = now
+                    // Settle ~2 frames so dropping cover never reveals black (iOS 64ms).
+                    if (now - paintedAtMs >= 64L) {
+                        isRestartSeeking = false
+                        showPosterCover = false
+                        paintedAtMs = 0L
+                        if (claimedContinuing && !handoffPaintNotified) {
+                            handoffPaintNotified = true
+                            postId?.let { SparkWarmPool.shared.notifyHandoffPainted(it) }
+                        }
+                    }
+                } else {
+                    showPosterCover = false
+                    paintedAtMs = 0L
+                    if (claimedContinuing && !handoffPaintNotified) {
+                        handoffPaintNotified = true
+                        postId?.let { SparkWarmPool.shared.notifyHandoffPainted(it) }
+                    }
+                }
             }
             if (p.playerError != null) loadFailed = true
             if (!reportedView && p.currentPosition > 500 && isActive) {
@@ -370,7 +479,7 @@ fun VideoPlayerView(
                 viewedCb?.invoke()
             }
             progressCb?.invoke(currentMs / 1000.0, durationMs / 1000.0)
-            delay(250)
+            delay(40)
         }
     }
 
@@ -387,10 +496,19 @@ fun VideoPlayerView(
     }
     val imageScale = if (fillsFrame) ContentScale.Crop else ContentScale.Fit
 
+    // Mid-clip Feed→Sparks: transparent floor so Feed TextureView last-frame shows through
+    // until onRenderedFirstFrame (opaque black floor was the open blink).
+    val stageFloor =
+        if ((continueHandoff || claimedContinuing) && !handoffPaintNotified) {
+            Color.Transparent
+        } else {
+            Color.Black
+        }
+
     Box(
         modifier
             .clipToBounds()
-            .background(Color.Black)
+            .background(stageFloor)
             .clickable(enabled = showsControls) {
                 showChrome = !showChrome
             }
@@ -414,8 +532,8 @@ fun VideoPlayerView(
                 },
             ),
     ) {
-        // Static underlay (no crossfade — avoids blink on recompose).
-        if (!posterUrl.isNullOrBlank() && (showPosterCover || !hasRenderedFrame)) {
+        // Static underlay (no crossfade). Keep during cold open + restart seek (iOS).
+        if (!posterUrl.isNullOrBlank() && (shouldShowPosterCover || !hasRenderedFrame)) {
             AsyncImage(
                 model = ImageRequest.Builder(context)
                     .data(posterUrl)
@@ -441,13 +559,23 @@ fun VideoPlayerView(
             player != null && !loadFailed -> {
                 AndroidView(
                     factory = { ctx ->
-                        PlayerView(ctx).apply {
+                        // texture_view + keep_content: Feed keeps last frame after player leaves
+                        // (SurfaceView went black on Feed→Sparks open — the blink).
+                        val view = LayoutInflater.from(ctx)
+                            .inflate(R.layout.matterya_player_view, null, false) as PlayerView
+                        view.apply {
                             useController = false
                             // ZOOM = aspectFill (crop); FIT = letterbox. Sparks always want ZOOM.
                             this.resizeMode = resizeMode
-                            setShutterBackgroundColor(AndroidColor.BLACK)
-                            setBackgroundColor(AndroidColor.BLACK)
-                            // Hide default artwork that can flash over frames.
+                            val shutter = if (claimedContinuing) {
+                                AndroidColor.TRANSPARENT
+                            } else {
+                                AndroidColor.BLACK
+                            }
+                            setShutterBackgroundColor(shutter)
+                            setBackgroundColor(
+                                if (claimedContinuing) AndroidColor.TRANSPARENT else AndroidColor.BLACK,
+                            )
                             defaultArtwork = null
                             artworkDisplayMode = PlayerView.ARTWORK_DISPLAY_MODE_OFF
                             this.player = player
@@ -455,18 +583,38 @@ fun VideoPlayerView(
                                 ViewGroup.LayoutParams.MATCH_PARENT,
                                 ViewGroup.LayoutParams.MATCH_PARENT,
                             )
-                            // Critical for crop: clip surface to view bounds (otherwise letterbox shows).
                             clipChildren = true
                             clipToPadding = true
                             clipToOutline = true
                         }
+                        view
                     },
                     update = { view ->
+                        if (handedOffLatest.value) {
+                            // Leave TextureView last-frame bitmap — do not clear player if
+                            // already null; avoid forcing a redraw to black.
+                            if (view.player != null) view.player = null
+                            return@AndroidView
+                        }
+                        val id = postId
+                        // Sparks claimed — Feed must not steal the surface back. Keep the
+                        // TextureView's last bitmap visible under transparent Sparks.
+                        if (id != null &&
+                            SparkWarmPool.shared.isInUse(id) &&
+                            !claimedContinuing
+                        ) {
+                            return@AndroidView
+                        }
                         if (view.player !== player) view.player = player
                         if (view.resizeMode != resizeMode) {
                             view.resizeMode = resizeMode
                         }
-                        // Force aspect-ratio frame child to match parent so ZOOM actually crops.
+                        val shutter = if (claimedContinuing && !isRestartSeeking) {
+                            AndroidColor.TRANSPARENT
+                        } else {
+                            AndroidColor.BLACK
+                        }
+                        view.setShutterBackgroundColor(shutter)
                         (view.getChildAt(0) as? android.view.ViewGroup)?.let { content ->
                             content.layoutParams = content.layoutParams?.apply {
                                 width = ViewGroup.LayoutParams.MATCH_PARENT
