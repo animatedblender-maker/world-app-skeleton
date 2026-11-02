@@ -6,6 +6,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -18,8 +23,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -1498,6 +1505,24 @@ fun MainTabView(
                 onRequestFullscreen = { vm.appState.requestHubFullscreen() },
                 onExitFullscreen = { vm.appState.exitHubLandscapeFullscreen() },
             )
+            // iOS: chrome sits above GlobalHubPlaybackLayer. WatchView Back is under the
+            // continuous film — draw a top-layer back chip so minimize stays tappable.
+            if (appSnap.hubPlaybackExpanded && !hubFs && hubPull < 0.05f) {
+                IconButton(
+                    onClick = { vm.appState.minimizeHubPlayback(returnToChat = false) },
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .statusBarsPadding()
+                        .padding(8.dp)
+                        .zIndex(8f),
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = Color.White,
+                    )
+                }
+            }
         }
 
         AppMenuOverlay(
