@@ -27,6 +27,7 @@ import { HubsPlaybackService, type HubsPlaybackState } from '../hubs-playback.se
       class="mini-wrap"
       *ngIf="mounted"
       [class.mini-hidden]="!show"
+      [class.dock-in-chat]="dockInChat"
       [attr.aria-hidden]="show ? null : 'true'"
       role="region"
       aria-label="Hubs mini player"
@@ -90,6 +91,61 @@ import { HubsPlaybackService, type HubsPlaybackState } from '../hubs-playback.se
         padding: 0 var(--m-page-padding, 16px);
         pointer-events: none;
         box-sizing: border-box;
+      }
+      /* iOS/Android: when a conversation is open, dock into the hole above the composer (tabs hidden). */
+      .mini-wrap.dock-in-chat {
+        bottom: var(--chat-composer-safe, calc(64px + env(safe-area-inset-bottom, 0px)));
+        padding: 0;
+        z-index: 8;
+      }
+      .mini-wrap.dock-in-chat .mini {
+        max-width: none;
+        margin: 0;
+        border-radius: 0;
+        padding: 8px 12px;
+        gap: 10px;
+        height: 56px;
+        box-sizing: border-box;
+        box-shadow: none;
+        border-left: 0;
+        border-right: 0;
+        border-bottom: 0;
+        background: var(--m-surface, #fefdfb);
+      }
+      .mini-wrap.dock-in-chat .thumb-btn {
+        width: 72px;
+        height: 40px;
+        border-radius: 6px;
+        box-shadow: none;
+      }
+      .mini-wrap.dock-in-chat .side {
+        gap: 0;
+        justify-content: center;
+      }
+      .mini-wrap.dock-in-chat .title {
+        font-size: 13px;
+        font-weight: 650;
+        -webkit-line-clamp: 1;
+        line-height: 1.25;
+      }
+      .mini-wrap.dock-in-chat .sub {
+        display: none;
+      }
+      .mini-wrap.dock-in-chat .controls {
+        gap: 8px;
+      }
+      .mini-wrap.dock-in-chat .circle {
+        width: 32px;
+        height: 32px;
+        font-size: 11px;
+      }
+      .mini-wrap.dock-in-chat .circle.close {
+        width: 28px;
+        height: 28px;
+        font-size: 11px;
+      }
+      .mini-wrap.dock-in-chat .expand-badge {
+        display: none;
       }
       .mini-wrap.mini-hidden {
         visibility: hidden;
@@ -236,83 +292,89 @@ import { HubsPlaybackService, type HubsPlaybackState } from '../hubs-playback.se
         }
       }
       @media (min-width: 700px) {
-        .mini-wrap {
+        .mini-wrap:not(.dock-in-chat) {
           bottom: calc(var(--tabs-safe, 0px) + 16px);
           padding: 0 20px;
         }
-        .mini {
+        .mini-wrap:not(.dock-in-chat) .mini {
           max-width: min(720px, calc(100% - 0px));
           padding: 14px 16px;
           gap: 18px;
           border-radius: 20px;
         }
-        .thumb-btn {
+        .mini-wrap:not(.dock-in-chat) .thumb-btn {
           width: 280px;
           height: 158px;
           border-radius: 14px;
         }
-        .title {
+        .mini-wrap:not(.dock-in-chat) .title {
           font-size: 17px;
         }
-        .sub {
+        .mini-wrap:not(.dock-in-chat) .sub {
           font-size: 14px;
         }
-        .circle {
+        .mini-wrap:not(.dock-in-chat) .circle {
           width: 46px;
           height: 46px;
           font-size: 14px;
         }
-        .circle.close {
+        .mini-wrap:not(.dock-in-chat) .circle.close {
           width: 42px;
           height: 42px;
         }
       }
       @media (min-width: 900px) {
-        .mini-wrap {
+        .mini-wrap:not(.dock-in-chat) {
           left: var(--m-sidebar-w, 200px);
           right: 0;
           width: auto;
           bottom: 24px;
           padding: 0 28px;
         }
-        .mini {
+        .mini-wrap:not(.dock-in-chat) .mini {
           max-width: min(820px, 52vw);
           margin-left: auto;
           margin-right: 0;
           padding: 16px 18px;
           gap: 20px;
         }
-        .thumb-btn {
+        .mini-wrap:not(.dock-in-chat) .thumb-btn {
           width: 340px;
           height: 191px;
         }
-        .title {
+        .mini-wrap:not(.dock-in-chat) .title {
           font-size: 18px;
           -webkit-line-clamp: 2;
         }
-        .sub {
+        .mini-wrap:not(.dock-in-chat) .sub {
           font-size: 14px;
         }
-        .circle {
+        .mini-wrap:not(.dock-in-chat) .circle {
           width: 48px;
           height: 48px;
           font-size: 15px;
         }
-        .expand-badge {
+        .mini-wrap:not(.dock-in-chat) .expand-badge {
           width: 30px;
           height: 30px;
           font-size: 13px;
         }
+        /* Desktop messages: list (320) + thread — dock only over the thread column. */
+        .mini-wrap.dock-in-chat {
+          left: calc(var(--m-sidebar-w, 220px) + 320px);
+          right: 0;
+          width: auto;
+        }
       }
       @media (min-width: 1280px) {
-        .mini {
+        .mini-wrap:not(.dock-in-chat) .mini {
           max-width: min(920px, 48vw);
         }
-        .thumb-btn {
+        .mini-wrap:not(.dock-in-chat) .thumb-btn {
           width: 400px;
           height: 225px;
         }
-        .title {
+        .mini-wrap:not(.dock-in-chat) .title {
           font-size: 19px;
         }
       }
@@ -323,6 +385,8 @@ export class HubsMiniPlayerComponent implements OnInit, OnDestroy {
   state: HubsPlaybackState = { post: null, expanded: false, playing: false, muted: false };
   /** Full watch page already has the main player — never stack a mini on top of it. */
   private onWatchRoute = false;
+  /** Messages thread open — dock compact bar above composer (iOS chat hole). */
+  dockInChat = false;
   private sub?: Subscription;
   private routeSub?: Subscription;
   private boundPostId: string | null = null;
@@ -341,20 +405,27 @@ export class HubsMiniPlayerComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.onWatchRoute = this.isWatchUrl(this.router.url);
+    this.dockInChat = this.playback.dockInChat || this.isMessagesThreadUrl(this.router.url);
+    this.syncDockHostClass();
     this.sub = this.playback.changes$.subscribe((s) => {
       this.state = s;
+      this.dockInChat = this.playback.dockInChat || this.isMessagesThreadUrl(this.router.url);
+      this.syncDockHostClass();
       // Defer DOM sync until *ngIf has created the <video>.
       this.queueFilmSync();
     });
     this.routeSub = this.router.events
       .pipe(filter((e): e is NavigationEnd => e instanceof NavigationEnd))
       .subscribe((e) => {
-        const nextWatch = this.isWatchUrl(e.urlAfterRedirects || e.url);
+        const url = e.urlAfterRedirects || e.url;
+        const nextWatch = this.isWatchUrl(url);
         // Leaving watch → mini: re-apply catalog playhead (watch advanced while film was paused).
         if (this.onWatchRoute && !nextWatch) {
           this.startApplied = false;
         }
         this.onWatchRoute = nextWatch;
+        this.dockInChat = this.playback.dockInChat || this.isMessagesThreadUrl(url);
+        this.syncDockHostClass();
         this.queueFilmSync();
       });
   }
@@ -379,10 +450,42 @@ export class HubsMiniPlayerComponent implements OnInit, OnDestroy {
     this.persistPosition(true);
     this.sub?.unsubscribe();
     this.routeSub?.unsubscribe();
+    this.clearDockHostClass();
   }
 
   private isWatchUrl(url: string): boolean {
     return /\/hubs\/watch(\/|$|\?)/.test(url || '');
+  }
+
+  /** `/messages` with conversation query `c` — tabs hidden, mini docks above composer. */
+  private isMessagesThreadUrl(url: string): boolean {
+    if (!url) return false;
+    try {
+      const parsed = new URL(url, typeof window !== 'undefined' ? window.location.origin : 'http://local');
+      if (!parsed.pathname.startsWith('/messages')) return false;
+      const c = parsed.searchParams.get('c');
+      return !!c && c.trim().length > 0;
+    } catch {
+      return /\/messages(\?|$)/.test(url) && /[?&]c=/.test(url);
+    }
+  }
+
+  /** Lets messages.page reserve the 56px hole without coupling to this component tree. */
+  private syncDockHostClass(): void {
+    if (typeof document === 'undefined') return;
+    const active = this.show && this.dockInChat;
+    document.documentElement.classList.toggle('hubs-mini-dock-in-chat', active);
+    if (active) {
+      document.documentElement.style.setProperty('--hubs-mini-dock-h', '56px');
+    } else {
+      document.documentElement.style.removeProperty('--hubs-mini-dock-h');
+    }
+  }
+
+  private clearDockHostClass(): void {
+    if (typeof document === 'undefined') return;
+    document.documentElement.classList.remove('hubs-mini-dock-in-chat');
+    document.documentElement.style.removeProperty('--hubs-mini-dock-h');
   }
 
   /** Visible docked chrome — never on the full watch page. */

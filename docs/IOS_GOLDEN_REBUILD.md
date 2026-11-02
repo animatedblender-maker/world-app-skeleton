@@ -53,6 +53,7 @@ See `docs/ios-golden-file-inventory.txt` (~194 Swift files).
 - [x] Android chat open syncs `AppState.openConversation` so `hubPlaybackDockInChat` flips (mini above composer)
 - [x] Continuous Hubs: loop + survive VideoPlayerView remount; ENDED seek restart
 - [x] Android expanded Hubs: Back chip above continuous film (tappable minimize)
+- [x] Web chat dock: hubs mini docks above Messages composer when thread open (compact 56px bar + hole)
 - [ ] Remaining fidelity gaps (gh-pages prod deploy, side-by-side QA)
 - [ ] Full QA pass vs iOS simulator side-by-side
 

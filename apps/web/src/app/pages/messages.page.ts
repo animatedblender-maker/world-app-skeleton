@@ -18,13 +18,18 @@ import { VideoPlayerComponent } from '../components/video-player.component';
 import { environment } from '../../envirnoments/envirnoment';
 import { BottomTabsComponent } from '../components/bottom-tabs.component';
 import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitize';
+import { HubsPlaybackService } from '../hubs/hubs-playback.service';
 
 @Component({
   selector: 'app-messages-page',
   standalone: true,
   imports: [CommonModule, FormsModule, VideoPlayerComponent, BottomTabsComponent],
   template: `
-    <div class="wrap" [class.thread-open]="!!activeConversation">
+    <div
+      class="wrap"
+      [class.thread-open]="!!activeConversation"
+      [class.hubs-docked]="hubsMiniDocked"
+    >
       <div class="card">
         <div class="layout" [class.thread-only]="mobileThreadOnly">
           <aside class="panel">
@@ -367,8 +372,20 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
               </div>
             </div>
 
+            <!-- iOS/Android: continuous Hubs mini docks into this hole above the composer. -->
+            <div
+              class="hubs-dock-hole"
+              *ngIf="hubsMiniDocked"
+              aria-hidden="true"
+            ></div>
+
             <!-- iOS composerBar: photo + field + paperplane circle -->
-            <form class="composer" *ngIf="activeConversation" (ngSubmit)="sendMessage()">
+            <form
+              class="composer"
+              #composerBar
+              *ngIf="activeConversation"
+              (ngSubmit)="sendMessage()"
+            >
               <div class="composer-reply" *ngIf="replyingTo">
                 <div class="composer-reply-bar" aria-hidden="true"></div>
                 <div class="composer-reply-copy">
@@ -1217,6 +1234,14 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
       .message-media app-video-player ::ng-deep .video-shell{ max-height:240px; }
       .message-media app-video-player ::ng-deep video{ max-height:240px; }
     }
+    /* iOS: reserved band for GlobalHubPlaybackLayer mini above composer (56px Android bar). */
+    .hubs-dock-hole{
+      flex-shrink:0;
+      height:var(--hubs-mini-dock-h, 56px);
+      border-top:0.5px solid var(--m-border, #ddd8d1);
+      background:var(--m-surface, #fefdfb);
+      pointer-events:none;
+    }
     /* —— iOS composerBar —— */
     .composer{
       position:sticky;
@@ -1229,6 +1254,9 @@ import { formatInlineBold, stripInlineBold } from '../core/utils/content-sanitiz
       border-top:0.5px solid var(--m-border, #ddd8d1);
       background:var(--m-surface, #fefdfb);
       padding-bottom:calc(12px + env(safe-area-inset-bottom));
+    }
+    .wrap.hubs-docked .composer{
+      border-top:0; /* hole already draws the divider */
     }
     .composer-reply{
       display:flex;
@@ -1777,10 +1805,13 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   @ViewChild('messageList') messageList?: ElementRef<HTMLDivElement>;
   @ViewChild('remoteVideo') remoteVideo?: ElementRef<HTMLVideoElement>;
   @ViewChild('localVideo') localVideo?: ElementRef<HTMLVideoElement>;
+  @ViewChild('composerBar') composerBar?: ElementRef<HTMLElement>;
   conversations: Conversation[] = [];
   messages: Message[] = [];
   activeConversation: Conversation | null = null;
   activeConversationId: string | null = null;
+  /** Hubs mini active while a thread is open — reserve dock hole above composer. */
+  hubsMiniDocked = false;
   /** iOS MessagesInboxFolder — Primary | Requests */
   inboxFolder: 'primary' | 'requests' = 'primary';
   requestBusyId: string | null = null;
@@ -1815,6 +1846,10 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   private pendingSub?: Subscription;
   private callSignalSub?: Subscription;
   private callConnectedSub?: Subscription;
+  private hubsPlaybackSub?: Subscription;
+  private composerResizeObs?: ResizeObserver;
+  private composerObservedEl: HTMLElement | null = null;
+  private syncingHubsDock = false;
   private pollTimer: number | null = null;
   mobileThreadOnly = false;
   isNarrow = false;
@@ -1886,6 +1921,7 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     private notificationsUi: NotificationsUiService,
     private push: PushService,
     private callService: CallService,
+    private hubsPlayback: HubsPlaybackService,
     private zone: NgZone,
     private cdr: ChangeDetectorRef,
     private sanitizer: DomSanitizer
@@ -1896,6 +1932,10 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     if (typeof window !== 'undefined') {
       window.addEventListener('resize', this.onViewportResize);
     }
+    this.hubsPlaybackSub = this.hubsPlayback.changes$.subscribe(() => {
+      this.syncHubsDock();
+    });
+    this.syncHubsDock();
     void this.push.syncIfGranted();
     const user = await this.auth.getUser();
     this.meId = user?.id ?? null;
@@ -1980,6 +2020,10 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     this.pendingSub?.unsubscribe();
     this.callSignalSub?.unsubscribe();
     this.callConnectedSub?.unsubscribe();
+    this.hubsPlaybackSub?.unsubscribe();
+    this.hubsPlayback.setChatThreadOpen(false);
+    this.teardownComposerObserver();
+    this.clearChatComposerSafe();
     if (this.pollTimer) {
       window.clearInterval(this.pollTimer);
       this.pollTimer = null;
@@ -1990,6 +2034,79 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
     }
     this.cleanupCall();
     this.clearMedia();
+  }
+
+  /** iOS chat hole: mini docks when hubs is minimized and a conversation is open. */
+  private syncHubsDock(): void {
+    if (this.syncingHubsDock) return;
+    this.syncingHubsDock = true;
+    try {
+      const changed = this.refreshHubsDockFlag();
+      if (changed) this.forceUi();
+      else this.afterHubsDockLayout();
+    } finally {
+      this.syncingHubsDock = false;
+    }
+  }
+
+  private refreshHubsDockFlag(): boolean {
+    this.hubsPlayback.setChatThreadOpen(!!this.activeConversation);
+    const next = !!this.activeConversation && this.hubsPlayback.isMini;
+    if (next === this.hubsMiniDocked) return false;
+    this.hubsMiniDocked = next;
+    return true;
+  }
+
+  private afterHubsDockLayout(): void {
+    if (this.hubsMiniDocked) {
+      // Composer may mount a tick later — observe after CD.
+      queueMicrotask(() => this.ensureComposerObserver());
+    } else {
+      this.teardownComposerObserver();
+      this.clearChatComposerSafe();
+    }
+  }
+
+  private ensureComposerObserver(): void {
+    if (typeof ResizeObserver === 'undefined') {
+      this.publishChatComposerSafe(72);
+      return;
+    }
+    const el = this.composerBar?.nativeElement ?? null;
+    if (!el) {
+      // Template may not have painted yet.
+      window.setTimeout(() => this.ensureComposerObserver(), 40);
+      return;
+    }
+    if (this.composerObservedEl === el && this.composerResizeObs) {
+      this.publishChatComposerSafe(el.getBoundingClientRect().height);
+      return;
+    }
+    this.teardownComposerObserver();
+    this.composerObservedEl = el;
+    this.composerResizeObs = new ResizeObserver((entries) => {
+      const h = entries[0]?.contentRect?.height ?? el.getBoundingClientRect().height;
+      this.publishChatComposerSafe(h);
+    });
+    this.composerResizeObs.observe(el);
+    this.publishChatComposerSafe(el.getBoundingClientRect().height);
+  }
+
+  private teardownComposerObserver(): void {
+    this.composerResizeObs?.disconnect();
+    this.composerResizeObs = undefined;
+    this.composerObservedEl = null;
+  }
+
+  private publishChatComposerSafe(heightPx: number): void {
+    if (typeof document === 'undefined') return;
+    const h = Math.max(48, Math.round(heightPx || 64));
+    document.documentElement.style.setProperty('--chat-composer-safe', `${h}px`);
+  }
+
+  private clearChatComposerSafe(): void {
+    if (typeof document === 'undefined') return;
+    document.documentElement.style.removeProperty('--chat-composer-safe');
   }
 
   private onViewportResize = (): void => {
@@ -4180,7 +4297,11 @@ export class MessagesPageComponent implements OnInit, OnDestroy {
   }
 
   private forceUi(): void {
+    if (!this.syncingHubsDock) {
+      this.refreshHubsDockFlag();
+    }
     this.zone.run(() => this.cdr.detectChanges());
+    this.afterHubsDockLayout();
   }
 
   goBack(): void {

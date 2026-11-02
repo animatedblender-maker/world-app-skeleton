@@ -61,6 +61,23 @@ export class HubsPlaybackService {
     return !!this.state$.value.post;
   }
 
+  /**
+   * Messages thread owns the chat dock hole (iOS hubPlaybackDockInChat).
+   * Set by messages.page while a conversation is open so the mini docks above the composer.
+   */
+  private chatThreadOpen = false;
+
+  get dockInChat(): boolean {
+    return this.chatThreadOpen && this.isMini;
+  }
+
+  setChatThreadOpen(open: boolean): void {
+    if (this.chatThreadOpen === open) return;
+    this.chatThreadOpen = open;
+    // Nudge mini chrome to re-read dock layout without changing playback.
+    this.state$.next({ ...this.state$.value });
+  }
+
   start(post: CountryPost, expanded = true): void {
     this.catalog.recordWatch(post.id);
     this.mediaSession.claimHubs(post.id);
