@@ -54,6 +54,7 @@ See `docs/ios-golden-file-inventory.txt` (~194 Swift files).
 - [x] Continuous Hubs: loop + survive VideoPlayerView remount; ENDED seek restart
 - [x] Android expanded Hubs: Back chip above continuous film (tappable minimize)
 - [x] Web chat dock: hubs mini docks above Messages composer when thread open (compact 56px bar + hole)
+- [x] Web expanded Hubs: Back chip on player stage → minimize to mini + history.back
 - [ ] Remaining fidelity gaps (gh-pages prod deploy, side-by-side QA)
 - [ ] Full QA pass vs iOS simulator side-by-side
 

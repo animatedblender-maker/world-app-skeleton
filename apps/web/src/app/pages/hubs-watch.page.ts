@@ -29,6 +29,17 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
             class="player-stage"
             [style.--watch-video-ar]="videoAspectRatio"
           >
+            <!-- iOS/Android: tappable Back above film → minimize to continuous mini. -->
+            <button
+              type="button"
+              class="watch-back"
+              (click)="minimizeToMini()"
+              aria-label="Back"
+            >
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M15 5l-7 7 7 7" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
             <app-video-player
               *ngIf="mediaSrc"
               class="hubs-watch-player"
@@ -434,6 +445,31 @@ import { HubsPlaybackService } from '../hubs/hubs-playback.service';
         flex-shrink: 0;
         border-radius: 12px;
         box-shadow: 0 8px 16px rgba(44, 40, 37, 0.12);
+      }
+      .watch-back {
+        position: absolute;
+        top: calc(8px + env(safe-area-inset-top, 0px));
+        left: 10px;
+        z-index: 8;
+        width: 40px;
+        height: 40px;
+        border: 0;
+        border-radius: 12px;
+        padding: 0;
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        color: var(--m-matte, #f6f3ef);
+        background: color-mix(in srgb, var(--m-ink, #2c2825) 55%, transparent);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+      }
+      .watch-back:hover {
+        background: color-mix(in srgb, var(--m-ink, #2c2825) 72%, transparent);
+      }
+      .watch-back svg {
+        display: block;
       }
       .player-stage app-video-player,
       .player-stage .hubs-watch-player {
@@ -1883,6 +1919,16 @@ export class HubsWatchPageComponent implements OnInit, OnDestroy {
   }
 
   goHubs(): void {
+    void this.router.navigate(['/hubs']);
+  }
+
+  /** Android/iOS expanded Back — minimize continuous session, then leave watch. */
+  minimizeToMini(): void {
+    this.playback.minimize();
+    if (typeof window !== 'undefined' && window.history.length > 1) {
+      window.history.back();
+      return;
+    }
     void this.router.navigate(['/hubs']);
   }
 
