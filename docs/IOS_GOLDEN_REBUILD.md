@@ -52,8 +52,13 @@ See `docs/ios-golden-file-inventory.txt` (~194 Swift files).
 - [x] Android chat dock hole: continuous Hubs mini docks into conversation bar (HubContinuousDockSlot)
 - [x] Android chat open syncs `AppState.openConversation` so `hubPlaybackDockInChat` flips (mini above composer)
 - [x] Continuous Hubs: loop + survive VideoPlayerView remount; ENDED seek restart
+- [x] Android expanded Hubs: Back chip above continuous film (tappable minimize)
 - [ ] Remaining fidelity gaps (gh-pages prod deploy, side-by-side QA)
 - [ ] Full QA pass vs iOS simulator side-by-side
+
+### Web deep-link note
+- `ng serve` SPA fallback serves `index.html` for `/hubs` when `Accept: text/html` (browsers). Bare `curl` without that header gets Express 404 — not a product bug.
+- `deploy-gh-pages.sh` copies `index.html` → `404.html` for GitHub Pages path deep-links; `app.ts` also honors `?redirect=` from `public/404.html`.
 
 ## Verified on device (2026-10-31 → 2026-11-01)
 - Android tabs: Feed | Masquerade | + | Matterya Hubs | Messages | Profile
