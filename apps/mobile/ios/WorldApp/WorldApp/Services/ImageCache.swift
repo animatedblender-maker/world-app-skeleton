@@ -188,13 +188,13 @@ final class ImageCache: @unchecked Sendable {
     }
 
     /// Feed cold-start warm: avatars + media so first scroll hits memory.
-    /// Photos warm at ≥540 (matches FeedPinchZoomPhoto) so image cards stay scroll-light.
+    /// Photos warm at ≥540 (matches FeedPinchZoomPhoto) so image cards hit memory.
     /// Video posters stay at `maxPixelSize` (Frame0 / thumbs).
-    func prefetchFeedMedia(_ posts: [CountryPost], maxPixelSize: CGFloat = 420) {
+    func prefetchFeedMedia(_ posts: [CountryPost], maxPixelSize: CGFloat = 360) {
         // Avatars first — every feed card has one; media is secondary for text-heavy demos.
         // Must match AvatarView feed maxPixelSize (size 36 → max(72, 72) = 72) or cache misses.
         let avatarMax: CGFloat = 72
-        // Fling callers pass 320 for posters; photos still need 540 so display hits memory.
+        // Photos stay 540 for display cache hits; gallery lead 2 (was 4) — kill decode storms.
         let photoMax: CGFloat = max(540, maxPixelSize)
         var missingFrame0IDs: [String] = []
         var photoURLs: [URL] = []
@@ -206,8 +206,8 @@ final class ImageCache: @unchecked Sendable {
             if isPhoto {
                 let gallery = post.feedImageURLs.filter { MediaURLResolver.isUsablePosterURL($0) }
                 if !gallery.isEmpty {
-                    // Prefetch first few gallery pages so swipe feels instant.
-                    photoURLs.append(contentsOf: gallery.prefix(4))
+                    // Prefetch first gallery page + one neighbor — swipe still feels instant.
+                    photoURLs.append(contentsOf: gallery.prefix(2))
                     continue
                 }
             }

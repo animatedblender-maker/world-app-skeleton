@@ -383,12 +383,12 @@ struct FeedView: View {
             if !reels.isEmpty {
                 feedReels = reels
                 ImageCache.shared.prefetchPostThumbnails(
-                    Array(reels.prefix(8)),
-                    maxPixelSize: 360,
+                    Array(reels.prefix(4)),
+                    maxPixelSize: 320,
                     aggressive: false
                 )
                 Task(priority: .utility) {
-                    await Frame0PosterResolver.shared.prefetch(postIDs: Array(reels.prefix(8).map(\.id)))
+                    await Frame0PosterResolver.shared.prefetch(postIDs: Array(reels.prefix(3).map(\.id)))
                 }
             }
         }
@@ -414,7 +414,7 @@ struct FeedView: View {
             if FeedVideoFocus.shared.allowsFeedAVWarm {
                 Task(priority: .utility) {
                     await Frame0PosterResolver.shared.prefetch(
-                        postIDs: Array(hubsStrip.prefix(6).map(\.id))
+                        postIDs: Array(hubsStrip.prefix(3).map(\.id))
                     )
                 }
             }
@@ -473,27 +473,32 @@ struct FeedView: View {
         }
         if !merged.isEmpty {
             feedReels = merged
-            ImageCache.shared.prefetchPostThumbnails(merged, maxPixelSize: 360, aggressive: false)
+            // Ultra-light strip: visible lead only — never Frame0 the whole rail.
+            ImageCache.shared.prefetchPostThumbnails(
+                Array(merged.prefix(4)),
+                maxPixelSize: 320,
+                aggressive: false
+            )
             Task(priority: .utility) {
-                await Frame0PosterResolver.shared.prefetch(postIDs: merged.map(\.id))
+                await Frame0PosterResolver.shared.prefetch(postIDs: Array(merged.prefix(3).map(\.id)))
             }
         }
     }
 
-    /// Warm visible top-rail posters — small bands only (dual-mounted Feed+Hubs).
+    /// Warm visible top-rail posters — tiny bands only (dual-mounted Feed+Hubs).
     private func prefetchStripThumbnails() {
-        let sparks = Array(feedReels.prefix(8))
-        let hubs = Array((newOnPlay + continueWatching).prefix(6))
+        let sparks = Array(feedReels.prefix(4))
+        let hubs = Array((newOnPlay + continueWatching).prefix(3))
         if !sparks.isEmpty {
-            ImageCache.shared.prefetchPostThumbnails(sparks, maxPixelSize: 360, aggressive: false)
+            ImageCache.shared.prefetchPostThumbnails(sparks, maxPixelSize: 320, aggressive: false)
             Task(priority: .utility) {
-                await Frame0PosterResolver.shared.prefetch(postIDs: sparks.map(\.id))
+                await Frame0PosterResolver.shared.prefetch(postIDs: Array(sparks.prefix(2).map(\.id)))
             }
         }
         if !hubs.isEmpty {
-            ImageCache.shared.prefetchPostThumbnails(hubs, maxPixelSize: 320, aggressive: false)
+            ImageCache.shared.prefetchPostThumbnails(hubs, maxPixelSize: 280, aggressive: false)
             Task(priority: .utility) {
-                await Frame0PosterResolver.shared.prefetch(postIDs: hubs.map(\.id))
+                await Frame0PosterResolver.shared.prefetch(postIDs: Array(hubs.prefix(2).map(\.id)))
             }
         }
     }

@@ -97,17 +97,18 @@ final class HomeFeedStore {
     private static let officialWelcomeSeenKey = "matterya.home.officialWelcomeSeen.v1"
     private var cachedOfficialWelcome: CountryPost?
 
-    /// Network page size — keep modest so ranking/merge stays off the scroll path.
-    private let pageSize = 16
-    private let windowPageSize = 10
-    /// First paint window — ~1.5 screens; grow on scroll.
-    private let firstWindow = 10
-    /// Prefetch earlier so the tail never waits on network while scrolling.
-    private let prefetchRatio = 0.40
-    /// Request next batch when ~8 cards remain (settle lag + fling headroom).
-    private let nearTailRemaining = 8
+    /// Network page size — ultra-light so ranking/merge stays off the scroll path.
+    private let pageSize = 10
+    private let windowPageSize = 6
+    /// First paint window — ~1 screen; grow on scroll (was 10 — decode storm).
+    private let firstWindow = 6
+    /// Prefetch later so mid-scroll does not kick network storms.
+    private let prefetchRatio = 0.55
+    /// Request next batch when ~5 cards remain (settle lag + fling headroom).
+    private let nearTailRemaining = 5
     /// Keep at least this many posts buffered in `posts` (beyond the visible window).
-    private let minBufferedPool = 48
+    /// Was 48 — endless top-up under scroll made Feed feel heavier than the rest of the app.
+    private let minBufferedPool = 24
 
     private init() {
         scrollSettleObserver = NotificationCenter.default.addObserver(
@@ -635,7 +636,8 @@ final class HomeFeedStore {
         var stagnant = 0
         var lastCount = posts.count
         // Endless Home: keep walking until the buffer is deep or generation changes.
-        while posts.count < minBufferedPool, hasMore, guardPasses < 12 {
+        // Ultra-light: fewer force-network passes so open/scroll stay free of top-up storms.
+        while posts.count < minBufferedPool, hasMore, guardPasses < 6 {
             guardPasses += 1
             let gen = generation
             // Force network — don't only expand the local window.
@@ -1057,7 +1059,7 @@ final class HomeFeedStore {
         let fling = ScrollBudget.isFlinging
         // During a fling, jump the window ahead so LazyVStack always has cells ready.
         let growBy = fling ? windowPageSize * 2 : windowPageSize
-        let growWhenWithin = fling ? 8 : nearTailRemaining
+        let growWhenWithin = fling ? 4 : nearTailRemaining
         let remainingDisplayed = max(0, displayedPosts.count - index - 1)
         let nearTail = remainingDisplayed <= growWhenWithin
 
@@ -1072,22 +1074,23 @@ final class HomeFeedStore {
         }
 
         // Thumbs + Frame0; AV warm on video queue so autoplay is instant.
-        let thumbAhead = fling ? 2 : 5
+        // Ultra-light: visible lead only — settled 5@540 was a decode storm under the finger.
+        let thumbAhead = fling ? 1 : 2
         let end = min(displayedPosts.count, index + thumbAhead)
         if index < end {
             let window = Array(displayedPosts[index..<end])
-            // Photos warm at ≥540 inside prefetchFeedMedia; this size is video posters only.
-            ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 320 : 540)
+            // Photos warm at ≥420 inside prefetchFeedMedia; this size is video posters only.
+            ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 280 : 360)
             if !fling {
                 Task(priority: .utility) {
                     await Frame0PosterResolver.shared.prefetch(
-                        postIDs: Array(window.prefix(4).map(\.id))
+                        postIDs: Array(window.prefix(2).map(\.id))
                     )
                 }
             }
         }
 
-        // Warm focused video + ahead (video queue only). Runs mid-fling too (pool flingProtect).
+        // Warm focused video + ahead (video queue only). Mid-fling: pool flingProtect (ahead 1).
         let videos = Self.feedWarmVideoQueue(from: displayedPosts)
         if let warmIdx = Self.feedWarmIndex(
             for: post,
@@ -1514,14 +1517,14 @@ final class HomeFeedStore {
         hasMore = true
         endlessLoadEpoch &+= 1
         ContentCache.shared.setPosts(Array(posts.prefix(ContentCache.maxCachedPosts)), for: .homeFeed)
-        // Media session 09: page append = thumbs only (no AV pool).
+        // Media session 09: page append = thumbs only (no AV pool). Ultra-light decode.
         ImageCache.shared.prefetchFeedMedia(
             Array(appended.prefix(SparkWarmPool.MediaBudget.thumbAhead)),
-            maxPixelSize: 720
+            maxPixelSize: 360
         )
         Task {
             await Frame0PosterResolver.shared.prefetch(
-                postIDs: Array(appended.prefix(SparkWarmPool.MediaBudget.thumbAhead).map(\.id))
+                postIDs: Array(appended.prefix(min(2, SparkWarmPool.MediaBudget.thumbAhead)).map(\.id))
             )
         }
         #if DEBUG
@@ -1644,16 +1647,16 @@ final class HomeFeedStore {
     /// Open / after-paint: thumbs (+ Frame0 after settle). Lite skips Frame0 + AV entirely.
     /// Cold open Frame0×N + AV under splash froze the main thread while audio kept playing.
     private func warmHead(lite: Bool = false) async {
-        let thumbN = lite ? 3 : min(max(windowLimit, firstWindow), 8)
+        let thumbN = lite ? 2 : min(max(windowLimit, firstWindow), 4)
         let thumbBand = Array(posts.prefix(thumbN))
-        ImageCache.shared.prefetchFeedMedia(thumbBand, maxPixelSize: lite ? 320 : 540)
-        ImageCache.shared.prefetchPostThumbnails(thumbBand, maxPixelSize: lite ? 280 : 420, aggressive: false)
+        ImageCache.shared.prefetchFeedMedia(thumbBand, maxPixelSize: lite ? 280 : 360)
+        ImageCache.shared.prefetchPostThumbnails(thumbBand, maxPixelSize: lite ? 240 : 320, aggressive: false)
         // Open path: tiny thumbs only. Frame0 + AV only after autoplay unlock.
         guard !lite else { return }
         guard FeedVideoFocus.shared.allowsFeedAVWarm else { return }
         Task(priority: .utility) {
-            // Cap Frame0 stampede on open — 2 posters max.
-            await Frame0PosterResolver.shared.prefetch(postIDs: Array(thumbBand.prefix(2).map(\.id)))
+            // Cap Frame0 stampede on open — 1 poster max (ultra-light).
+            await Frame0PosterResolver.shared.prefetch(postIDs: Array(thumbBand.prefix(1).map(\.id)))
         }
         let videos = Self.feedWarmVideoQueue(
             from: Array(displayedPosts.prefix(max(windowLimit, firstWindow)))
