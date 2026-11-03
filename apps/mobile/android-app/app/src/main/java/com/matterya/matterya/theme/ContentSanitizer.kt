@@ -61,17 +61,23 @@ object ContentSanitizer {
 
     /**
      * User-facing copy: never show competitor / source-platform names.
-     * `subreddit` → `space`, `reddit` → `masquerade`, TikTok → `matterya`.
+     * TikTok / YouTube / Facebook / Instagram → matterya;
+     * subreddit → space, reddit → masquerade.
      */
     fun rebrandCompetitorNames(value: String): String {
         var out = value
         val pairs = listOf(
             Regex("tik\\s*tok", RegexOption.IGNORE_CASE) to "matterya",
+            Regex("you\\s*tube", RegexOption.IGNORE_CASE) to "matterya",
             Regex("subreddits", RegexOption.IGNORE_CASE) to "spaces",
             Regex("subreddit", RegexOption.IGNORE_CASE) to "space",
+            Regex("\\binstagram\\b", RegexOption.IGNORE_CASE) to "matterya",
+            Regex("\\bfacebook\\b", RegexOption.IGNORE_CASE) to "matterya",
+            Regex("\\byoutube\\b", RegexOption.IGNORE_CASE) to "matterya",
             Regex("\\breddit\\b", RegexOption.IGNORE_CASE) to "masquerade",
             Regex("\\btiktok\\b", RegexOption.IGNORE_CASE) to "matterya",
             Regex("\\br/", RegexOption.IGNORE_CASE) to "space/",
+            Regex("\\bu/", RegexOption.IGNORE_CASE) to "@",
         )
         for ((regex, replacement) in pairs) {
             out = out.replace(regex, replacement)

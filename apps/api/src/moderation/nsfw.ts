@@ -54,20 +54,27 @@ export function moderationStatusForText(
 export function rebrandCompetitorNames(value: string | null | undefined): string | null {
   if (value == null) return null;
   let out = String(value);
-  // Longer tokens first so "subreddit" → "matterya", "تيك توك" / "tik tok" → "matterya".
+  // Longer tokens first. TikTok/YouTube/Facebook/Instagram → matterya;
+  // subreddit → space, reddit → masquerade (same policy as iOS ContentSanitizer).
   for (const token of [
     'تيك توك',
     'تيك\u200cتوك',
     'تيك-توك',
     'تيكتوك',
     'tik tok',
+    'you tube',
     'subreddit',
+    'instagram',
+    'facebook',
+    'youtube',
     'reddit',
     'tiktok',
   ]) {
     if (!out.toLowerCase().includes(token.toLowerCase()) && !out.includes(token)) continue;
     const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    out = out.replace(new RegExp(escaped, 'gi'), 'matterya');
+    const replacement =
+      token === 'subreddit' ? 'space' : token === 'reddit' ? 'masquerade' : 'matterya';
+    out = out.replace(new RegExp(escaped, 'gi'), replacement);
   }
   // Reddit shorthand " sub " (spaces required) → Masquerade " space ".
   out = out

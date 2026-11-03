@@ -2,26 +2,34 @@
 export function rebrandCompetitorNames(value: string | null | undefined): string {
   if (value == null) return '';
   let out = String(value);
-  // Longer first: Arabic TikTok spellings + "tik tok" + Latin brands.
+  // Longer first: Arabic TikTok spellings + spaced brands + Latin brands.
   for (const token of [
     'تيك توك',
     'تيك\u200cتوك',
     'تيك-توك',
     'تيكتوك',
     'tik tok',
+    'you tube',
     'subreddit',
+    'instagram',
+    'facebook',
+    'youtube',
     'reddit',
     'tiktok',
   ]) {
     if (!out.toLowerCase().includes(token.toLowerCase()) && !out.includes(token)) continue;
     const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    out = out.replace(new RegExp(escaped, 'gi'), 'matterya');
+    const replacement =
+      token === 'subreddit' ? 'space' : token === 'reddit' ? 'masquerade' : 'matterya';
+    out = out.replace(new RegExp(escaped, 'gi'), replacement);
   }
   // Reddit shorthand " sub " (spaces required) → Masquerade " space ".
   out = out
     .replace(/ SUB /g, ' SPACE ')
     .replace(/ Sub /g, ' Space ')
     .replace(/ sub /g, ' space ');
+  // Reddit path / user shorthand.
+  out = out.replace(/\bu\//gi, '@').replace(/\br\//gi, 'space/');
   return out;
 }
 

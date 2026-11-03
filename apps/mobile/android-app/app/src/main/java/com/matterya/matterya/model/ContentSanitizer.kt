@@ -44,10 +44,29 @@ object ContentSanitizer {
         return trimmed
     }
 
-    /** User-facing copy never says "TikTok" — hashtags, captions, comments, bios, etc. */
+    /**
+     * User-facing copy: TikTok / YouTube / Facebook / Instagram → matterya;
+     * subreddit → space, reddit → masquerade. Mirrors theme.ContentSanitizer.
+     */
     fun rebrandCompetitorNames(value: String): String {
-        if (!value.contains("tiktok", ignoreCase = true)) return value
-        return Regex("tiktok", RegexOption.IGNORE_CASE).replace(value, "matterya")
+        var out = value
+        val pairs = listOf(
+            Regex("tik\\s*tok", RegexOption.IGNORE_CASE) to "matterya",
+            Regex("you\\s*tube", RegexOption.IGNORE_CASE) to "matterya",
+            Regex("subreddits", RegexOption.IGNORE_CASE) to "spaces",
+            Regex("subreddit", RegexOption.IGNORE_CASE) to "space",
+            Regex("\\binstagram\\b", RegexOption.IGNORE_CASE) to "matterya",
+            Regex("\\bfacebook\\b", RegexOption.IGNORE_CASE) to "matterya",
+            Regex("\\byoutube\\b", RegexOption.IGNORE_CASE) to "matterya",
+            Regex("\\breddit\\b", RegexOption.IGNORE_CASE) to "masquerade",
+            Regex("\\btiktok\\b", RegexOption.IGNORE_CASE) to "matterya",
+            Regex("\\br/", RegexOption.IGNORE_CASE) to "space/",
+            Regex("\\bu/", RegexOption.IGNORE_CASE) to "@",
+        )
+        for ((regex, replacement) in pairs) {
+            out = out.replace(regex, replacement)
+        }
+        return out
     }
 
     /**

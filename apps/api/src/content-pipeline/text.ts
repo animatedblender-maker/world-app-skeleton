@@ -25,20 +25,27 @@ export function cleanText(value: unknown, maxLen: number): string {
   let text = String(value).replace(/\x00/g, ' ').trim();
   // Keep newlines as spaces for single-line captions; collapse runs of space.
   text = text.replace(/\s+/g, ' ');
-  // Longer tokens first so "subreddit" → "matterya", Arabic TikTok → "matterya".
+  // Longer tokens first. TikTok/YouTube/Facebook/Instagram → matterya;
+  // subreddit → space, reddit → masquerade (same policy as iOS ContentSanitizer).
   for (const token of [
     'تيك توك',
     'تيك\u200cتوك',
     'تيك-توك',
     'تيكتوك',
     'tik tok',
+    'you tube',
     'subreddit',
+    'instagram',
+    'facebook',
+    'youtube',
     'reddit',
     'tiktok',
   ]) {
     if (!text.toLowerCase().includes(token.toLowerCase()) && !text.includes(token)) continue;
     const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    text = text.replace(new RegExp(escaped, 'gi'), 'matterya');
+    const replacement =
+      token === 'subreddit' ? 'space' : token === 'reddit' ? 'masquerade' : 'matterya';
+    text = text.replace(new RegExp(escaped, 'gi'), replacement);
   }
   // Reddit shorthand " sub " (spaces required) → Masquerade " space ".
   text = text

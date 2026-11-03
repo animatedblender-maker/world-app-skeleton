@@ -56,8 +56,8 @@ enum ContentSanitizer {
     }
 
     /// User-facing copy: never show competitor / source-platform names.
-    /// `subreddit` → `space`, `reddit` → `masquerade`, TikTok → `matterya`,
-    /// `u/name` → `@name`.
+    /// TikTok / YouTube / Facebook / Instagram → `matterya`,
+    /// `subreddit` → `space`, `reddit` → `masquerade`, `u/name` → `@name`.
     /// Longer tokens first so `subreddit` is not partially rewritten.
     /// Compiled once — image cards hit `clean` many times per SwiftUI body pass.
     private static let rebrandPairs: [(NSRegularExpression, String)] = {
@@ -68,9 +68,13 @@ enum ContentSanitizer {
             ("تيك-توك", "matterya"),
             ("تيكتوك", "matterya"),
             ("tik\\s*tok", "matterya"),
+            ("you\\s*tube", "matterya"),
             ("subreddits", "spaces"),
             ("subreddit", "space"),
             // Whole word only — never rewrite "credited" etc.
+            ("\\binstagram\\b", "matterya"),
+            ("\\bfacebook\\b", "matterya"),
+            ("\\byoutube\\b", "matterya"),
             ("\\breddit\\b", "masquerade"),
             ("\\btiktok\\b", "matterya"),
             // Reddit path shorthand r/funny → space/funny
