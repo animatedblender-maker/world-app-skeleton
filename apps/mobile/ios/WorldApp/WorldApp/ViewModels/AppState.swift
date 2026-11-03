@@ -1569,8 +1569,8 @@ final class AppState {
         let shouldReturn = returnToChat
         let conversationID = hubPlaybackReturnConversationID
         Task { @MainActor in
-            // Let the morph paint settle before any tab/nav/focus work.
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            // YouTube: chrome/nav after film lands — keep this under one frame budget.
+            try? await Task.sleep(nanoseconds: 40_000_000)
             if !hubPlaybackExpanded {
                 hubPlaybackPullProgress = 0
             }
@@ -1594,6 +1594,7 @@ final class AppState {
 
     /// Tap miniplayer (from chat dock or floating bar) → full Hubs watch with comments.
     /// Same continuous player — expand only grows the stage; audio/video never restart.
+    /// YouTube: animate the film frame out (ease-out), never remount AV.
     func expandHubPlayback() {
         guard hubPlaybackPost != nil else { return }
         rememberHubPlaybackChatReturnIfNeeded()
@@ -1605,11 +1606,9 @@ final class AppState {
             hubPlaybackPullProgress = 0
             hubFullscreenPullProgress = 0
         }
-        // Expand first — layer owns the snappy spring. Navigation after so film grows immediately.
+        // Grow film first (ytExpand). Tab/nav after so the morph isn't fighting a tree rebuild.
         if !hubPlaybackExpanded {
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) {
+            withAnimation(MatteryaMotion.ytExpand) {
                 hubPlaybackExpanded = true
             }
             hubExpandToken &+= 1

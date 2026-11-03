@@ -154,7 +154,7 @@ struct GlobalHubPlaybackLayer: View {
         if !appState.hubPlaybackPlaying {
             appState.hubPlaybackPlaying = true
         }
-        ignorePauseUntil = Date().addingTimeInterval(0.45)
+        ignorePauseUntil = Date().addingTimeInterval(0.28)
         // Do NOT touch AppState here — pullProgress is already ≥ threshold from the
         // finger, and writing it again re-entered YouTubeAppView on the morph frame.
         // Animate ONLY local geometry from the current pull offset into the mini strip.
@@ -164,8 +164,8 @@ struct GlobalHubPlaybackLayer: View {
             dragOffset = 0
         }
         Task { @MainActor in
-            // Match MatteryaMotion.ytMorph easeOut 0.22s — flip session once the film has landed.
-            try? await Task.sleep(nanoseconds: 230_000_000)
+            // Match MatteryaMotion.ytMorph easeOut 0.18s — flip session the frame the film lands.
+            try? await Task.sleep(nanoseconds: 185_000_000)
             var pin = Transaction()
             pin.disablesAnimations = true
             withTransaction(pin) {
@@ -173,7 +173,7 @@ struct GlobalHubPlaybackLayer: View {
                 dragOffset = 0
                 isPullingMinimize = false
             }
-            ignorePauseUntil = Date().addingTimeInterval(0.15)
+            ignorePauseUntil = Date().addingTimeInterval(0.12)
             // Single finish — no AV reassert storm (was hitching mid-morph).
             appState.finishMinimizeHubPlayback(returnToChat: returnToChat)
         }
@@ -440,9 +440,10 @@ struct GlobalHubPlaybackLayer: View {
                 // was hitching the morph for a second or two.
                 if !settledMini, !morphing {
                     if let poster {
+                        // Light underlay only — heavy 720 decode under continuous film hitch open.
                         CachedAsyncImage(
                             url: poster,
-                            maxPixelSize: 720,
+                            maxPixelSize: 420,
                             contentMode: fitFilm ? .fit : .fill,
                             placeholder: AnyView(Color.black)
                         )
@@ -591,7 +592,8 @@ struct GlobalHubPlaybackLayer: View {
     }
 
     private var minimizeGesture: some Gesture {
-        DragGesture(minimumDistance: 10, coordinateSpace: .local)
+        // YouTube engages the grab almost immediately — low distance, vertical-biased.
+        DragGesture(minimumDistance: 6, coordinateSpace: .local)
             .onChanged { value in
                 guard showExpandedStage, !landscapeFullscreen else { return }
                 var offset = dragOffset

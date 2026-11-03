@@ -122,10 +122,11 @@ enum MatteryaPullDownDismiss {
     /// Pull distance that maps to collapse progress 1.0.
     static let chromeFadeDistance: CGFloat = 220
     /// Release below this progress (and weak velocity) → snap back to expanded.
-    static let releaseSnapBackProgress: CGFloat = 0.32
-    static let releaseSnapBackTranslation: CGFloat = 70
+    /// YouTube commits around ~1/3 of the collapse track.
+    static let releaseSnapBackProgress: CGFloat = 0.30
+    static let releaseSnapBackTranslation: CGFloat = 64
     /// Predicted end Y above this commits mini even if progress is mid-way.
-    static let flingCommitPredicted: CGFloat = 200
+    static let flingCommitPredicted: CGFloat = 180
 
     static func shouldDismiss(_ value: DragGesture.Value) -> Bool {
         value.translation.height > dismissDistance

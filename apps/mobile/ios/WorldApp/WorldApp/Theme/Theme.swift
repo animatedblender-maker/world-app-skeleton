@@ -126,14 +126,15 @@ enum MatteryaMotion {
     static let insert = Animation.easeOut(duration: 0.16)
 
     // MARK: YouTube-parity hubs geometry (stage ↔ FS ↔ mini)
+    // YouTube keeps ONE AVPlayer and morphs its layer frame with a short ease-out
+    // (~180ms). Springs hang mid-path; never use them for film geometry.
 
-    /// Continuous morph settle — finger-up stage/FS/mini.
-    /// Ease-out (not spring): springs visibly slow mid-path and feel like a 1–2s hang.
-    static let ytMorph = Animation.easeOut(duration: 0.22)
-    /// Maximize from mini → watch stage.
-    static let ytExpand = Animation.spring(response: 0.24, dampingFraction: 0.93)
+    /// Continuous morph settle — finger-up stage → mini (YouTube ~0.18s ease-out).
+    static let ytMorph = Animation.easeOut(duration: 0.18)
+    /// Maximize from mini → watch stage (same ease family as morph — no spring hang).
+    static let ytExpand = Animation.easeOut(duration: 0.16)
     /// Device tilt / content rotation while FS (short ease, no bounce).
-    static let ytRotate = Animation.easeInOut(duration: 0.20)
+    static let ytRotate = Animation.easeInOut(duration: 0.16)
 
     /// UIKit: faster than system default for feed-like lists.
     static var collectionDeceleration: UIScrollView.DecelerationRate { .fast }

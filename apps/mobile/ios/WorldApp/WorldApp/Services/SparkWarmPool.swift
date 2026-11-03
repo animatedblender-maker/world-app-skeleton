@@ -29,7 +29,8 @@ final class SparkWarmPool {
         static var playerAhead: Int { playerAheadSparks }
         static var playerAheadFeed: Int { 1 }
         static var playerAheadSparks: Int { isConstrained ? 1 : 2 }
-        static var playerAheadHubs: Int { 1 }
+        /// YouTube keeps ~1–2 related long-forms buffered while watching.
+        static var playerAheadHubs: Int { isConstrained ? 1 : 2 }
         static var thumbAhead: Int { isConstrained ? 2 : 3 }
         static var deepPrerollFeed: Int { 1 }
         static var deepPrerollSparks: Int { isConstrained ? 1 : 2 }
