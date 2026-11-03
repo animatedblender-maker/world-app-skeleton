@@ -25,21 +25,20 @@ final class SparkWarmPool {
         static var isConstrained: Bool { physicalGB < 3.6 }
         static var isMid: Bool { physicalGB < 5.6 }
 
-        /// Ultra light — whole-app weight first (tabs + mini + create stay snappy).
-        /// Sparks next-clip still warms via `.landing` / settle; do not bump these globally.
+        /// Ultra light whole-app — Sparks path-local: ahead 2 on capable devices so swipe stays instant.
         static var playerAhead: Int { playerAheadSparks }
         static var playerAheadFeed: Int { 1 }
-        static var playerAheadSparks: Int { 1 }
+        static var playerAheadSparks: Int { isConstrained ? 1 : 2 }
         static var playerAheadHubs: Int { 1 }
         static var thumbAhead: Int { isConstrained ? 2 : 3 }
         static var deepPrerollFeed: Int { 1 }
-        static var deepPrerollSparks: Int { 1 }
+        static var deepPrerollSparks: Int { isConstrained ? 1 : 2 }
         static var deepPrerollHubs: Int { 1 }
         static var maxSlots: Int { isConstrained ? 2 : 3 }
-        static var playerBehind: Int { 0 }
+        static var playerBehind: Int { 1 }
         static var maxConcurrentWarms: Int { 1 }
-        static var forwardBufferDeep: Double { isConstrained ? 2 : 2.5 }
-        static var forwardBufferLight: Double { isConstrained ? 1 : 1.25 }
+        static var forwardBufferDeep: Double { isConstrained ? 2 : 3 }
+        static var forwardBufferLight: Double { isConstrained ? 1 : 1.5 }
     }
 
     /// How aggressively to warm the Sparks sliding window.
