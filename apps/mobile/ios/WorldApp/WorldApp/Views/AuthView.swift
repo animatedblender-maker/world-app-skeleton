@@ -69,6 +69,18 @@ struct AuthView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
 
+                        if activeTab == .login {
+                            HStack {
+                                Spacer()
+                                Button("Forgot password?") {
+                                    Task { await forgotPassword() }
+                                }
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.accent)
+                                .disabled(busy)
+                            }
+                        }
+
                         Button(action: submit) {
                             HStack {
                                 if busy { ProgressView().tint(.white) }
@@ -208,6 +220,31 @@ struct AuthView: View {
         try? await Task.sleep(nanoseconds: 5_000_000_000)
         if successPopup == message {
             successPopup = nil
+        }
+    }
+
+    private func forgotPassword() async {
+        errorMessage = nil
+        infoMessage = nil
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedEmail.isEmpty {
+            errorMessage = "Enter your email address, then tap Forgot password."
+            return
+        }
+        if !isValidEmail(trimmedEmail) {
+            errorMessage = "Enter a valid email address (for example you@example.com)."
+            return
+        }
+        busy = true
+        defer { busy = false }
+        do {
+            // Success popup only — do not set infoMessage (that surfaces “Resend confirmation”).
+            _ = try await AuthService.shared.requestPasswordReset(email: trimmedEmail)
+            await presentSuccessPopup(
+                "If an account exists for that email, we sent a Matterya password reset link. Open it to choose a new password."
+            )
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 

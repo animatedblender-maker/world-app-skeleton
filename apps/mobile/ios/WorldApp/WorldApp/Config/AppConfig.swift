@@ -11,6 +11,8 @@ enum AppConfig {
     /// tolerates that via `R2PresignedPlayback` (matterya-r2:// Range GET proxy).
     static let r2PublicBaseURL = "https://pub-0af7dfb233b3438f90451ac0261b6009.r2.dev"
     static let demoDatasetBaseURL = "https://matterya.com"
+    /// Public web origin — password reset emails open `/reset-password` here.
+    static let webBaseURL = "https://matterya.com"
     /// PERMANENTLY OFF — never load Reddit JSONL (bundled or remote). Backend GraphQL only.
     static let useDemoDataset = false
     static let demoDatasetAllowRemoteDownload = false

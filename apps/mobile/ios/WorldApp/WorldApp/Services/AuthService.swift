@@ -229,6 +229,76 @@ final class AuthService {
             ?? "If that email needs confirmation, we sent a new Matterya link."
     }
 
+    /// Forgot password — email a Matterya reset link (opens web `/reset-password`).
+    /// Same Supabase recover path as web; always returns a neutral success copy.
+    @discardableResult
+    func requestPasswordReset(email: String) async throws -> String {
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedEmail.isEmpty else {
+            throw AuthError.server("Email is required. Enter your email address.")
+        }
+        let redirect = "\(AppConfig.webBaseURL)/reset-password"
+        // GoTrue recover: POST /auth/v1/recover?redirect_to=…
+        var components = URLComponents(string: "\(AppConfig.supabaseURL)/auth/v1/recover")
+        components?.queryItems = [URLQueryItem(name: "redirect_to", value: redirect)]
+        guard let url = components?.url else {
+            throw AuthError.network("Invalid password-reset URL.")
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 20
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(AppConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["email": trimmedEmail])
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw AuthError.network("No HTTP response.")
+        }
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        if http.statusCode >= 400 {
+            let message = json["error_description"] as? String
+                ?? json["msg"] as? String
+                ?? json["error"] as? String
+                ?? "Could not send reset email (HTTP \(http.statusCode))."
+            throw AuthError.server(message)
+        }
+        return "If an account exists for that email, we sent a Matterya password reset link. Open it on this device or any browser, then choose a new password."
+    }
+
+    /// Signed-in change password — verifies current password, then sets a strong new one.
+    func changePassword(currentPassword: String, newPassword: String) async throws {
+        if case .failure(let failure) = PasswordPolicy.validatePresent(currentPassword) {
+            throw AuthError.server(failure.errorDescription ?? "Enter your current password.")
+        }
+        if case .failure(let failure) = PasswordPolicy.validateStrong(newPassword) {
+            throw AuthError.server(failure.errorDescription ?? PasswordPolicy.requirementsHint)
+        }
+        guard currentPassword != newPassword else {
+            throw AuthError.server("New password must be different from your current password.")
+        }
+        guard let email = session?.user.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else {
+            throw AuthError.server("Your session has no email. Log out and log in again, then try changing your password.")
+        }
+
+        // Re-auth with current password so a stolen session alone cannot change it.
+        do {
+            let verifyPayload: [String: Any] = ["email": email, "password": currentPassword]
+            let verifyResponse = try await postAuth(
+                path: "token?grant_type=password",
+                body: verifyPayload
+            )
+            try applyAuthResponse(verifyResponse)
+        } catch AuthError.invalidCredentials {
+            throw AuthError.server("Current password is incorrect.")
+        }
+
+        let token = try await ensureValidToken()
+        _ = try await putAuthUser(body: ["password": newPassword], accessToken: token)
+    }
+
     func logout() {
         session = nil
         UserDefaults.standard.removeObject(forKey: sessionKey)
@@ -290,6 +360,39 @@ final class AuthService {
             // 401/403 on refresh/login = credentials/session rejected.
             if http.statusCode == 401 || http.statusCode == 403 {
                 throw AuthError.invalidCredentials
+            }
+            throw AuthError.server(message)
+        }
+        return json
+    }
+
+    /// PUT `/auth/v1/user` (change password / update profile attributes).
+    private func putAuthUser(body: [String: Any], accessToken: String) async throws -> [String: Any] {
+        guard let url = URL(string: "\(AppConfig.supabaseURL)/auth/v1/user") else {
+            throw AuthError.network("Invalid auth URL.")
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.timeoutInterval = 20
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(AppConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw AuthError.network("No HTTP response.")
+        }
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        if http.statusCode >= 400 {
+            let message = json["error_description"] as? String
+                ?? json["msg"] as? String
+                ?? json["message"] as? String
+                ?? json["error"] as? String
+                ?? "Could not update password (HTTP \(http.statusCode))."
+            if http.statusCode == 401 || http.statusCode == 403 {
+                throw AuthError.sessionExpired
             }
             throw AuthError.server(message)
         }

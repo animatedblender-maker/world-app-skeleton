@@ -12,8 +12,13 @@ struct SettingsView: View {
     @State private var deleteConfirmationText = ""
     @State private var accountActionBusy = false
     @State private var accountActionError: String?
+    @State private var currentPassword = ""
+    @State private var newPassword = ""
+    @State private var confirmPassword = ""
+    @State private var changePasswordInfo: String?
 
     private enum AccountSheet: String, Identifiable {
+        case changePassword
         case deactivate
         case delete
         var id: String { rawValue }
@@ -39,6 +44,20 @@ struct SettingsView: View {
                             .matteryaSettingsCard()
                     }
                     .buttonStyle(.plain)
+
+                    Button {
+                        currentPassword = ""
+                        newPassword = ""
+                        confirmPassword = ""
+                        accountActionError = nil
+                        changePasswordInfo = nil
+                        accountSheet = .changePassword
+                    } label: {
+                        settingsActionLabel("Change password", showsChevron: true)
+                            .matteryaSettingsCard()
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(accountActionBusy)
 
                     Button {
                         appState.logout()
@@ -190,6 +209,8 @@ struct SettingsView: View {
             NavigationStack {
                 Group {
                     switch sheet {
+                    case .changePassword:
+                        changePasswordSheet
                     case .deactivate:
                         deactivateSheet
                     case .delete:
@@ -201,6 +222,7 @@ struct SettingsView: View {
                         Button {
                             accountSheet = nil
                             accountActionError = nil
+                            changePasswordInfo = nil
                         } label: {
                             Text("Cancel")
                                 .font(.subheadline.weight(.semibold))
@@ -215,7 +237,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            .presentationDetents([.medium, .large])
+            .presentationDetents(sheet == .changePassword ? [.large] : [.medium, .large])
         }
     }
 
@@ -325,6 +347,65 @@ struct SettingsView: View {
         }
     }
 
+    private var changePasswordSheet: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Change password")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(Theme.ink)
+                Text("Enter your current password, then choose a new one.")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                PremiumTextField(title: "Current password", text: $currentPassword, isSecure: true)
+                PremiumTextField(title: "New password", text: $newPassword, isSecure: true)
+                PremiumTextField(title: "Confirm new password", text: $confirmPassword, isSecure: true)
+
+                Text(PasswordPolicy.requirementsHint)
+                    .font(.caption)
+                    .foregroundStyle(Theme.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let accountActionError {
+                    Text(accountActionError)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(Theme.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let changePasswordInfo {
+                    Text(changePasswordInfo)
+                        .font(.footnote)
+                        .foregroundStyle(Theme.accent)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Button {
+                    Task { await performChangePassword() }
+                } label: {
+                    HStack {
+                        Spacer()
+                        if accountActionBusy { ProgressView().tint(Theme.paper) }
+                        Text(accountActionBusy ? "Saving…" : "Save password")
+                            .fontWeight(.semibold)
+                        Spacer()
+                    }
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(accountActionBusy)
+
+                Text("Forgot your current password? Log out and use Forgot password on the login screen.")
+                    .font(.caption)
+                    .foregroundStyle(Theme.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(20)
+        }
+        .navigationTitle("Password")
+        .navigationBarTitleDisplayMode(.inline)
+        .background(Theme.canvas)
+    }
+
     private var deactivateSheet: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Deactivate account?")
@@ -399,6 +480,32 @@ struct SettingsView: View {
         .navigationTitle("Delete")
         .navigationBarTitleDisplayMode(.inline)
         .background(Theme.canvas)
+    }
+
+    private func performChangePassword() async {
+        accountActionError = nil
+        changePasswordInfo = nil
+        if newPassword != confirmPassword {
+            accountActionError = "New passwords do not match."
+            return
+        }
+        accountActionBusy = true
+        defer { accountActionBusy = false }
+        do {
+            try await AuthService.shared.changePassword(
+                currentPassword: currentPassword,
+                newPassword: newPassword
+            )
+            currentPassword = ""
+            newPassword = ""
+            confirmPassword = ""
+            changePasswordInfo = "Password updated."
+            appState.showToast("Password updated", style: .success, durationSeconds: 3)
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            accountSheet = nil
+        } catch {
+            accountActionError = error.localizedDescription
+        }
     }
 
     private func performDeactivate() async {
