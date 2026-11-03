@@ -76,14 +76,15 @@ struct YouTubeAppView: View {
     private static let hubsMoreRailRows = 1
     /// Thumb warm head per shelf — only the visible lead (big posters are costly).
     private static let hubsRailPrefetchCount = 2
-    /// Light shelf posters (~42% of screen, peek of next card).
+    /// Netflix-wide shelf posters (~62% of screen, peek of next card).
+    /// Size is visual only — warm/RAM stay ultra-light (prefetch 2, catalog cap 480).
     private static var hubsRailCardWidth: CGFloat {
         let screen = UIScreen.main.bounds.width
-        return min(180, max(156, (screen * 0.42).rounded()))
+        return min(280, max(220, (screen * 0.62).rounded()))
     }
     private static var hubsPeopleRailCardWidth: CGFloat {
         let screen = UIScreen.main.bounds.width
-        return min(196, max(168, (screen * 0.48).rounded()))
+        return min(300, max(240, (screen * 0.68).rounded()))
     }
     /// True after first useful paint — rebuildCachedHubsRails uses denser counts.
     @State private var hubsRailsDense = false
@@ -1353,7 +1354,7 @@ struct YouTubeAppView: View {
             ZStack(alignment: .bottomLeading) {
                 YouTubeVideoThumbnail(
                     post: post,
-                    maxPixelSize: 720,
+                    maxPixelSize: 900,
                     showsPlayIcon: false,
                     frameStyle: .card,
                     embedsFrame: false,
@@ -1361,8 +1362,8 @@ struct YouTubeAppView: View {
                     showsHubBadge: false
                 )
                 .frame(maxWidth: .infinity)
-                // Light billboard — ~720×240 decode budget, not cinema-tall.
-                .frame(height: min(240, max(200, UIScreen.main.bounds.width * 0.55)))
+                // Cinema billboard — warm band stays tiny; decode size is visual only.
+                .frame(height: min(320, max(260, UIScreen.main.bounds.width * 0.72)))
                 .clipped()
 
                 LinearGradient(

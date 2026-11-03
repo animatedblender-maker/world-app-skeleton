@@ -728,7 +728,7 @@ struct HubsLoopingHorizontalRail<Content: View>: View {
     var spacing: CGFloat = 14
     var horizontalPadding: CGFloat = Theme.pagePadding
     /// Total cell height (thumb + title + meta). Required when `posts.count >= 3`.
-    var rowHeight: CGFloat = HubsShelfThumbCard.rowHeight(width: 168, showsMetadata: true)
+    var rowHeight: CGFloat = HubsShelfThumbCard.rowHeight(width: 268, showsMetadata: true)
     /// Fired when the logical (mod N) index nears the end of the ranked set.
     var onNearEnd: (() -> Void)? = nil
     @ViewBuilder var content: (_ post: CountryPost, _ logicalIndex: Int) -> Content
@@ -985,7 +985,7 @@ private enum HubsRailContentWidthKey: PreferenceKey {
 /// Light posters only — never mint `/v1/poster` Frame0 from the shelf (that froze Hubs).
 struct HubsShelfThumbCard: View {
     let post: CountryPost
-    var width: CGFloat = 168
+    var width: CGFloat = 268
     /// When true, show a one-line meta row under the title (channel · views).
     var showsMetadata: Bool = false
     var titleFont: Font = .subheadline.weight(.semibold)
@@ -1068,7 +1068,7 @@ struct HubsShelfThumbCard: View {
 /// Vertical Matterya card for related / shelf thumbnails — not a side-by-side YT row.
 struct MatteryaHubVideoCard: View {
     let post: CountryPost
-    var width: CGFloat = 168
+    var width: CGFloat = 268
     let onTap: () -> Void
 
     var body: some View {
