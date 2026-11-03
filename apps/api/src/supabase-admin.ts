@@ -190,3 +190,15 @@ export async function setAuthUserEmailConfirmed(
     throw new Error(`SUPABASE_CONFIRM_EMAIL_FAILED: ${res.status} ${text.slice(0, 200)}`);
   }
 }
+
+/** Set a user's password via admin API (Matterya-owned reset — no Supabase recovery email). */
+export async function setAuthUserPassword(userId: string, password: string): Promise<void> {
+  const res = await adminFetch(`admin/users/${userId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ password }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`SUPABASE_SET_PASSWORD_FAILED: ${res.status} ${text.slice(0, 200)}`);
+  }
+}

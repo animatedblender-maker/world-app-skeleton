@@ -92,7 +92,7 @@ function confirmUrlForToken(token: string): string {
 
 /**
  * Issue a Matterya confirmation token and email from MAIL_FROM
- * (default: noreply@matterya.com via Resend).
+ * (default: no-reply@matterya.com via Resend).
  */
 async function issueConfirmation(userId: string, email: string): Promise<{
   token: string;
@@ -171,13 +171,13 @@ export async function signupWithMatteryaEmail(
     });
   }
 
-  // Matterya branded mail from noreply@matterya.com requires RESEND_API_KEY
+  // Matterya branded mail from no-reply@matterya.com requires RESEND_API_KEY
   // (+ domain verified on Resend). Without it we fail clearly — Supabase’s
-  // default from-address cannot be noreply@matterya.com.
+  // default from-address cannot be no-reply@matterya.com.
   if (!mailConfigured() && (process.env.ALLOW_SKIP_EMAIL ?? '').trim() !== 'true') {
     throw Object.assign(
       new Error(
-        'Cannot send from noreply@matterya.com yet: set RESEND_API_KEY on Render and verify matterya.com in Resend (DNS). MAIL_FROM should be: Matterya <noreply@matterya.com>'
+        'Cannot send from no-reply@matterya.com yet: set RESEND_API_KEY on Render and verify matterya.com in Resend (DNS). MAIL_FROM should be: Matterya <no-reply@matterya.com>'
       ),
       { code: 'MAIL_NOT_CONFIGURED', status: 503 }
     );
@@ -379,7 +379,7 @@ export async function resendConfirmation(
   if (!mailConfigured() && (process.env.ALLOW_SKIP_EMAIL ?? '').trim() !== 'true') {
     throw Object.assign(
       new Error(
-        'Cannot send from noreply@matterya.com yet: set RESEND_API_KEY on Render and verify matterya.com in Resend (DNS).'
+        'Cannot send from no-reply@matterya.com yet: set RESEND_API_KEY on Render and verify matterya.com in Resend (DNS).'
       ),
       { code: 'MAIL_NOT_CONFIGURED', status: 503 }
     );
@@ -430,10 +430,10 @@ export function authMailStatus() {
     mailFrom: mailFromAddress(),
     expiresHours: EXPIRES_HOURS,
     passwordPolicy: PASSWORD_REQUIREMENTS_HINT,
-    /** What is required for noreply@matterya.com */
+    /** What is required for no-reply@matterya.com */
     requiredForMatteryaFrom: {
       RESEND_API_KEY: 'Create at resend.com → API Keys (starts with re_)',
-      MAIL_FROM: 'Matterya <noreply@matterya.com>',
+      MAIL_FROM: 'Matterya <no-reply@matterya.com>',
       domain: 'Verify matterya.com in Resend → Domains (DNS SPF/DKIM)',
     },
   };

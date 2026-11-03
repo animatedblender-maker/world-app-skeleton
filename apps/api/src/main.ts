@@ -103,6 +103,10 @@ import {
   resendConfirmation,
   signupWithMatteryaEmail,
 } from './auth/signup-confirm.service.js';
+import {
+  requestPasswordReset,
+  resetPasswordWithToken,
+} from './auth/password-reset.service.js';
 import { getPipelineStatus, requestPipelineRun, runPipelineNow } from './content-pipeline/jobs.js';
 import {
   handlePipelineClearLog,
@@ -197,13 +201,13 @@ if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
   console.log('✅ SUPABASE_SERVICE_ROLE_KEY loaded: YES');
 }
 
-// Confirmation emails from noreply@matterya.com (Resend)
+// Product emails from Matterya <no-reply@matterya.com> (Resend) — never Supabase Auth mailer.
 const _resendKey = (
   process.env.RESEND_API_KEY ?? process.env.RESEND_KEY ?? process.env.RESEND_API ?? ''
 ).trim();
 if (!_resendKey) {
   console.warn(
-    '⚠️ RESEND_API_KEY missing — signup confirmation mail will fail. ' +
+    '⚠️ RESEND_API_KEY missing — signup / password-reset mail will fail. ' +
       'Render → matterya-api → Environment → RESEND_API_KEY=re_… → Manual Deploy'
   );
 } else {
@@ -212,7 +216,7 @@ if (!_resendKey) {
   );
 }
 console.log(
-  `📧 MAIL_FROM: ${(process.env.MAIL_FROM ?? '').trim() || 'Matterya <noreply@matterya.com> (default)'}`
+  `📧 MAIL_FROM: ${(process.env.MAIL_FROM ?? '').trim() || 'Matterya <no-reply@matterya.com> (default)'}`
 );
 
 // JWT verify: ./auth/request-user.ts (shared with /v1/anonymous)
@@ -783,6 +787,39 @@ app.post('/auth/resend-confirmation', async (req: Request, res: Response) => {
     return res.status(status).json({
       error: err?.code ?? 'resend_failed',
       message: err?.message ?? 'Could not resend confirmation.',
+    });
+  }
+});
+
+// Matterya-owned password reset (Resend from no-reply@matterya.com — not Supabase recover).
+app.post('/auth/forgot-password', async (req: Request, res: Response) => {
+  try {
+    const email = String(req.body?.email ?? '');
+    const result = await requestPasswordReset(email);
+    return res.json(result);
+  } catch (err: any) {
+    const status = Number(err?.status) || 500;
+    return res.status(status).json({
+      error: err?.code ?? 'forgot_password_failed',
+      message: err?.message ?? 'Could not send password reset email.',
+    });
+  }
+});
+
+app.post('/auth/reset-password', async (req: Request, res: Response) => {
+  try {
+    const token = String(req.body?.token ?? '');
+    const password = req.body?.password;
+    const result = await resetPasswordWithToken(token, password);
+    return res.json({
+      ...result,
+      message: 'Password updated. You can log in with your new password.',
+    });
+  } catch (err: any) {
+    const status = Number(err?.status) || 500;
+    return res.status(status).json({
+      error: err?.code ?? 'reset_password_failed',
+      message: err?.message ?? 'Could not reset password.',
     });
   }
 });

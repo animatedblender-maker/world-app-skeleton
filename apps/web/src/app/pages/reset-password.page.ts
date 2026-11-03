@@ -1,7 +1,7 @@
-import { Component } from '@angular/core';
+import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Router } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { AuthService } from '../core/services/auth.service';
 import {
   PASSWORD_REQUIREMENTS_HINT,
@@ -16,25 +16,32 @@ import {
   <div class="wrap">
     <div class="card">
       <div class="title">Reset your password</div>
-      <div class="sub">Enter a new password for your account.</div>
-
-      <div class="field">
-        <label>New password</label>
-        <input [(ngModel)]="password" type="password" minlength="8" placeholder="••••••••" />
-        <div class="policy">{{ passwordHint }}</div>
+      <div class="sub" *ngIf="token">Enter a new password for your Matterya account.</div>
+      <div class="sub" *ngIf="!token">
+        This page needs a valid reset link from your Matterya email (no-reply@matterya.com).
       </div>
 
-      <div class="field">
-        <label>Confirm new password</label>
-        <input [(ngModel)]="password2" type="password" minlength="8" placeholder="••••••••" />
-      </div>
+      <ng-container *ngIf="token">
+        <div class="field">
+          <label>New password</label>
+          <input [(ngModel)]="password" type="password" minlength="8" placeholder="••••••••" />
+          <div class="policy">{{ passwordHint }}</div>
+        </div>
 
-      <div class="row">
-        <button class="btn" (click)="save()" [disabled]="busy">
-          {{ busy ? 'Saving…' : 'Save' }}
-        </button>
-        <div class="msg" *ngIf="msg">{{ msg }}</div>
-      </div>
+        <div class="field">
+          <label>Confirm new password</label>
+          <input [(ngModel)]="password2" type="password" minlength="8" placeholder="••••••••" />
+        </div>
+
+        <div class="row">
+          <button class="btn" (click)="save()" [disabled]="busy">
+            {{ busy ? 'Saving…' : 'Save' }}
+          </button>
+          <div class="msg" *ngIf="msg">{{ msg }}</div>
+        </div>
+      </ng-container>
+
+      <div class="msg" *ngIf="!token && msg">{{ msg }}</div>
     </div>
   </div>
   `,
@@ -77,29 +84,42 @@ import {
     .policy{ font-size:12px; opacity:.7; line-height:1.4; }
   `],
 })
-export class ResetPasswordPageComponent {
+export class ResetPasswordPageComponent implements OnInit {
   password = '';
   password2 = '';
   busy = false;
   msg = '';
+  token = '';
   readonly passwordHint = PASSWORD_REQUIREMENTS_HINT;
 
-  constructor(private auth: AuthService, private router: Router) {}
+  constructor(
+    private auth: AuthService,
+    private router: Router,
+    private route: ActivatedRoute
+  ) {}
+
+  ngOnInit(): void {
+    this.token = String(this.route.snapshot.queryParamMap.get('token') ?? '').trim();
+    if (!this.token) {
+      this.msg =
+        'Open the Reset my password button in the email from no-reply@matterya.com, or request a new link from the login screen.';
+    }
+  }
 
   async save(): Promise<void> {
     this.msg = '';
     this.busy = true;
 
     try {
-      // Do not trim password contents — only validate strength + match.
       const p1 = this.password;
       const p2 = this.password2;
 
       const strength = validateStrongPassword(p1);
       if (!strength.ok) throw new Error(strength.message);
       if (p1 !== p2) throw new Error('Passwords do not match.');
+      if (!this.token) throw new Error('Missing password reset link.');
 
-      await this.auth.updatePassword(p1);
+      await this.auth.resetPasswordWithToken(this.token, p1);
       this.msg = 'Password updated. You can login now.';
       await this.router.navigateByUrl('/auth');
     } catch (e: any) {

@@ -29,7 +29,7 @@ export function mailConfigured(): boolean {
 export function mailFromAddress(): string {
   return (
     (process.env.MAIL_FROM ?? '').trim() ||
-    'Matterya <noreply@matterya.com>'
+    'Matterya <no-reply@matterya.com>'
   );
 }
 
@@ -174,6 +174,100 @@ export function buildConfirmEmailText(opts: {
     opts.confirmUrl,
     '',
     'If you did not sign up, ignore this email.',
+    '— Matterya',
+  ].join('\n');
+}
+
+/** Shared Matterya product email chrome (confirm + reset). */
+function matteryaMailShell(opts: {
+  title: string;
+  eyebrow: string;
+  bodyHtml: string;
+  ctaLabel: string;
+  ctaUrl: string;
+  footerNote: string;
+}): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(opts.title)}</title>
+</head>
+<body style="margin:0;padding:0;background:#f6f4ef;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1c1917;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f4ef;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" style="max-width:520px;background:#ffffff;border-radius:16px;border:1px solid #e7e5e4;overflow:hidden;">
+          <tr>
+            <td style="padding:28px 28px 8px;text-align:center;">
+              <div style="font-size:28px;font-weight:700;letter-spacing:-0.02em;">Matterya</div>
+              <div style="margin-top:6px;font-size:14px;color:#78716c;">${escapeHtml(opts.eyebrow)}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:12px 28px 8px;font-size:15px;line-height:1.55;color:#44403c;">
+              ${opts.bodyHtml}
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:20px 28px;">
+              <a href="${escapeHtml(opts.ctaUrl)}"
+                 style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;padding:14px 28px;border-radius:12px;">
+                ${escapeHtml(opts.ctaLabel)}
+              </a>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 28px 12px;font-size:13px;line-height:1.5;color:#78716c;">
+              Or paste this link into your browser:<br />
+              <a href="${escapeHtml(opts.ctaUrl)}" style="color:#0f766e;word-break:break-all;">${escapeHtml(opts.ctaUrl)}</a>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 28px 28px;font-size:12px;line-height:1.5;color:#a8a29e;">
+              ${escapeHtml(opts.footerNote)}
+            </td>
+          </tr>
+        </table>
+        <div style="margin-top:16px;font-size:11px;color:#a8a29e;">© Matterya · matterya.com · no-reply@matterya.com</div>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
+export function buildResetPasswordEmailHtml(opts: {
+  email: string;
+  resetUrl: string;
+  expiresHours: number;
+}): string {
+  const { email, resetUrl, expiresHours } = opts;
+  return matteryaMailShell({
+    title: 'Reset your Matterya password',
+    eyebrow: 'Password reset',
+    bodyHtml: `Hi — we received a request to reset the password for <strong>${escapeHtml(email)}</strong>.
+              Tap the button below to choose a new password.`,
+    ctaLabel: 'Reset my password',
+    ctaUrl: resetUrl,
+    footerNote: `This link expires in ${expiresHours} hours. If you did not ask to reset your password, you can ignore this email.`,
+  });
+}
+
+export function buildResetPasswordEmailText(opts: {
+  email: string;
+  resetUrl: string;
+  expiresHours: number;
+}): string {
+  return [
+    'Reset your Matterya password',
+    '',
+    `We received a request to reset the password for ${opts.email}.`,
+    `Open this link to choose a new password (expires in ${opts.expiresHours} hours):`,
+    opts.resetUrl,
+    '',
+    'If you did not ask to reset your password, ignore this email.',
     '— Matterya',
   ].join('\n');
 }

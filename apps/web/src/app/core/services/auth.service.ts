@@ -94,53 +94,46 @@ export class AuthService {
     return data.session?.access_token ?? null;
   }
 
-  async resetPassword(email: string): Promise<void> {
-    const redirectTo = `${window.location.origin}/reset-password`;
-
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo,
+  /**
+   * Matterya-owned forgot password — API emails a branded link from
+   * no-reply@matterya.com (never Supabase Auth recovery mail).
+   */
+  async resetPassword(email: string): Promise<string> {
+    const emailTrim = (email ?? '').trim();
+    if (!emailTrim) throw new Error('Email is required. Enter your email address.');
+    const res = await fetch(`${this.apiBase}/auth/forgot-password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ email: emailTrim }),
     });
-
-    if (error) throw error;
-  }
-
-  async prepareResetSession(): Promise<{ ok: boolean; reason?: string }> {
-    try {
-      const current = await supabase.auth.getSession();
-      if (current.data.session) return { ok: true };
-
-      const url = window.location.href;
-      const hasCode = /[?&]code=/.test(url);
-
-      if (hasCode) {
-        const { data, error } = await supabase.auth.exchangeCodeForSession(url);
-        if (error) {
-          const msg = (error as any)?.message ?? String(error);
-          return { ok: false, reason: msg };
-        }
-        if (data.session) return { ok: true };
-      }
-
-      return { ok: false, reason: 'Reset session not ready.' };
-    } catch (e: any) {
-      const msg = e?.message ?? String(e);
-      return { ok: false, reason: msg };
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(json?.message || 'Could not send password reset email.');
     }
+    return (
+      json?.message ||
+      'If an account exists for that email, we sent a Matterya password reset link from no-reply@matterya.com.'
+    );
   }
 
-  async updatePassword(newPassword: string): Promise<void> {
-    const { error } = await supabase.auth.updateUser({ password: newPassword });
+  /**
+   * Complete a Matterya reset link (`/reset-password?token=…`).
+   * Sets the password via API admin — no Supabase recovery session.
+   */
+  async resetPasswordWithToken(token: string, newPassword: string): Promise<void> {
+    const strength = validateStrongPassword(newPassword);
+    if (!strength.ok) throw new Error(strength.message);
+    const clean = (token ?? '').trim();
+    if (!clean) throw new Error('Missing password reset link. Open the link from your email again.');
 
-    if (error) {
-      const msg = (error as any)?.message ?? String(error);
-
-      if (/issued in the future|clock|skew/i.test(msg)) {
-        throw new Error(
-          'Your device clock looks incorrect. Please enable automatic time + time zone in Windows, sync the clock, then reopen the reset link.'
-        );
-      }
-
-      throw error;
+    const res = await fetch(`${this.apiBase}/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ token: clean, password: newPassword }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(json?.message || 'Could not reset password.');
     }
   }
 }

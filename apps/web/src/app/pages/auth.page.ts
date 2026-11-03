@@ -346,8 +346,10 @@ export class AuthPageComponent {
         return;
       }
 
-      await this.auth.resetPassword(email);
-      this.resetMsg = 'Reset email sent. Check your inbox.';
+      const message = await this.auth.resetPassword(email);
+      this.resetMsg =
+        message ||
+        'If an account exists for that email, we sent a Matterya reset link from no-reply@matterya.com.';
     } catch (e: any) {
       this.resetMsg = this.normalizeError(e);
     } finally {

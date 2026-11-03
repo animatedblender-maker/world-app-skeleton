@@ -229,19 +229,15 @@ final class AuthService {
             ?? "If that email needs confirmation, we sent a new Matterya link."
     }
 
-    /// Forgot password — email a Matterya reset link (opens web `/reset-password`).
-    /// Same Supabase recover path as web; always returns a neutral success copy.
+    /// Forgot password — Matterya API emails a branded link from no-reply@matterya.com
+    /// (opens web `/reset-password?token=…`). Never uses Supabase Auth recovery mail.
     @discardableResult
     func requestPasswordReset(email: String) async throws -> String {
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedEmail.isEmpty else {
             throw AuthError.server("Email is required. Enter your email address.")
         }
-        let redirect = "\(AppConfig.webBaseURL)/reset-password"
-        // GoTrue recover: POST /auth/v1/recover?redirect_to=…
-        var components = URLComponents(string: "\(AppConfig.supabaseURL)/auth/v1/recover")
-        components?.queryItems = [URLQueryItem(name: "redirect_to", value: redirect)]
-        guard let url = components?.url else {
+        guard let url = URL(string: "\(AppConfig.apiBaseURL)/auth/forgot-password") else {
             throw AuthError.network("Invalid password-reset URL.")
         }
         var request = URLRequest(url: url)
@@ -249,7 +245,6 @@ final class AuthService {
         request.timeoutInterval = 20
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(AppConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["email": trimmedEmail])
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -258,13 +253,13 @@ final class AuthService {
         }
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
         if http.statusCode >= 400 {
-            let message = json["error_description"] as? String
-                ?? json["msg"] as? String
+            let message = json["message"] as? String
                 ?? json["error"] as? String
                 ?? "Could not send reset email (HTTP \(http.statusCode))."
             throw AuthError.server(message)
         }
-        return "If an account exists for that email, we sent a Matterya password reset link. Open it on this device or any browser, then choose a new password."
+        return json["message"] as? String
+            ?? "If an account exists for that email, we sent a Matterya password reset link from no-reply@matterya.com. Open it to choose a new password."
     }
 
     /// Signed-in change password — verifies current password, then sets a strong new one.
