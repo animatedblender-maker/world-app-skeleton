@@ -26,7 +26,8 @@ final class AnonymousStore {
     private let feedCacheKey = "matterya.anonymous.feed.v6"
     private let feedCacheSavedAtKey = "matterya.anonymous.feed.v6.savedAt"
     /// Instant paint from disk, then reshuffle when older than this.
-    private let feedCacheMaxAge: TimeInterval = 60
+    /// Keep painted For you warm across quick hops — 60s forced constant network weight.
+    private let feedCacheMaxAge: TimeInterval = 20 * 60
     private let wildeSeenKey = "matterya.anonymous.wildeSeen.v1"
     private let welcomeLetterSeenKey = "matterya.anonymous.welcomeLetterSeen.v1"
     private let spacesOnboardingSeenKey = "matterya.anonymous.spacesOnboardingSeen.v1"
@@ -106,11 +107,11 @@ final class AnonymousStore {
     /// Soft re-entry — avoid full session await on every Masquerade tab hop.
     private var lastBootstrapAt: Date = .distantPast
     /// Session soft-skip window (feed reshuffle is separate — see `feedReshuffleInterval`).
-    private let softBootstrapInterval: TimeInterval = 90
+    private let softBootstrapInterval: TimeInterval = 180
     /// Last time For you was replaced with a newly ranked first page.
     private var lastFeedReplaceAt: Date = .distantPast
     /// Minimum gap between automatic open-reshuffles (pull-to-refresh always reshuffles).
-    private let feedReshuffleInterval: TimeInterval = 12
+    private let feedReshuffleInterval: TimeInterval = 45
 
     /// Stable Masquerade handle for Me — never swap for a regenerated suggestion.
     var displayUsername: String {

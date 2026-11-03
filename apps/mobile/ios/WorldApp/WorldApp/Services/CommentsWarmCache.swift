@@ -24,7 +24,7 @@ final class CommentsWarmCache {
     /// Fire-and-forget warm (tap Chat, idle on active Spark, feed card appear).
     /// Uses a small first page so warm never blocks for hundreds of R2 comments.
     /// Literal default avoids Swift 6 nonisolated default-arg isolation on PostsService.
-    func warm(_ postID: String, limit: Int = 48) {
+    func warm(_ postID: String, limit: Int = 24) {
         let key = normalized(postID)
         guard !key.isEmpty else { return }
         if let hit = cache[key], !hit.isEmpty { return }

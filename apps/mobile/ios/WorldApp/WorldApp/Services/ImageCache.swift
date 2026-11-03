@@ -70,12 +70,12 @@ final class ImageCache: @unchecked Sendable {
     func prefetch(_ urls: [URL], maxPixelSize: CGFloat = 420, aggressive: Bool = false) {
         let fling = ScrollBudget.isFlinging
         // Fast fling: starve the network so decode/download don't hitch the main thread.
-        // Settled: tiny ahead window — Balanced light whole-app weight.
+        // Settled: ultra-light ahead — whole-app tab/mini weight first.
         let cap: Int
         if fling {
-            cap = 2
+            cap = 1
         } else {
-            cap = aggressive ? 5 : 4
+            cap = aggressive ? 3 : 2
         }
         let unique = Array(Set(urls.map(\.absoluteString))).prefix(cap).compactMap(URL.init(string:))
         let priority: TaskPriority = fling
@@ -127,8 +127,8 @@ final class ImageCache: @unchecked Sendable {
         let fling = ScrollBudget.isFlinging
         // Cap is independent of how many poster URLs already resolve — when every
         // row needs Frame0, urls.count==0 used to zero the cap and leave black tiles.
-        // Settled Hubs open/rails need a denser band so R2 long-form never stays black.
-        let cap = fling ? 2 : 8
+        // Ultra-light: visible lead only (butterWarm already prefixes a tiny band).
+        let cap = fling ? 1 : 4
         let unique = Array(Set(urls.map(\.absoluteString))).prefix(min(cap, max(urls.count, 0)))
             .compactMap(URL.init(string:))
         let priority: TaskPriority = fling ? .background : .utility

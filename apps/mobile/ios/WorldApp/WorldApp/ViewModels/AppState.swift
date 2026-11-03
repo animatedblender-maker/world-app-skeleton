@@ -376,11 +376,14 @@ final class AppState {
                 #endif
                 requestFreshFeedSession(reason: "away_5m")
             } else {
-                // Soft return: drain fling-queued load-more + top up pool (no full reshape).
+                // Soft return: drain fling-queued load-more only.
+                // Skip ensureBufferedPool on quick hops — that network top-up made tab return heavy.
                 ScrollBudget.noteSettled()
                 HomeFeedStore.shared.drainQueuedLoadMoreIfNeeded()
-                Task(priority: .utility) {
-                    await HomeFeedStore.shared.ensureBufferedPool()
+                if let left = feedLeftAt, Date().timeIntervalSince(left) >= 45 {
+                    Task(priority: .utility) {
+                        await HomeFeedStore.shared.ensureBufferedPool()
+                    }
                 }
             }
             feedLeftAt = nil
@@ -2094,7 +2097,8 @@ final class AppState {
         // After paint: warm next 1–2 + expand seed queue (GraphQL only if strip was thin).
         let preferred = seedPosts
         Task(priority: .userInitiated) { @MainActor in
-            let seedLimit = max(20, SparkWarmPool.MediaBudget.playerAheadSparks + 12)
+            // Ultra light: paint from the strip (~12); expand after first Sparks frame.
+            let seedLimit = max(12, SparkWarmPool.MediaBudget.playerAheadSparks + 8)
             let expanded = Self.mergeSparksOpenSeeds(
                 starting: start,
                 preferred: preferred,
@@ -2228,7 +2232,7 @@ final class AppState {
             return
         }
         // Warm before present so the first swipes never cold-start.
-        let head = Array(reels.prefix(max(24, SparkWarmPool.MediaBudget.playerAheadSparks + 8)))
+        let head = Array(reels.prefix(max(12, SparkWarmPool.MediaBudget.playerAheadSparks + 6)))
         SparkWarmPool.shared.preparePlayerWindow(posts: head, around: 0)
         openReelsViewer(startingPost: first, seedPosts: reels)
     }
@@ -2242,7 +2246,7 @@ final class AppState {
                 openPlay()
                 return
             }
-            let head = Array(reels.prefix(max(20, SparkWarmPool.MediaBudget.playerAheadSparks + 8)))
+            let head = Array(reels.prefix(max(12, SparkWarmPool.MediaBudget.playerAheadSparks + 6)))
             SparkWarmPool.shared.preparePlayerWindow(posts: head, around: 0)
             openReelsViewer(startingPost: first, seedPosts: reels)
         }
@@ -2291,7 +2295,15 @@ final class AppState {
     }
 
     func presentCreateSheet(_ sheet: CreateContentSheet) async {
-        guard let home = await resolveHomeCountry() else {
+        // Instant paint: reuse cached composer country when ISO still matches profile.
+        let home: Country
+        if let cached = composerCountry,
+           let iso = homeCountryISO,
+           cached.iso.uppercased() == iso {
+            home = cached
+        } else if let resolved = await resolveHomeCountry() {
+            home = resolved
+        } else {
             showToast("Set your home country in profile before posting.", style: .error)
             return
         }

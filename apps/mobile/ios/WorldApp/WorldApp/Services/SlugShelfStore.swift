@@ -11,12 +11,12 @@ import Foundation
 final class SlugShelfStore {
     static let shared = SlugShelfStore()
 
-    /// Max posts retained per slug (or for_you) — covers ~1.9k unique LongForm hubs.
-    static let maxPerShelf = 2200
+    /// Max posts retained per slug (or for_you) — soft ceiling for whole-app RAM.
+    static let maxPerShelf = 480
     /// Max distinct shelves kept in RAM (for_you + vibe slugs).
-    static let maxShelves = 16
-    /// Page size — larger pages fill toward full inventory with fewer round-trips.
-    static let pageSize = 40
+    static let maxShelves = 8
+    /// Page size — first paint stays light; grow via hasMore.
+    static let pageSize = 20
 
     /// Synthetic key for the mixed For you stream.
     static let forYouKey = "for_you"

@@ -303,7 +303,7 @@ struct FeedView: View {
                     ForEach(newOnPlay) { post in
                         HubsShelfThumbCard(
                             post: post,
-                            width: 268,
+                            width: 168,
                             extractFrameIfNeeded: false
                         ) {
                             appState.openPost(post)
@@ -340,7 +340,7 @@ struct FeedView: View {
                     ForEach(continueWatching) { post in
                         HubsShelfThumbCard(
                             post: post,
-                            width: 268,
+                            width: 168,
                             extractFrameIfNeeded: false
                         ) {
                             appState.openPost(post)

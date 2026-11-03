@@ -22,7 +22,7 @@ final class AnonymousCommentsWarmCache {
         return hit
     }
 
-    func warm(_ postID: String, limit: Int = 500) {
+    func warm(_ postID: String, limit: Int = 48) {
         let key = normalized(postID)
         guard !key.isEmpty else { return }
         if let hit = cache[key], !hit.isEmpty { return }
@@ -42,14 +42,14 @@ final class AnonymousCommentsWarmCache {
         inflight[key] = task
     }
 
-    /// Prefetch several visible feed posts so open feels instant.
-    func warmMany(_ postIDs: [String], limitEach: Int = 500) {
-        for id in postIDs.prefix(12) {
+    /// Prefetch a few visible feed posts so open feels instant (ultra-light band).
+    func warmMany(_ postIDs: [String], limitEach: Int = 48) {
+        for id in postIDs.prefix(4) {
             warm(id, limit: limitEach)
         }
     }
 
-    func load(_ postID: String, limit: Int = 500) async -> [AnonymousComment] {
+    func load(_ postID: String, limit: Int = 48) async -> [AnonymousComment] {
         let key = normalized(postID)
         guard !key.isEmpty else { return [] }
         if let hit = cache[key], !hit.isEmpty { return hit }

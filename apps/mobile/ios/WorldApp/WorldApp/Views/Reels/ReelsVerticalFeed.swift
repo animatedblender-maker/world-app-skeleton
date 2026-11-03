@@ -1467,8 +1467,9 @@ private struct SparksTopChrome: View {
 
 /// Nonisolated queue budgets (default args cannot reference MainActor-isolated statics).
 private enum SparksQueueBudget {
-    static let minQueueAhead = 28
-    static let bulkBatchSize = 80
+    /// Ultra light — keep Sparks endless without a fat bulk storm under mini/tabs.
+    static let minQueueAhead = 12
+    static let bulkBatchSize = 28
 }
 
 
@@ -1651,7 +1652,7 @@ struct ReelsScrollViewer: View {
                 }
                 seedFromWarmCatalogIfNeeded()
                 SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
-                await ensureBulkQueueAhead(target: max(24, SparksQueueBudget.minQueueAhead))
+                await ensureBulkQueueAhead(target: max(12, SparksQueueBudget.minQueueAhead))
                 SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
                 await expandFeed()
                 await ensureBulkQueueAhead(target: SparksQueueBudget.minQueueAhead)

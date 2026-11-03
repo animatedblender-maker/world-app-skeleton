@@ -209,18 +209,16 @@ struct MainTabView: View {
             let leftHubs = oldTab == .hubs
             let openedHubs = tab == .hubs
             let openedMasquerade = tab == .anonymous
+            // One silence pass on the hop frame — second utility pass was doubling tab weight.
             if leftFeed || tab != .feed || openedMasquerade {
                 MediaPlaybackCoordinator.shared.silenceFeedSparksAudioPreservingHubsMini()
             }
-            Task(priority: .utility) { @MainActor in
-                if leftFeed || tab != .feed || openedMasquerade {
-                    // Second pass after close/cover teardown — catch late warm-pool claims.
-                    MediaPlaybackCoordinator.shared.silenceFeedSparksAudioPreservingHubsMini()
-                }
+            // Tab morph first; bookkeeping off the critical path.
+            appState.noteSelectedTabChanged(from: oldTab, to: tab)
+            Task(priority: .background) { @MainActor in
                 if leftHubs { EngagementTracker.shared.hubsLeft() }
                 if openedHubs { EngagementTracker.shared.hubsOpened() }
                 EngagementTracker.shared.screenOpened(tab.rawValue)
-                appState.noteSelectedTabChanged(from: oldTab, to: tab)
             }
         }
         .onDisappear {

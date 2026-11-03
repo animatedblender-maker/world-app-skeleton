@@ -59,11 +59,10 @@ struct YouTubeAppView: View {
     @State private var lastHubsSoftRefreshAt: Date = .distantPast
 
     /// First-hop paint stays light; denser Netflix fill lands after the first frame.
-    private static let hubsFirstWindow = 36
-    private static let hubsGrowBy = 24
-    /// Soft memory ceiling for the ranked LongForm pool (~1.9k unique Hubs videos).
-    /// Was 700 — felt like “only a handful”; open toward full inventory.
-    private static let hubsCatalogMemoryCap = 2200
+    private static let hubsFirstWindow = 20
+    private static let hubsGrowBy = 12
+    /// Soft ranked-pool ceiling — 2200 froze whole-app weight; keep the head lean.
+    private static let hubsCatalogMemoryCap = 480
     /// Rank sample on the navigate hop — larger samples freeze first open.
     private static let hubsFirstPaintRankCap = 96
     /// Unique cards per rail. UIKit loops 2× this set — keep lean for scroll weight.
@@ -71,20 +70,20 @@ struct YouTubeAppView: View {
     /// First-hop vibe rows (expanded after paint).
     private static let hubsVibeRailCountFirstPaint = 2
     /// Full Netflix vibe rows after deferred densify.
-    private static let hubsVibeRailCount = 3
+    private static let hubsVibeRailCount = 2
     /// Extra “More to watch” chunk rows under the vibe shelves.
     private static let hubsMoreRailRowsFirstPaint = 1
-    private static let hubsMoreRailRows = 2
+    private static let hubsMoreRailRows = 1
     /// Thumb warm head per shelf — only the visible lead (big posters are costly).
-    private static let hubsRailPrefetchCount = 3
-    /// Netflix-wide shelf posters (~62% of screen, peek of next card).
+    private static let hubsRailPrefetchCount = 2
+    /// Light shelf posters (~42% of screen, peek of next card).
     private static var hubsRailCardWidth: CGFloat {
         let screen = UIScreen.main.bounds.width
-        return min(280, max(220, (screen * 0.62).rounded()))
+        return min(180, max(156, (screen * 0.42).rounded()))
     }
     private static var hubsPeopleRailCardWidth: CGFloat {
         let screen = UIScreen.main.bounds.width
-        return min(300, max(240, (screen * 0.68).rounded()))
+        return min(196, max(168, (screen * 0.48).rounded()))
     }
     /// True after first useful paint — rebuildCachedHubsRails uses denser counts.
     @State private var hubsRailsDense = false
@@ -217,7 +216,7 @@ struct YouTubeAppView: View {
         guard !hubsRailsDense else { return }
         Task(priority: .utility) { @MainActor in
             // Wait until the hop is idle — early densify + poster storm froze Hubs.
-            try? await Task.sleep(nanoseconds: 2_800_000_000)
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
             guard appState.selectedTab == .hubs else { return }
             if ScrollBudget.isFlinging {
                 try? await Task.sleep(nanoseconds: 1_200_000_000)
@@ -745,7 +744,7 @@ struct YouTubeAppView: View {
             if hubsForYouPool.count < Self.hubsFirstWindow || stableDiscoverVideos.isEmpty {
                 rebuildStableHomeLists(shuffle: false, remountList: false)
             }
-            butterWarmHubCatalog(Array(stableDiscoverVideos.prefix(4)))
+            butterWarmHubCatalog(Array(stableDiscoverVideos.prefix(2)))
             lastHubsSoftRefreshAt = Date()
             PerformanceTelemetry.milestone(
                 "hubs_interactive",
@@ -783,7 +782,7 @@ struct YouTubeAppView: View {
             guard allVideos.isEmpty else { return }
             Task { @MainActor in
                 await loadVideos(forceRefresh: false, mode: .fast)
-                butterWarmHubCatalog(Array(stableDiscoverVideos.prefix(4)))
+                butterWarmHubCatalog(Array(stableDiscoverVideos.prefix(2)))
             }
         }
         .onChange(of: appState.hubsFreshSessionToken) { _, token in
@@ -1354,7 +1353,7 @@ struct YouTubeAppView: View {
             ZStack(alignment: .bottomLeading) {
                 YouTubeVideoThumbnail(
                     post: post,
-                    maxPixelSize: 900,
+                    maxPixelSize: 720,
                     showsPlayIcon: false,
                     frameStyle: .card,
                     embedsFrame: false,
@@ -1362,8 +1361,8 @@ struct YouTubeAppView: View {
                     showsHubBadge: false
                 )
                 .frame(maxWidth: .infinity)
-                // Cinema billboard — ~16:9 of the content column, Netflix-tall.
-                .frame(height: min(320, max(260, UIScreen.main.bounds.width * 0.72)))
+                // Light billboard — ~720×240 decode budget, not cinema-tall.
+                .frame(height: min(240, max(200, UIScreen.main.bounds.width * 0.55)))
                 .clipped()
 
                 LinearGradient(
@@ -1901,7 +1900,7 @@ struct YouTubeAppView: View {
         Task(priority: .utility) {
             try? await Task.sleep(nanoseconds: 400_000_000)
             guard appState.selectedTab == .hubs else { return }
-            butterWarmHubCatalog(Array(stableDiscoverVideos.prefix(4)))
+            butterWarmHubCatalog(Array(stableDiscoverVideos.prefix(2)))
         }
         #if DEBUG
         print("[Hubs] instant paint count=\(capped.count) scanned=\(head.count)/\(source.count) session=\(PostsService.shared.hubsSessionIsWarm())")
@@ -2376,9 +2375,9 @@ struct YouTubeAppView: View {
         if !stableDiscoverVideos.isEmpty {
             head = stableDiscoverVideos
         } else {
-            head = Array(videos.prefix(12))
+            head = Array(videos.prefix(6))
         }
-        let warmBand = Array(head.prefix(4))
+        let warmBand = Array(head.prefix(2))
         ImageCache.shared.prefetchHubsListThumbnails(warmBand, maxPixelSize: thumbPx)
         let needFrame0 = warmBand
             .filter { MediaURLResolver.r2LongformYouTubePosterURL(for: $0) == nil }
