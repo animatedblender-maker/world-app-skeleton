@@ -1449,7 +1449,7 @@ final class AppState {
         }
     }
 
-    /// Sliding 5-ahead warm for Hubs continuous / related taps (For you shelf + session catalog).
+    /// Focus + 1-ahead warm for Hubs continuous (slug For you shelf + session catalog).
     func warmHubsPlaybackWindow(around post: CountryPost) {
         let presentation = PlayPlatformBridge.hubWatchPresentation(for: post)
         func hubsWarmVideos(_ posts: [CountryPost]) -> [CountryPost] {
@@ -2096,8 +2096,8 @@ final class AppState {
         // After paint: warm next 1–2 + expand seed queue (GraphQL only if strip was thin).
         let preferred = seedPosts
         Task(priority: .userInitiated) { @MainActor in
-            // Ultra light: paint from the strip (~12); expand after first Sparks frame.
-            let seedLimit = max(12, SparkWarmPool.MediaBudget.playerAheadSparks + 8)
+            // Lighter than light: paint from the strip (~6); expand after first Sparks frame.
+            let seedLimit = max(6, SparkWarmPool.MediaBudget.playerAheadSparks + 3)
             let expanded = Self.mergeSparksOpenSeeds(
                 starting: start,
                 preferred: preferred,
@@ -2230,9 +2230,9 @@ final class AppState {
             openPlay()
             return
         }
-        // Warm before present so the first swipes never cold-start.
-        let head = Array(reels.prefix(max(12, SparkWarmPool.MediaBudget.playerAheadSparks + 6)))
-        SparkWarmPool.shared.preparePlayerWindow(posts: head, around: 0)
+        // Warm focus + 1 ahead before present — first swipe stays instant, rest stay light.
+        let head = Array(reels.prefix(max(4, SparkWarmPool.MediaBudget.playerAheadSparks + 2)))
+        SparkWarmPool.shared.preparePlayerWindow(posts: head, around: 0, policy: .landing)
         openReelsViewer(startingPost: first, seedPosts: reels)
     }
 
@@ -2245,8 +2245,8 @@ final class AppState {
                 openPlay()
                 return
             }
-            let head = Array(reels.prefix(max(12, SparkWarmPool.MediaBudget.playerAheadSparks + 6)))
-            SparkWarmPool.shared.preparePlayerWindow(posts: head, around: 0)
+            let head = Array(reels.prefix(max(4, SparkWarmPool.MediaBudget.playerAheadSparks + 2)))
+            SparkWarmPool.shared.preparePlayerWindow(posts: head, around: 0, policy: .landing)
             openReelsViewer(startingPost: first, seedPosts: reels)
         }
     }

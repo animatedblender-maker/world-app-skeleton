@@ -12,11 +12,11 @@ final class SlugShelfStore {
     static let shared = SlugShelfStore()
 
     /// Max posts retained per slug (or for_you) — soft ceiling for whole-app RAM.
-    static let maxPerShelf = 480
+    static let maxPerShelf = 240
     /// Max distinct shelves kept in RAM (for_you + vibe slugs).
-    static let maxShelves = 8
-    /// Page size — first paint stays light; grow via hasMore.
-    static let pageSize = 20
+    static let maxShelves = 5
+    /// Page size — first paint stays light; grow via hasMore (slug-first).
+    static let pageSize = 12
 
     /// Synthetic key for the mixed For you stream.
     static let forYouKey = "for_you"
@@ -92,12 +92,12 @@ final class SlugShelfStore {
         let neighbor = Self.neighbor(of: parent)
         Task(priority: .utility) {
             let page = await loadShelf(neighbor, force: false)
-            let band = Array(page.items.prefix(SparkWarmPool.MediaBudget.thumbAhead))
+            let band = Array(page.items.prefix(min(2, SparkWarmPool.MediaBudget.thumbAhead)))
             ImageCache.shared.prefetchHubsListThumbnails(
                 band,
                 maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
             )
-            await Frame0PosterResolver.shared.prefetch(postIDs: band.map(\.id))
+            await Frame0PosterResolver.shared.prefetch(postIDs: Array(band.prefix(1).map(\.id)))
         }
     }
 
@@ -198,9 +198,9 @@ final class SlugShelfStore {
         shelves[key] = state
         pruneShelves(keeping: key)
 
-        // Warm first-screen thumbs only (AV warm is Watch/related).
+        // Ultra-light slug first paint — visible lead only (was 12 thumbs / Frame0×6).
         let warmBand = Array(
-            (append ? remote.items : state.posts).prefix(12)
+            (append ? remote.items : state.posts).prefix(SparkWarmPool.MediaBudget.thumbAhead)
         )
         ImageCache.shared.prefetchHubsListThumbnails(
             warmBand,
@@ -208,7 +208,7 @@ final class SlugShelfStore {
         )
         let needFrame0 = warmBand
             .filter { MediaURLResolver.r2LongformYouTubePosterURL(for: $0) == nil }
-            .prefix(6)
+            .prefix(2)
             .map(\.id)
         if !needFrame0.isEmpty {
             Task {
@@ -338,16 +338,15 @@ final class SlugShelfStore {
             #if DEBUG
             print("[SlugShelf] \(url.path) items=\(posts.count) next=\(next != nil)")
             #endif
-            // Media session 09: shelf list = posters only. Prefer YouTube hqdefault warm;
-            // Frame0 batch 404s on missing frame0_*.webp and starved first paint.
-            let head = Array(posts.prefix(12))
+            // Media session 09: shelf list = posters only. Prefer YouTube hqdefault warm.
+            let head = Array(posts.prefix(SparkWarmPool.MediaBudget.thumbAhead))
             ImageCache.shared.prefetchHubsListThumbnails(
                 head,
                 maxPixelSize: YouTubeMediaLayout.hubsListThumbMaxPixel
             )
             let needFrame0 = head
                 .filter { MediaURLResolver.r2LongformYouTubePosterURL(for: $0) == nil }
-                .prefix(6)
+                .prefix(2)
                 .map(\.id)
             if !needFrame0.isEmpty {
                 Task {

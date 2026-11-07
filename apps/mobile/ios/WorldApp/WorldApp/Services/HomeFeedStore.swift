@@ -97,18 +97,17 @@ final class HomeFeedStore {
     private static let officialWelcomeSeenKey = "matterya.home.officialWelcomeSeen.v1"
     private var cachedOfficialWelcome: CountryPost?
 
-    /// Network page size — ultra-light so ranking/merge stays off the scroll path.
-    private let pageSize = 10
-    private let windowPageSize = 6
-    /// First paint window — ~1 screen; grow on scroll (was 10 — decode storm).
-    private let firstWindow = 6
+    /// Network page size — lighter than light so ranking/merge stays off the scroll path.
+    private let pageSize = 8
+    private let windowPageSize = 5
+    /// First paint window — ~1 screen; grow on scroll.
+    private let firstWindow = 5
     /// Prefetch later so mid-scroll does not kick network storms.
-    private let prefetchRatio = 0.55
-    /// Request next batch when ~5 cards remain (settle lag + fling headroom).
-    private let nearTailRemaining = 5
+    private let prefetchRatio = 0.60
+    /// Request next batch when ~4 cards remain (settle lag + fling headroom).
+    private let nearTailRemaining = 4
     /// Keep at least this many posts buffered in `posts` (beyond the visible window).
-    /// Was 48 — endless top-up under scroll made Feed feel heavier than the rest of the app.
-    private let minBufferedPool = 24
+    private let minBufferedPool = 16
 
     private init() {
         scrollSettleObserver = NotificationCenter.default.addObserver(

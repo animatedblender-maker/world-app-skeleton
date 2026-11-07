@@ -1,12 +1,11 @@
 import AVFoundation
 import Foundation
 
-/// Keeps **nearby Sparks / feed / hubs videos** fully buffered so play is instant on focus.
+/// Keeps **nearby Sparks / feed / hubs videos** buffered so play is instant on focus.
 ///
-/// ## Sliding window (Sparks, feed shares, hubs)
-/// While watching index `i`, keep players for `[i-1 … i+N]` parked/claimed
-/// (`N` = MediaBudget.playerAhead — 4…10 by device RAM).
-/// On advance: overlap kept, only the new edge warmed, trailing edge evicted.
+/// ## Sliding window (lighter than light)
+/// Focus + **1 ahead** only. No behind buffer. One concurrent warm.
+/// On advance: overlap kept, new edge warmed, trailing edge evicted.
 ///
 /// Same policy for home-feed shared Sparks/Hubs cards and Hubs For you / related.
 ///
@@ -25,21 +24,20 @@ final class SparkWarmPool {
         static var isConstrained: Bool { physicalGB < 3.6 }
         static var isMid: Bool { physicalGB < 5.6 }
 
-        /// Ultra light whole-app — Sparks path-local: ahead 2 on capable devices so swipe stays instant.
+        /// Lighter than light — focus + 1 ahead on every surface (Feed / Sparks / Hubs).
         static var playerAhead: Int { playerAheadSparks }
         static var playerAheadFeed: Int { 1 }
-        static var playerAheadSparks: Int { isConstrained ? 1 : 2 }
-        /// YouTube keeps ~1–2 related long-forms buffered while watching.
-        static var playerAheadHubs: Int { isConstrained ? 1 : 2 }
-        static var thumbAhead: Int { isConstrained ? 2 : 3 }
+        static var playerAheadSparks: Int { 1 }
+        static var playerAheadHubs: Int { 1 }
+        static var thumbAhead: Int { 2 }
         static var deepPrerollFeed: Int { 1 }
-        static var deepPrerollSparks: Int { isConstrained ? 1 : 2 }
+        static var deepPrerollSparks: Int { 1 }
         static var deepPrerollHubs: Int { 1 }
-        static var maxSlots: Int { isConstrained ? 2 : 3 }
-        static var playerBehind: Int { 1 }
+        static var maxSlots: Int { 2 }
+        static var playerBehind: Int { 0 }
         static var maxConcurrentWarms: Int { 1 }
-        static var forwardBufferDeep: Double { isConstrained ? 2 : 3 }
-        static var forwardBufferLight: Double { isConstrained ? 1 : 1.5 }
+        static var forwardBufferDeep: Double { isConstrained ? 1.5 : 2 }
+        static var forwardBufferLight: Double { isConstrained ? 0.75 : 1 }
     }
 
     /// How aggressively to warm the Sparks sliding window.
@@ -166,13 +164,28 @@ final class SparkWarmPool {
     }
 
     /// Hubs For you shelf + related / up-next while watching.
+    /// Mid-fling: next-1 only (slug shelves stay poster-light; AV stays focus-tight).
     func prepareHubsWindow(posts: [CountryPost], around index: Int) {
+        if ScrollBudget.isFlinging {
+            prepare(
+                posts: posts,
+                around: index,
+                ahead: 1,
+                behind: 0,
+                deepPrerollLimit: 1,
+                skipThumbWarm: true,
+                allowNewWarms: true
+            )
+            return
+        }
         prepare(
             posts: posts,
             around: index,
             ahead: MediaBudget.playerAheadHubs,
-            behind: MediaBudget.playerBehind,
-            deepPrerollLimit: MediaBudget.deepPrerollHubs
+            behind: 0,
+            deepPrerollLimit: MediaBudget.deepPrerollHubs,
+            skipThumbWarm: true,
+            allowNewWarms: true
         )
     }
 
