@@ -2543,14 +2543,13 @@ struct InFrameVideoPlayer: View {
                                 // readyToPlay ≠ painted frames — keep outer poster (black AV blink).
                             },
                             onPlayingChange: { playing in
-                                if playGate, playing {
-                                    markInFrameFramesReady()
-                                } else if !playing {
+                                // Never lift poster on "playing" alone — first ticks are often black.
+                                if !playing {
                                     framesReady = false
                                 }
                             },
                             onProgress: { current, _ in
-                                // Extra paint proof for hubs path (time advanced + playing).
+                                // Paint proof only after the playhead leaves the black keyframe band.
                                 if playGate, current >= 0.08 {
                                     markInFrameFramesReady()
                                 }
@@ -2751,23 +2750,14 @@ struct InFrameVideoPlayer: View {
         syncPlayGate(immediate: win)
     }
 
-    /// Lift outer poster as soon as AV reports frames — Instagram leaves almost no settle.
-    /// Hub fit (long-form) keeps a tiny settle — R2 can still paint black for one tick.
+    /// Lift outer poster only after paint proof + a couple display frames.
+    /// Dropping early revealed a still-black AVPlayerLayer (the scroll black flash).
     private func markInFrameFramesReady() {
         guard playGate, !framesReady else { return }
-        if fillsFrame {
-            framesReady = true
-            if sharesFeedMute {
-                let wantMute = appState.feedVideosMuted
-                isMuted = wantMute
-                if !wantMute {
-                    activatePlaybackAudioIfNeeded(unmuted: true)
-                }
-            }
-            return
-        }
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 48_000_000)
+            // Inner player already waited for painted frames; hold Frame0 one beat more
+            // so the layer never shows black between poster and first decoded pixel.
+            try? await Task.sleep(nanoseconds: fillsFrame ? 32_000_000 : 48_000_000)
             guard playGate, !framesReady else { return }
             framesReady = true
             if sharesFeedMute {

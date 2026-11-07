@@ -37,8 +37,9 @@ final class SparkWarmPool {
         static var playerBehind: Int { 0 }
         /// Focus + next must warm in parallel or the entering card waits ~1s for a slot.
         static var maxConcurrentWarms: Int { isConstrained ? 1 : 2 }
-        static var forwardBufferDeep: Double { isConstrained ? 1.5 : 2 }
-        static var forwardBufferLight: Double { isConstrained ? 0.75 : 1 }
+        /// Deep enough that claim starts already buffered (no enter-frame stall).
+        static var forwardBufferDeep: Double { isConstrained ? 2 : 3 }
+        static var forwardBufferLight: Double { isConstrained ? 1 : 1.5 }
     }
 
     /// How aggressively to warm the Sparks sliding window.
@@ -839,14 +840,26 @@ final class SparkWarmPool {
                 player.rate = 0
                 player.isMuted = true
                 player.volume = 0
-                // Hard lock head at exact 0 after preroll (preroll can nudge slightly).
-                _ = await player.seek(
-                    to: .zero,
-                    toleranceBefore: .zero,
-                    toleranceAfter: .zero
-                )
-                player.pause()
-                player.rate = 0
+                // Keep the decoded first frame. Seeking to 0 after preroll wiped the paint
+                // buffer and every Feed claim flashed black until the decoder caught up.
+                let head = player.currentTime().seconds
+                if head.isFinite, head >= 0.08 {
+                    _ = await player.seek(
+                        to: .zero,
+                        toleranceBefore: .zero,
+                        toleranceAfter: .zero
+                    )
+                    guard isParked(postID: postID, player: player) else { return true }
+                    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                        player.preroll(atRate: 1.0) { _ in
+                            cont.resume()
+                        }
+                    }
+                    player.pause()
+                    player.rate = 0
+                    player.isMuted = true
+                    player.volume = 0
+                }
                 return true
             }
             try? await Task.sleep(nanoseconds: 40_000_000)
