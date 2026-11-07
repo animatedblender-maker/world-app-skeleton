@@ -903,8 +903,12 @@ async function logDecision(args: {
         }),
       ]
     );
-  } catch {
-    /* migration not applied yet */
+  } catch (err) {
+    // Never drop silently — empty /mind Live panels look like MIND is dead.
+    console.warn(
+      '[rank] recommendation_decisions insert failed',
+      err instanceof Error ? err.message : err
+    );
   }
 }
 

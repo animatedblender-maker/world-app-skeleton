@@ -27,10 +27,11 @@ export function mailConfigured(): boolean {
 
 /** Default sender for Matterya product mail — requires domain verified at Resend. */
 export function mailFromAddress(): string {
-  return (
-    (process.env.MAIL_FROM ?? '').trim() ||
-    'Matterya <no-reply@matterya.com>'
-  );
+  const raw = (process.env.MAIL_FROM ?? '').trim();
+  const fallback = 'Matterya <no-reply@matterya.com>';
+  if (!raw) return fallback;
+  // Legacy Render MAIL_FROM used noreply@ — always ship as no-reply@.
+  return raw.replace(/\bnoreply@matterya\.com\b/gi, 'no-reply@matterya.com');
 }
 
 /**
