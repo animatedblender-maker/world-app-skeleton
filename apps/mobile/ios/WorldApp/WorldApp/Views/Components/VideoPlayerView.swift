@@ -2579,8 +2579,9 @@ struct InFrameVideoPlayer: View {
                             fillsFrame: fillsFrame,
                             topChromeReserve: topChromeReserve,
                             bottomChromeReserve: bottomChromeReserve,
-                            // Feed neighbors must not keep buffering — warm pool claims on activate.
-                            preloadsWhenInactive: false,
+                            // Instagram: silent-claim warm pool while approaching so focus win is already buffered.
+                            // false here forced a cold resolve after election (~1s blank before play).
+                            preloadsWhenInactive: preloadGate && !playGate,
                             onViewed: onViewed,
                             onFramesReady: {
                                 guard playGate else { return }
@@ -2750,16 +2751,25 @@ struct InFrameVideoPlayer: View {
         syncPlayGate(immediate: win)
     }
 
-    /// Lift outer poster only after paint proof + a short settle (decoder still blacks 1–2 frames).
-    /// Hub fit (long-form) needs a longer settle — R2 often paints black for ~100ms after "playing".
+    /// Lift outer poster as soon as AV reports frames — Instagram leaves almost no settle.
+    /// Hub fit (long-form) keeps a tiny settle — R2 can still paint black for one tick.
     private func markInFrameFramesReady() {
         guard playGate, !framesReady else { return }
+        if fillsFrame {
+            framesReady = true
+            if sharesFeedMute {
+                let wantMute = appState.feedVideosMuted
+                isMuted = wantMute
+                if !wantMute {
+                    activatePlaybackAudioIfNeeded(unmuted: true)
+                }
+            }
+            return
+        }
         Task { @MainActor in
-            let settleNs: UInt64 = fillsFrame ? 64_000_000 : 140_000_000
-            try? await Task.sleep(nanoseconds: settleNs)
+            try? await Task.sleep(nanoseconds: 48_000_000)
             guard playGate, !framesReady else { return }
             framesReady = true
-            // Unmute only after frames are visible (respect global feed mute).
             if sharesFeedMute {
                 let wantMute = appState.feedVideosMuted
                 isMuted = wantMute
@@ -2853,27 +2863,29 @@ struct InFrameVideoPlayer: View {
         }
 
         let ratio = FeedVideoFocus.visibleRatio(for: frame)
-        // Early deep-warm + silent preload so focus win is already buffered.
+        // Instagram: deep-warm as soon as the card peeks in; silent-claim before election.
         // Skip until cold-open unlock — otherwise AV storms under splash freeze the UI.
-        if ratio >= 0.05, FeedVideoFocus.shared.autoplayUnlocked {
+        if ratio >= 0.02, FeedVideoFocus.shared.autoplayUnlocked {
             if let postID, !SparkWarmPool.shared.hasWarmOrInflight(postID: postID) {
                 SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
             }
             if usesArchivePath {
                 ArchiveVideoPlayback.warmResolve(url)
             }
-            if ratio >= 0.08, !preloadGate {
+            // Mount silent player early so claim finishes before ≥play threshold.
+            if ratio >= 0.04, !preloadGate {
                 preloadGate = true
             }
-        } else if ratio < 0.03, preloadGate, !playGate {
+        } else if ratio < 0.02, preloadGate, !playGate {
             preloadGate = false
         }
-        // Always report when crossing the play threshold; skip only tiny noise otherwise.
-        // Keep in sync with FeedVideoFocus minVisibleToPlay / minVisibleToKeep (instant autoplay).
+        // Keep in sync with FeedVideoFocus minVisibleToPlay / minVisibleToKeep.
+        let playT = FeedVideoFocus.playThreshold
+        let keepT = FeedVideoFocus.keepThreshold
         let crossedPlay =
-            (lastReportedRatio < 0.12 && ratio >= 0.12)
-            || (lastReportedRatio >= 0.12 && ratio < 0.08)
-        if !crossedPlay, abs(ratio - lastReportedRatio) < 0.025, lastReportedRatio >= 0 {
+            (lastReportedRatio < playT && ratio >= playT)
+            || (lastReportedRatio >= playT && ratio < keepT)
+        if !crossedPlay, abs(ratio - lastReportedRatio) < 0.02, lastReportedRatio >= 0 {
             refreshFocusWinner()
             return
         }

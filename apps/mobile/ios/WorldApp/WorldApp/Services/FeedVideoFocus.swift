@@ -47,8 +47,8 @@ enum FeedAutoplaySurface: String, Equatable, Sendable {
 
 /// Exactly **one** feed video plays at a time — the most visible eligible card.
 ///
-/// Start rule (product): play once **≥25%** of the player is on-screen (a quarter).
-/// Keep until it drops under that band so the next card can take over as it enters.
+/// Instagram-style: elect as soon as the card peeks in (~6%); warm/preload already
+/// running from ~2–4% so play is buffered the same tick as election.
 @MainActor
 final class FeedVideoFocus {
     static let shared = FeedVideoFocus()
@@ -69,14 +69,16 @@ final class FeedVideoFocus {
     /// Debounced silence when no winner — layout flaps used to kill in-frame hubs audio.
     private var silenceWhenEmptyTask: Task<Void, Never>?
 
-    /// Start autoplay once ~12% is on-screen (warm already running from ~5%).
-    private let minVisibleToPlay: CGFloat = 0.12
+    /// Elect / start once this much of the player is on-screen (Instagram-early).
+    static let playThreshold: CGFloat = 0.06
     /// Keep current winner until it drops below this.
-    private let minVisibleToKeep: CGFloat = 0.08
+    static let keepThreshold: CGFloat = 0.04
+    private var minVisibleToPlay: CGFloat { Self.playThreshold }
+    private var minVisibleToKeep: CGFloat { Self.keepThreshold }
     /// Challenger must beat the current winner by this much to steal focus.
-    private let stealEpsilon: CGFloat = 0.015
+    private let stealEpsilon: CGFloat = 0.01
     /// Ignore this many consecutive near-zero layout reports before clearing a candidate.
-    private let zeroGlitchTolerance = 6
+    private let zeroGlitchTolerance = 4
 
     private init() {}
 
@@ -135,22 +137,27 @@ final class FeedVideoFocus {
 
         zeroStreak[id] = 0
         let prev = ratios[id]
-        // Always recompute when crossing the play threshold — small deltas used to
-        // skip election and delay start until the card was mostly on-screen.
+        // Always recompute when crossing the play threshold — same-frame election.
         let crossedPlay =
             (prev == nil || prev! < minVisibleToPlay) && clamped >= minVisibleToPlay
             || (prev != nil && prev! >= minVisibleToPlay && clamped < minVisibleToKeep)
-        if let prev, !crossedPlay, abs(prev - clamped) < 0.03 {
+        if let prev, !crossedPlay, abs(prev - clamped) < 0.02 {
             stickyRatios[id] = clamped
             return
         }
         ratios[id] = clamped
         stickyRatios[id] = clamped
-        scheduleRecompute()
+        scheduleRecompute(immediate: crossedPlay)
     }
 
-    /// One election per runloop — not per GeometryReader axis change.
-    private func scheduleRecompute() {
+    /// Coalesce GeometryReader storms, but never defer a play-threshold crossing —
+    /// Instagram elects the same frame the card peeks in.
+    private func scheduleRecompute(immediate: Bool = false) {
+        if immediate {
+            recomputeScheduled = false
+            recompute()
+            return
+        }
         guard !recomputeScheduled else { return }
         recomputeScheduled = true
         DispatchQueue.main.async { [weak self] in

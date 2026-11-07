@@ -396,7 +396,7 @@ struct YouTubeVideoMetadataRow: View {
 }
 
 /// Hub video in Feed / shares: same player as Hubs watch + small Hubs badge (hub content only).
-/// Participates in `FeedVideoFocus` — only one feed video plays; starts at ≥25% on-screen.
+/// Participates in `FeedVideoFocus` — only one feed video plays; elects as soon as it peeks in (~6%).
 struct PlayFeedLinkCard: View {
     @Environment(AppState.self) private var appState
 
@@ -406,7 +406,7 @@ struct PlayFeedLinkCard: View {
     var edgeToEdge: Bool = true
     /// Kept for call-site compatibility — Hubs badges on film are off.
     var forceHubsBadge: Bool = false
-    /// Home feed vs profile — same ≥25% (quarter) autoplay rules on both.
+    /// Home feed vs profile — same Instagram-early autoplay rules on both.
     var autoplaySurface: FeedAutoplaySurface = .home
     /// Live Frame 0 after mint — upgrades expired/missing feed thumbs without remount.
     @State private var liveFrame0URL: URL?

@@ -35,7 +35,8 @@ final class SparkWarmPool {
         static var deepPrerollHubs: Int { 1 }
         static var maxSlots: Int { 2 }
         static var playerBehind: Int { 0 }
-        static var maxConcurrentWarms: Int { 1 }
+        /// Focus + next must warm in parallel or the entering card waits ~1s for a slot.
+        static var maxConcurrentWarms: Int { isConstrained ? 1 : 2 }
         static var forwardBufferDeep: Double { isConstrained ? 1.5 : 2 }
         static var forwardBufferLight: Double { isConstrained ? 0.75 : 1 }
     }
