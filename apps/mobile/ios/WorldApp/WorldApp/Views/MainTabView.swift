@@ -51,10 +51,9 @@ struct MainTabView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .sharePostSheet(appState: appState)
                 .overlay {
-                    ZStack {
-                        AppMenuOverlay()
-                        NotificationsOverlay()
-                    }
+                    // Notifications only — AppMenu lives in the outer ZStack above BottomTabBar
+                    // so Log out is never covered by the tab strip.
+                    NotificationsOverlay()
                 }
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar(appState.navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
@@ -125,6 +124,10 @@ struct MainTabView: View {
                     .frame(maxWidth: .infinity)
                     .zIndex(70)
             }
+
+            // Side menu above the tab bar so Log out / rows are never underlaid by tabs.
+            AppMenuOverlay()
+                .zIndex(90)
 
             // Sparks: instant overlay (not fullScreenCover) — same frame as hubs expand.
             if let context = appState.reelsViewerContext {

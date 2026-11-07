@@ -33,6 +33,17 @@ private struct AppMenuPanel: View {
     @Environment(AppState.self) private var appState
     @State private var hasOwnHubsChannel = false
 
+    /// Keep Log out above the home indicator (and clear of any residual tab chrome).
+    private var logoutBottomPadding: CGFloat {
+        let home = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)?
+            .safeAreaInsets.bottom ?? 0
+        // Menu paints above BottomTabBar; still clear the home indicator + a touch of air.
+        return max(home, 8) + 16
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center) {
@@ -131,7 +142,7 @@ private struct AppMenuPanel: View {
             }
             .buttonStyle(MatteryaSettingsRowButtonStyle(destructive: true))
             .padding(.horizontal, Theme.pagePadding)
-            .padding(.bottom, 20)
+            .padding(.bottom, logoutBottomPadding)
             .padding(.top, 8)
         }
         .frame(maxHeight: .infinity)
