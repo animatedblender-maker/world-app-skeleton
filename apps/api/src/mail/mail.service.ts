@@ -273,6 +273,41 @@ export function buildResetPasswordEmailText(opts: {
   ].join('\n');
 }
 
+/** Notice after password actually changed (Settings change or forgot-password complete). */
+export function buildPasswordChangedEmailHtml(opts: {
+  email: string;
+  supportUrl: string;
+}): string {
+  const { email, supportUrl } = opts;
+  return matteryaMailShell({
+    title: 'Your Matterya password was changed',
+    eyebrow: 'Security notice',
+    bodyHtml: `The password for <strong>${escapeHtml(email)}</strong> was just changed.
+              If you made this change, you’re all set — you can keep using Matterya as usual.
+              If you did <strong>not</strong> change it, reset your password right away and contact support.`,
+    ctaLabel: 'Open Matterya',
+    ctaUrl: supportUrl,
+    footerNote:
+      'This is an automated security notice from Matterya. We never ask for your password by email.',
+  });
+}
+
+export function buildPasswordChangedEmailText(opts: {
+  email: string;
+  supportUrl: string;
+}): string {
+  return [
+    'Your Matterya password was changed',
+    '',
+    `The password for ${opts.email} was just changed.`,
+    'If you made this change, you can ignore this email.',
+    'If you did not change it, reset your password immediately:',
+    opts.supportUrl,
+    '',
+    '— Matterya',
+  ].join('\n');
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')

@@ -104,6 +104,7 @@ import {
   signupWithMatteryaEmail,
 } from './auth/signup-confirm.service.js';
 import {
+  changePasswordAuthenticated,
   requestPasswordReset,
   resetPasswordWithToken,
 } from './auth/password-reset.service.js';
@@ -813,13 +814,53 @@ app.post('/auth/reset-password', async (req: Request, res: Response) => {
     const result = await resetPasswordWithToken(token, password);
     return res.json({
       ...result,
-      message: 'Password updated. You can log in with your new password.',
+      message: result.emailed
+        ? 'Password updated. We emailed a confirmation from no-reply@matterya.com. You can log in with your new password.'
+        : 'Password updated. You can log in with your new password.',
     });
   } catch (err: any) {
     const status = Number(err?.status) || 500;
     return res.status(status).json({
       error: err?.code ?? 'reset_password_failed',
       message: err?.message ?? 'Could not reset password.',
+    });
+  }
+});
+
+// Signed-in change password — Matterya sets password + emails security notice.
+app.post('/auth/change-password', async (req: Request, res: Response) => {
+  try {
+    const user = await getUserFromRequest(req);
+    if (!user?.id) {
+      return res.status(401).json({
+        error: 'unauthorized',
+        message: 'Log in to change your password.',
+      });
+    }
+    const email = String(user.email ?? req.body?.email ?? '').trim();
+    if (!email) {
+      return res.status(400).json({
+        error: 'MISSING_EMAIL',
+        message: 'Your session has no email. Log out and log in again, then try changing your password.',
+      });
+    }
+    const result = await changePasswordAuthenticated({
+      userId: user.id,
+      email,
+      currentPassword: req.body?.currentPassword,
+      newPassword: req.body?.newPassword ?? req.body?.password,
+    });
+    return res.json({
+      ...result,
+      message: result.emailed
+        ? 'Password updated. We emailed a confirmation from no-reply@matterya.com.'
+        : 'Password updated.',
+    });
+  } catch (err: any) {
+    const status = Number(err?.status) || 500;
+    return res.status(status).json({
+      error: err?.code ?? 'change_password_failed',
+      message: err?.message ?? 'Could not change password.',
     });
   }
 });

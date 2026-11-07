@@ -492,16 +492,16 @@ struct SettingsView: View {
         accountActionBusy = true
         defer { accountActionBusy = false }
         do {
-            try await AuthService.shared.changePassword(
+            let message = try await AuthService.shared.changePassword(
                 currentPassword: currentPassword,
                 newPassword: newPassword
             )
             currentPassword = ""
             newPassword = ""
             confirmPassword = ""
-            changePasswordInfo = "Password updated."
-            appState.showToast("Password updated", style: .success, durationSeconds: 3)
-            try? await Task.sleep(nanoseconds: 900_000_000)
+            changePasswordInfo = message
+            appState.showToast(message, style: .success, durationSeconds: 4)
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
             accountSheet = nil
         } catch {
             accountActionError = error.localizedDescription

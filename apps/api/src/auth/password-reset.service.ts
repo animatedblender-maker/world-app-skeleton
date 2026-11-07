@@ -6,6 +6,8 @@ import crypto from 'node:crypto';
 import { pool } from '../db.js';
 import { setAuthUserPassword, supabaseAdminConfigured } from '../supabase-admin.js';
 import {
+  buildPasswordChangedEmailHtml,
+  buildPasswordChangedEmailText,
   buildResetPasswordEmailHtml,
   buildResetPasswordEmailText,
   mailConfigured,
@@ -13,7 +15,7 @@ import {
   publicWebOrigin,
   sendMail,
 } from '../mail/mail.service.js';
-import { assertStrongPassword } from './password-policy.js';
+import { assertStrongPassword, validatePasswordPresent } from './password-policy.js';
 
 const EXPIRES_HOURS = Number(process.env.PASSWORD_RESET_EXPIRES_HOURS ?? 2);
 const requestCooldownMs = 60_000;
@@ -155,7 +157,7 @@ export async function requestPasswordReset(
 export async function resetPasswordWithToken(
   token: string,
   newPassword: unknown
-): Promise<{ ok: true; email: string }> {
+): Promise<{ ok: true; email: string; emailed: boolean }> {
   const clean = (token ?? '').trim();
   if (!clean || clean.length < 16) {
     throw Object.assign(new Error('Invalid or missing password reset link.'), {
@@ -241,5 +243,105 @@ export async function resetPasswordWithToken(
     [row.user_id, row.id]
   );
 
-  return { ok: true, email: row.email };
+  const notice = await notifyPasswordChanged(row.email);
+  return { ok: true, email: row.email, emailed: notice.emailed };
+}
+
+/** Security notice from no-reply@matterya.com after a successful password change. */
+export async function notifyPasswordChanged(email: string): Promise<{ emailed: boolean }> {
+  const clean = normalizeEmail(email);
+  if (!clean || !mailConfigured()) {
+    if (!mailConfigured()) {
+      console.warn('[auth] password-changed notice skipped — RESEND_API_KEY missing');
+    }
+    return { emailed: false };
+  }
+  const supportUrl = `${publicWebOrigin()}/auth`;
+  try {
+    const send = await sendMail({
+      to: clean,
+      subject: 'Your Matterya password was changed',
+      html: buildPasswordChangedEmailHtml({ email: clean, supportUrl }),
+      text: buildPasswordChangedEmailText({ email: clean, supportUrl }),
+    });
+    return { emailed: !send.skipped };
+  } catch (err) {
+    console.warn('[auth] password-changed notice failed', err instanceof Error ? err.message : err);
+    return { emailed: false };
+  }
+}
+
+/**
+ * Signed-in change password — verify current via Supabase password grant,
+ * set via admin API, then email a Matterya security notice.
+ */
+export async function changePasswordAuthenticated(opts: {
+  userId: string;
+  email: string;
+  currentPassword: unknown;
+  newPassword: unknown;
+}): Promise<{ ok: true; email: string; emailed: boolean }> {
+  const email = normalizeEmail(opts.email);
+  validateEmail(email);
+
+  const present = validatePasswordPresent(opts.currentPassword);
+  if (!present.ok) {
+    throw Object.assign(new Error(present.message), { code: present.code, status: 400 });
+  }
+  assertStrongPassword(opts.newPassword);
+  const currentPassword = String(opts.currentPassword);
+  const newPassword = String(opts.newPassword);
+  if (currentPassword === newPassword) {
+    throw Object.assign(new Error('New password must be different from your current password.'), {
+      code: 'SAME_PASSWORD',
+      status: 400,
+    });
+  }
+
+  if (!supabaseAdminConfigured()) {
+    throw Object.assign(new Error('Password change is temporarily unavailable.'), {
+      code: 'ADMIN_NOT_CONFIGURED',
+      status: 503,
+    });
+  }
+
+  const supabaseUrl = (process.env.SUPABASE_URL ?? '').replace(/\/$/, '');
+  const anon =
+    (process.env.SUPABASE_ANON_KEY ?? process.env.SUPABASE_ANON ?? '').trim() ||
+    (process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim();
+  if (!supabaseUrl || !anon) {
+    throw Object.assign(new Error('Password change is temporarily unavailable.'), {
+      code: 'AUTH_NOT_CONFIGURED',
+      status: 503,
+    });
+  }
+
+  const verifyRes = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
+    method: 'POST',
+    headers: {
+      apikey: anon,
+      Authorization: `Bearer ${anon}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({ email, password: currentPassword }),
+  });
+  if (!verifyRes.ok) {
+    throw Object.assign(new Error('Current password is incorrect.'), {
+      code: 'INVALID_CURRENT_PASSWORD',
+      status: 401,
+    });
+  }
+  const verifyJson = (await verifyRes.json().catch(() => ({}))) as { user?: { id?: string } };
+  const verifiedId = verifyJson?.user?.id ? String(verifyJson.user.id) : '';
+  if (verifiedId && verifiedId !== opts.userId) {
+    throw Object.assign(new Error('Current password is incorrect.'), {
+      code: 'INVALID_CURRENT_PASSWORD',
+      status: 401,
+    });
+  }
+
+  await setAuthUserPassword(opts.userId, newPassword);
+  const notice = await notifyPasswordChanged(email);
+  return { ok: true, email, emailed: notice.emailed };
 }
