@@ -20,8 +20,10 @@ struct TranslatableCaption: View {
     var buttonTint: Color = Theme.accentBright
     /// Skip expand/collapse chrome (always plain Text).
     var expandable: Bool = true
-    /// Expanded line cap for Sparks dock (grows the frosted box; nil = unlimited).
+    /// Expanded line cap (nil = full text). Prefer nil + `expandedMaxHeight` on Sparks.
     var expandedLineLimit: Int? = nil
+    /// When expanded and taller than this, caption scrolls (Sparks dock).
+    var expandedMaxHeight: CGFloat? = nil
     /// Ignored while Translate is disabled — kept for call-site compatibility.
     var showsTranslateControl: Bool = true
 
@@ -53,7 +55,8 @@ struct TranslatableCaption: View {
                     lessTitle: lessTitle,
                     uiTextStyle: uiTextStyle,
                     buttonTint: buttonTint,
-                    expandedLineLimit: expandedLineLimit
+                    expandedLineLimit: expandedLineLimit,
+                    expandedMaxHeight: expandedMaxHeight
                 )
             } else {
                 MatteryaRichText(

@@ -777,7 +777,7 @@ struct ReelsPagerCard: View {
             authorRow
 
             if let text = post.sparkDisplayCaption, !text.isEmpty {
-                // Collapse to 2 lines; See more grows the frosted dock (cap ~10 lines).
+                // Collapse to 2 lines; See more reveals the full caption (scroll if very tall).
                 TranslatableCaption(
                     text: text,
                     collapsedLineLimit: 2,
@@ -787,7 +787,8 @@ struct ReelsPagerCard: View {
                     uiTextStyle: .subheadline,
                     buttonTint: Theme.paper.opacity(0.92),
                     expandable: true,
-                    expandedLineLimit: 10
+                    expandedLineLimit: nil,
+                    expandedMaxHeight: SparksStageLayout.physicalScreenSize.height * 0.42
                 )
                 .id("spark-caption-\(post.id)")
                 .shadow(color: Theme.ink.opacity(0.45), radius: 6, y: 1)

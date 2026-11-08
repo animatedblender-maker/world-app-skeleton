@@ -200,7 +200,8 @@ private struct ReelCard: View {
                         uiTextStyle: .subheadline,
                         buttonTint: .white.opacity(0.9),
                         expandable: true,
-                        expandedLineLimit: 10
+                        expandedLineLimit: nil,
+                        expandedMaxHeight: SparksStageLayout.physicalScreenSize.height * 0.42
                     )
                     .id("reel-caption-\(post.id)")
                 }

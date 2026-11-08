@@ -198,13 +198,22 @@ struct ExpandableBodyText: View {
     var uiTextStyle: UIFont.TextStyle = .body
     /// See more / See less tint (paper on Sparks dock; ink on Feed cards).
     var buttonTint: Color = Theme.ink
-    /// When set, expanded state uses this line cap (grows the box; avoids nested scroll in Sparks pager).
+    /// When set, expanded state uses this line cap. Prefer `nil` (full text) with optional `expandedMaxHeight`.
     var expandedLineLimit: Int? = nil
+    /// When expanded and taller than this, caption scrolls so the whole text stays reachable (Sparks dock).
+    var expandedMaxHeight: CGFloat? = nil
 
     @State private var expanded = false
     /// True only when full text needs more lines than `collapsedLineLimit` at the live width.
     @State private var isTruncated = false
     @State private var layoutWidth: CGFloat = 0
+    /// Measured full caption height at `layoutWidth` (plain text; used for scroll vs grow).
+    @State private var fullContentHeight: CGFloat = 0
+
+    private var needsExpandedScroll: Bool {
+        guard expanded, let maxHeight = expandedMaxHeight, maxHeight > 40 else { return false }
+        return fullContentHeight > maxHeight + 2
+    }
 
     var body: some View {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -213,22 +222,29 @@ struct ExpandableBodyText: View {
                 EmptyView()
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    MatteryaMarkdown.text(trimmed, baseFont: font)
-                        .foregroundStyle(color)
-                        .lineSpacing(lineSpacing)
-                        .lineLimit(expanded ? expandedLineLimit : collapsedLineLimit)
-                        .multilineTextAlignment(.leading)
-                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .background(
-                            GeometryReader { geo in
-                                Color.clear
-                                    .onAppear { noteWidth(geo.size.width, text: trimmed) }
-                                    .onChange(of: geo.size.width) { _, w in
-                                        noteWidth(w, text: trimmed)
-                                    }
+                    Group {
+                        if needsExpandedScroll, let maxHeight = expandedMaxHeight {
+                            ScrollView(.vertical, showsIndicators: true) {
+                                captionText(trimmed, unlimited: true)
+                                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
-                        )
+                            .frame(maxWidth: .infinity, maxHeight: maxHeight, alignment: .topLeading)
+                        } else {
+                            captionText(trimmed, unlimited: expanded)
+                                .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear
+                                .onAppear { noteWidth(geo.size.width, text: trimmed) }
+                                .onChange(of: geo.size.width) { _, w in
+                                    noteWidth(w, text: trimmed)
+                                }
+                        }
+                    )
 
                     // Only when collapsed text is actually cut off — never a no-op control.
                     if isTruncated || expanded {
@@ -259,6 +275,15 @@ struct ExpandableBodyText: View {
         }
     }
 
+    @ViewBuilder
+    private func captionText(_ trimmed: String, unlimited: Bool) -> some View {
+        MatteryaMarkdown.text(trimmed, baseFont: font)
+            .foregroundStyle(color)
+            .lineSpacing(lineSpacing)
+            .lineLimit(unlimited ? expandedLineLimit : collapsedLineLimit)
+            .multilineTextAlignment(.leading)
+    }
+
     private func noteWidth(_ width: CGFloat, text: String) {
         let w = max(0, width)
         if abs(w - layoutWidth) > 0.5 {
@@ -270,6 +295,7 @@ struct ExpandableBodyText: View {
     private func recomputeTruncation(for trimmed: String) {
         guard !trimmed.isEmpty else {
             isTruncated = false
+            fullContentHeight = 0
             return
         }
 
@@ -280,6 +306,7 @@ struct ExpandableBodyText: View {
         let safeCharBudget = max(24, collapsedLineLimit * 36)
         if newlines == 0, plain.count <= safeCharBudget {
             isTruncated = false
+            fullContentHeight = 0
             return
         }
 
@@ -304,9 +331,10 @@ struct ExpandableBodyText: View {
             attributes: attrs,
             context: nil
         )
+        fullContentHeight = ceil(fullRect.height)
         let lineHeight = max(uiFont.lineHeight, 1) + lineSpacing
         let maxCollapsed = lineHeight * CGFloat(collapsedLineLimit)
         // Small slack so fractional layout never leaves a dead “See more”.
-        isTruncated = ceil(fullRect.height) > ceil(maxCollapsed) + 2
+        isTruncated = fullContentHeight > ceil(maxCollapsed) + 2
     }
 }
