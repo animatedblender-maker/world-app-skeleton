@@ -120,9 +120,14 @@ struct VideoPlayerView: View {
         return showPosterCover
     }
 
-    /// Video letterbox / cold floor — always black (Sparks / Hubs), never paper-white.
+    /// Letterbox / cold floor. Prefer clear when a poster exists so enter-frame never blinks black
+    /// through the poster stack (Instagram keeps the first frame / thumb visible).
     private var softVideoFloor: some View {
-        Color.black
+        if posterURL != nil {
+            Color.clear
+        } else {
+            Color.black
+        }
     }
 
     var body: some View {
@@ -206,7 +211,8 @@ struct VideoPlayerView: View {
 
     private var playerLifecycleCore: some View {
         playerRoot
-            .background(Color.black)
+            // Clear when poster exists — black background flashed under Frame0 on feed enter.
+            .background(posterURL == nil ? Color.black : Color.clear)
             .onAppear { handlePlayerAppear() }
             .task(id: postID) {
                 // Every new post starts with CC off.
@@ -301,10 +307,11 @@ struct VideoPlayerView: View {
                 onComplete: { adFinished = true }
             )
         } else if let player {
-            MatteryaVideoSurface(player: player, fillsFrame: fillsFrame)
+            MatteryaVideoSurface(player: player, fillsFrame: fillsFrame, softFloorClear: shouldShowPosterCover)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
-                .opacity(shouldShowPosterCover ? 0.01 : 1)
+                // Fully hide AV until paint proof — 0.01 still peeked as a black blink on enter-frame.
+                .opacity(shouldShowPosterCover ? 0 : 1)
                 .contentShape(Rectangle())
                 .onTapGesture {
                     guard showsControls else { return }
@@ -537,7 +544,8 @@ struct VideoPlayerView: View {
     /// `rate > 0` alone still blinks — decoder often shows 1–2 black frames first.
     private func playerHasPaintedFrames(_ player: AVPlayer) -> Bool {
         let t = player.currentTime().seconds
-        let advanced = t.isFinite && t >= 0.08
+        // 0.12s past start — past the typical black keyframe band on R2 / HLS.
+        let advanced = t.isFinite && t >= 0.12
         let moving = player.rate > 0.05
             || (player.timeControlStatus == .playing && player.rate > 0.01)
         return moving && advanced
@@ -1989,11 +1997,15 @@ private struct MatteryaFullscreenPlayer: View {
 private struct MatteryaVideoSurface: UIViewRepresentable {
     let player: AVPlayer
     var fillsFrame: Bool = true
+    /// When true, AVPlayerLayer soft floor is clear so a poster underlay can show through
+    /// instead of a black blink before the first decoded frame.
+    var softFloorClear: Bool = false
 
     func makeUIView(context: Context) -> MatteryaPlayerUIView {
         let view = MatteryaPlayerUIView()
         // Gravity BEFORE player attach — first decoded frame already correct.
         view.lockGravity(fillsFrame: fillsFrame)
+        view.setSoftFloorClear(softFloorClear)
         // Defer attach until non-zero bounds (zero-size mount → black + FigGeometry errors).
         view.setPendingPlayer(player)
         return view
@@ -2001,6 +2013,7 @@ private struct MatteryaVideoSurface: UIViewRepresentable {
 
     func updateUIView(_ uiView: MatteryaPlayerUIView, context: Context) {
         uiView.lockGravity(fillsFrame: fillsFrame)
+        uiView.setSoftFloorClear(softFloorClear)
         uiView.setPendingPlayer(player)
     }
 }
@@ -2015,15 +2028,17 @@ private final class MatteryaPlayerUIView: UIView {
     private var gravityLocked = false
     private var pendingPlayer: AVPlayer?
 
-    /// Letterbox / empty AV floor — black (IG/YT), never paper-white.
-    private static let softFloor = UIColor.black
+    /// Letterbox / empty AV floor — black by default; clear while poster covers enter-frame.
+    private static let softFloorBlack = UIColor.black
+    private static let softFloorClear = UIColor.clear
+    private var softFloorClear = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = Self.softFloor
+        backgroundColor = Self.softFloorBlack
         // Default fill (FB/IG feed + Sparks); host may switch to fit for wide clips.
         playerLayer.videoGravity = .resizeAspectFill
-        playerLayer.backgroundColor = Self.softFloor.cgColor
+        playerLayer.backgroundColor = Self.softFloorBlack.cgColor
         lockedGravity = .resizeAspectFill
         isUserInteractionEnabled = false
         clipsToBounds = true
@@ -2033,6 +2048,13 @@ private final class MatteryaPlayerUIView: UIView {
             "contents": NSNull(),
             "videoGravity": NSNull(),
         ]
+    }
+
+    func setSoftFloorClear(_ clear: Bool) {
+        softFloorClear = clear
+        let color = clear ? Self.softFloorClear : Self.softFloorBlack
+        backgroundColor = color
+        playerLayer.backgroundColor = color.cgColor
     }
 
     required init?(coder: NSCoder) {
@@ -2070,10 +2092,12 @@ private final class MatteryaPlayerUIView: UIView {
         }
         lockedGravity = gravity
         gravityLocked = true
+        let floor = softFloorClear ? Self.softFloorClear : Self.softFloorBlack
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         playerLayer.videoGravity = gravity
-        playerLayer.backgroundColor = Self.softFloor.cgColor
+        playerLayer.backgroundColor = floor.cgColor
+        backgroundColor = floor
         CATransaction.commit()
     }
 
@@ -2083,6 +2107,11 @@ private final class MatteryaPlayerUIView: UIView {
         CATransaction.setDisableActions(true)
         if playerLayer.videoGravity != lockedGravity {
             playerLayer.videoGravity = lockedGravity
+        }
+        let floor = softFloorClear ? Self.softFloorClear : Self.softFloorBlack
+        if backgroundColor != floor {
+            backgroundColor = floor
+            playerLayer.backgroundColor = floor.cgColor
         }
         CATransaction.commit()
         attachPlayerIfReady()
@@ -2455,7 +2484,7 @@ struct InFrameVideoPlayer: View {
         playGate || preloadGate
     }
 
-    /// Poster floor under AV — black until Frame 0 / first painted frames (cream matte read as a white flash).
+    /// First-frame stand-in under AV — Frame0 / poster only. Never a black flash on enter.
     @ViewBuilder
     private var posterFloor: some View {
         let cachedFrame0 = postID.flatMap { Frame0PosterCache.url(for: $0) }
@@ -2465,19 +2494,21 @@ struct InFrameVideoPlayer: View {
             return nil
         }()
         ZStack {
-            Color.black
+            // Clear — black here caused the enter-frame blink when CachedAsyncImage reloaded.
+            Color.clear
             if let usablePoster {
                 CachedAsyncImage(
                     url: usablePoster,
                     maxPixelSize: 720,
                     contentMode: fillsFrame ? .fill : .fit,
-                    placeholder: AnyView(Color.black)
+                    placeholder: AnyView(Color.clear)
                 )
+                .id(usablePoster.absoluteString)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
                 .allowsHitTesting(false)
             }
-            // Pack-path Frame 0 when API thumb missing/unusable — stays black until signed webp loads.
+            // Pack-path Frame 0 when API thumb missing/unusable.
             if let postID, usablePoster == nil || posterURL.map({ !MediaURLResolver.isUsablePosterURL($0) }) == true {
                 FrameZeroFallbackPoster(
                     postID: postID,
@@ -2550,7 +2581,7 @@ struct InFrameVideoPlayer: View {
                             },
                             onProgress: { current, _ in
                                 // Paint proof only after the playhead leaves the black keyframe band.
-                                if playGate, current >= 0.08 {
+                                if playGate, current >= 0.12 {
                                     markInFrameFramesReady()
                                 }
                             },
@@ -2578,9 +2609,9 @@ struct InFrameVideoPlayer: View {
                             fillsFrame: fillsFrame,
                             topChromeReserve: topChromeReserve,
                             bottomChromeReserve: bottomChromeReserve,
-                            // Instagram: silent-claim warm pool while approaching so focus win is already buffered.
-                            // false here forced a cold resolve after election (~1s blank before play).
-                            preloadsWhenInactive: preloadGate && !playGate,
+                            // Always allow silent claim while mounted — flipping this with playGate
+                            // remounted the player and flashed black on enter-frame.
+                            preloadsWhenInactive: true,
                             onViewed: onViewed,
                             onFramesReady: {
                                 guard playGate else { return }
@@ -2750,14 +2781,12 @@ struct InFrameVideoPlayer: View {
         syncPlayGate(immediate: win)
     }
 
-    /// Lift outer poster only after paint proof + a couple display frames.
-    /// Dropping early revealed a still-black AVPlayerLayer (the scroll black flash).
+    /// Lift outer Frame0 only after real paint — never reveal a black AV layer.
     private func markInFrameFramesReady() {
         guard playGate, !framesReady else { return }
         Task { @MainActor in
-            // Inner player already waited for painted frames; hold Frame0 one beat more
-            // so the layer never shows black between poster and first decoded pixel.
-            try? await Task.sleep(nanoseconds: fillsFrame ? 32_000_000 : 48_000_000)
+            // Hold first-frame poster until the decoder is past the black keyframe band.
+            try? await Task.sleep(nanoseconds: fillsFrame ? 90_000_000 : 110_000_000)
             guard playGate, !framesReady else { return }
             framesReady = true
             if sharesFeedMute {
