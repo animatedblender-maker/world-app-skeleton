@@ -236,7 +236,8 @@ struct SparkFeedCard: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
         .overlay(alignment: .topLeading) {
-            if post.isAdultContent {
+            // Moderator Mature mark only — never keyword heuristic (avoids double / false badges).
+            if post.isModeratorAdultMarked {
                 Text("18+")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.white)

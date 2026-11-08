@@ -641,9 +641,13 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
         self.isAdult = isAdult
     }
 
-    /// 18+ content — hidden from under-18 accounts.
+    /// Moderator / platform Mature mark (`is_adult`) — only this shows the 18+ badge.
+    var isModeratorAdultMarked: Bool { isAdult == true }
+
+    /// 18+ content — hidden from under-18 accounts (mod mark or keyword gate).
+    /// UI badge uses `isModeratorAdultMarked` only — never the keyword heuristic.
     var isAdultContent: Bool {
-        if isAdult == true { return true }
+        if isModeratorAdultMarked { return true }
         return ContentSanitizer.looksNsfw(title)
             || ContentSanitizer.looksNsfw(body)
             || ContentSanitizer.looksNsfw(mediaCaption)

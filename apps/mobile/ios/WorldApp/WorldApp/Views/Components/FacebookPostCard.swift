@@ -685,17 +685,7 @@ struct FacebookPostCard: View {
             }
             .padding(.horizontal, horizontalGutter)
 
-            // No headlines on posts — body/caption only. Keep 18+ mark when needed.
-            if post.isAdultContent {
-                Text("18+")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(Theme.surface)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Theme.ink.opacity(0.85), in: Capsule())
-                    .padding(.horizontal, horizontalGutter)
-                    .accessibilityLabel("18 plus content")
-            }
+            // 18+ badge lives on the video top-leading only (moderator mark) — not in the header.
 
             // Hubs channel attribution — “Shared from {underlined name}”.
             if showsPlayLinkInFeed, let channel = hubChannelAttributionSource {
@@ -1021,6 +1011,20 @@ struct FacebookPostCard: View {
             )
         }
         .background(Color.black)
+        // Single 18+ mark — top-left of the film, moderator `is_adult` only.
+        .overlay(alignment: .topLeading) {
+            if post.isModeratorAdultMarked {
+                Text("18+")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.black.opacity(0.72), in: Capsule())
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
+                    .accessibilityLabel("18 plus content")
+            }
+        }
     }
 
     private var actions: some View {
