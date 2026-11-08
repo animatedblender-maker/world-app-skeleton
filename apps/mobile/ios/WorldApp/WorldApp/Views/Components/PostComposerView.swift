@@ -1,5 +1,6 @@
-import SwiftUI
+import AVFoundation
 import PhotosUI
+import SwiftUI
 
 struct PostComposerView: View {
     @Environment(\.dismiss) private var dismiss
@@ -13,8 +14,16 @@ struct PostComposerView: View {
     @State private var busy = false
     @State private var errorMessage: String?
     @State private var selectedPhoto: PhotosPickerItem?
+    @State private var selectedVideo: PhotosPickerItem?
     @State private var imageData: Data?
     @State private var previewImage: UIImage?
+    @State private var uploadVideoURL: URL?
+    @State private var previewVideoURL: URL?
+    @State private var preparedVideoSizeBytes = 0
+    @State private var videoMimeType = "video/mp4"
+    @State private var videoFileExtension = "mp4"
+    @State private var isPreparingVideo = false
+    @State private var compressionProgress: Double = 0
     @State private var quotedEmbed: SharedPostPreview?
     @State private var visibility: PostVisibility = .public
     @FocusState private var focusedField: ComposerField?
@@ -29,12 +38,21 @@ struct PostComposerView: View {
         bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var hasVideo: Bool { uploadVideoURL != nil }
+
     private var canSubmit: Bool {
-        !trimmedBody.isEmpty || imageData != nil || appState.quotedSharePostID != nil
+        !trimmedBody.isEmpty
+            || imageData != nil
+            || hasVideo
+            || appState.quotedSharePostID != nil
     }
 
     private var canPostHere: Bool {
         appState.canPostToCountry(country)
+    }
+
+    private var compressionPercentText: String {
+        "\(Int((compressionProgress * 100).rounded()))%"
     }
 
     var body: some View {
@@ -81,7 +99,7 @@ struct PostComposerView: View {
                 }
             }
         }
-        .tint(Theme.accentBright)
+        .tint(Theme.ink)
         .task {
             await loadQuotedShare()
         }
@@ -90,6 +108,9 @@ struct PostComposerView: View {
         }
         .onChange(of: selectedPhoto) { _, item in
             Task { await loadSelectedPhoto(item) }
+        }
+        .onChange(of: selectedVideo) { _, item in
+            Task { await loadSelectedVideo(item) }
         }
         .onAppear {
             focusedField = .body
@@ -206,65 +227,169 @@ struct PostComposerView: View {
                 .tracking(1.2)
                 .foregroundStyle(Theme.inkMuted)
 
-            if let previewImage {
-                ZStack(alignment: .topTrailing) {
+            if isPreparingVideo {
+                preparingVideoCard
+            } else if hasVideo {
+                videoPreviewCard
+            } else if let previewImage {
+                photoPreviewCard(previewImage)
+            } else {
+                mediaPickers
+            }
+        }
+    }
+
+    private var mediaPickers: some View {
+        VStack(spacing: 10) {
+            PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                mediaPickerRow(
+                    icon: "photo.on.rectangle.angled",
+                    title: "Add a photo",
+                    subtitle: "High-resolution images look best in the feed."
+                )
+            }
+            .buttonStyle(.plain)
+
+            PhotosPicker(selection: $selectedVideo, matching: .videos) {
+                mediaPickerRow(
+                    icon: "video.badge.plus",
+                    title: "Add a video",
+                    subtitle: "Vertical clips work best in the feed."
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func mediaPickerRow(icon: String, title: String, subtitle: String) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundStyle(Theme.ink)
+                .frame(width: 48, height: 48)
+                .background(Theme.matteDeep, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 0.5)
+                )
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.ink)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(Theme.inkMuted)
+            }
+            Spacer()
+            Image(systemName: "plus")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(Theme.inkMuted)
+        }
+        .padding(16)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .stroke(Theme.border, lineWidth: 0.5)
+        )
+    }
+
+    private func photoPreviewCard(_ image: UIImage) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(maxWidth: .infinity)
+                .frame(height: 240)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 0.5)
+                )
+
+            clearMediaButton
+        }
+    }
+
+    private var preparingVideoCard: some View {
+        VStack(spacing: 12) {
+            if compressionProgress > 0 {
+                ProgressView(value: compressionProgress, total: 1)
+                    .tint(Theme.ink)
+                    .frame(maxWidth: 220)
+            } else {
+                ProgressView()
+                    .tint(Theme.ink)
+            }
+            Text(compressionProgress > 0 ? "Compressing video · \(compressionPercentText)" : "Preparing video…")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Theme.inkSecondary)
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 240)
+        .background(Theme.canvasMuted, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .stroke(Theme.border, lineWidth: 0.5)
+        )
+    }
+
+    private var videoPreviewCard: some View {
+        ZStack(alignment: .topTrailing) {
+            Group {
+                if let previewVideoURL {
+                    VideoPlayerView(
+                        url: previewVideoURL,
+                        posterURL: nil,
+                        adsEnabled: false,
+                        isActive: true,
+                        loops: true,
+                        muted: false,
+                        showsControls: true
+                    )
+                } else if let previewImage {
                     Image(uiImage: previewImage)
                         .resizable()
                         .scaledToFill()
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 240)
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                                .stroke(Theme.border, lineWidth: 0.5)
-                        )
+                } else {
+                    Color.clear
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 320)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                    .stroke(Theme.border, lineWidth: 0.5)
+            )
 
-                    Button {
-                        clearMedia()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.title2)
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(.white, Color.black.opacity(0.55))
-                            .padding(10)
-                    }
-                    .buttonStyle(.plain)
-                }
-            } else {
-                PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                    HStack(spacing: 14) {
-                        Image(systemName: "photo.on.rectangle.angled")
-                            .font(.title2)
-                            .foregroundStyle(Theme.ink)
-                            .frame(width: 48, height: 48)
-                            .background(Theme.matteDeep, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(Theme.border, lineWidth: 0.5)
-                            )
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Add a photo")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(Theme.ink)
-                            Text("High-resolution images look best in the feed.")
-                                .font(.caption)
-                                .foregroundStyle(Theme.inkMuted)
-                        }
-                        Spacer()
-                        Image(systemName: "plus")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(Theme.inkMuted)
-                    }
-                    .padding(16)
-                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                            .stroke(Theme.border, lineWidth: 0.5)
-                    )
-                }
-                .buttonStyle(.plain)
+            clearMediaButton
+
+            if preparedVideoSizeBytes > 0 {
+                Text(VideoCompressionService.formattedSize(preparedVideoSizeBytes))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Theme.ink)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Theme.surface.opacity(0.92), in: Capsule())
+                    .overlay(Capsule().stroke(Theme.border, lineWidth: 0.5))
+                    .padding(10)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             }
         }
+    }
+
+    private var clearMediaButton: some View {
+        Button {
+            clearMedia()
+        } label: {
+            Image(systemName: "xmark.circle.fill")
+                .font(.title2)
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white, Color.black.opacity(0.55))
+                .padding(10)
+        }
+        .buttonStyle(.plain)
     }
 
     private var publishBar: some View {
@@ -286,23 +411,22 @@ struct PostComposerView: View {
                     HStack(spacing: 8) {
                         if busy {
                             ProgressView()
-                                .tint(.white)
+                                .tint(Theme.paper)
                                 .scaleEffect(0.85)
                         }
                         Text(busy ? "Publishing…" : "Publish")
                             .font(.subheadline.weight(.semibold))
                     }
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.paper)
                     .padding(.horizontal, 22)
                     .padding(.vertical, 12)
                     .background(
-                        canSubmit && !busy && canPostHere ? Theme.accentBright : Theme.inkMuted,
+                        canSubmit && !busy && canPostHere && !isPreparingVideo ? Theme.ink : Theme.inkMuted,
                         in: Capsule()
                     )
-                    .shadow(color: Theme.accentBright.opacity(canSubmit && canPostHere ? 0.28 : 0), radius: 12, y: 6)
                 }
                 .buttonStyle(.plain)
-                .disabled(busy || !canSubmit || !canPostHere)
+                .disabled(busy || isPreparingVideo || !canSubmit || !canPostHere)
             }
             .padding(.horizontal, Theme.pagePadding)
             .padding(.vertical, 14)
@@ -325,6 +449,7 @@ struct PostComposerView: View {
 
     private func loadSelectedPhoto(_ item: PhotosPickerItem?) async {
         guard let item else { return }
+        clearVideoMedia()
         do {
             guard let raw = try await item.loadTransferable(type: Data.self) else { return }
             guard let image = UIImage(data: raw) else { return }
@@ -339,10 +464,93 @@ struct PostComposerView: View {
         }
     }
 
-    private func clearMedia() {
+    private func loadSelectedVideo(_ item: PhotosPickerItem?) async {
+        guard let item else { return }
+        isPreparingVideo = true
+        compressionProgress = 0
+        errorMessage = nil
+        clearPhotoMedia()
+        clearVideoMedia(keepPreparingFlag: true)
+        defer {
+            isPreparingVideo = false
+            compressionProgress = 0
+            selectedVideo = nil
+        }
+
+        do {
+            guard let picked = try await item.loadTransferable(type: PickedVideoFile.self) else {
+                throw MediaError.uploadFailed("Could not read video.")
+            }
+            let sourceURL = picked.url
+            let compressionHandler: @Sendable (Double) -> Void = { progress in
+                let value = progress
+                Task { @MainActor in
+                    compressionProgress = value
+                }
+            }
+            let preparedURL = try await VideoCompressionService.shared.prepareVideoForUpload(
+                sourceURL: sourceURL,
+                onProgress: compressionHandler
+            )
+            if preparedURL != sourceURL {
+                try? FileManager.default.removeItem(at: sourceURL)
+            }
+
+            let sizeBytes = (try? preparedURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            uploadVideoURL = preparedURL
+            previewVideoURL = preparedURL
+            preparedVideoSizeBytes = sizeBytes
+            videoMimeType = "video/mp4"
+            videoFileExtension = "mp4"
+            previewImage = await generateThumbnail(from: preparedURL)
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+            clearVideoMedia()
+        }
+    }
+
+    private func generateThumbnail(from url: URL) async -> UIImage? {
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        guard let cgImage = try? generator.copyCGImage(at: .zero, actualTime: nil) else { return nil }
+        return UIImage(cgImage: cgImage)
+    }
+
+    private func clearPhotoMedia() {
         imageData = nil
-        previewImage = nil
+        if uploadVideoURL == nil {
+            previewImage = nil
+        }
         selectedPhoto = nil
+    }
+
+    private func clearVideoMedia(keepPreparingFlag: Bool = false) {
+        if let uploadVideoURL {
+            try? FileManager.default.removeItem(at: uploadVideoURL)
+        }
+        if previewVideoURL != uploadVideoURL, let previewVideoURL {
+            try? FileManager.default.removeItem(at: previewVideoURL)
+        }
+        uploadVideoURL = nil
+        previewVideoURL = nil
+        preparedVideoSizeBytes = 0
+        videoMimeType = "video/mp4"
+        videoFileExtension = "mp4"
+        selectedVideo = nil
+        if imageData == nil {
+            previewImage = nil
+        }
+        if !keepPreparingFlag {
+            isPreparingVideo = false
+        }
+    }
+
+    private func clearMedia() {
+        clearPhotoMedia()
+        clearVideoMedia()
+        previewImage = nil
     }
 
     private func loadQuotedShare() async {
@@ -367,7 +575,16 @@ struct PostComposerView: View {
             errorMessage = MatteryaCopy.homeCountryOnlyPost
             return
         }
-        guard canSubmit else { return }
+        guard canSubmit, !isPreparingVideo else { return }
+
+        if let uploadVideoURL {
+            await submitVideo(
+                authorID: authorID,
+                cityName: profile.cityName,
+                videoURL: uploadVideoURL
+            )
+            return
+        }
 
         busy = true
         errorMessage = nil
@@ -406,6 +623,82 @@ struct PostComposerView: View {
             errorMessage = error.localizedDescription
         }
     }
+
+    /// Video in Post composer publishes via createReel (feed spark) with no Spark UI copy and no channel.
+    private func submitVideo(
+        authorID: String,
+        cityName: String?,
+        videoURL: URL
+    ) async {
+        busy = true
+        errorMessage = nil
+
+        guard FileManager.default.fileExists(atPath: videoURL.path) else {
+            busy = false
+            errorMessage = "Video file is missing. Select the video again."
+            return
+        }
+
+        let localCaption = trimmedBody
+        let localVideoURL = videoURL
+        let localMime = videoMimeType
+        let localExt = videoFileExtension
+        let localPreview = previewImage
+        let localCountry = country
+
+        let placeholderID = appState.beginFeedVideoUpload(
+            caption: localCaption,
+            previewImage: localPreview,
+            isHub: false
+        )
+        busy = false
+        dismiss()
+
+        let progressHandler: @Sendable (UploadProgress) -> Void = { progress in
+            Task { @MainActor in
+                HomeFeedStore.shared.updateVideoUpload(
+                    id: placeholderID,
+                    progress: max(0.05, progress.fractionCompleted * 0.9),
+                    phaseLabel: "Uploading"
+                )
+            }
+        }
+        let publishingHandler: @Sendable () -> Void = {
+            Task { @MainActor in
+                HomeFeedStore.shared.updateVideoUpload(
+                    id: placeholderID,
+                    progress: 0.94,
+                    phaseLabel: "Publishing"
+                )
+            }
+        }
+
+        do {
+            // Plain caption only — createReel stamps __spark__; no HubChannelPostMarker / hubSlug.
+            let post = try await PostsService.shared.createReel(
+                authorID: authorID,
+                body: localCaption,
+                countryName: localCountry.name,
+                countryCode: localCountry.iso,
+                cityName: cityName,
+                videoFileURL: localVideoURL,
+                mimeType: localMime,
+                fileExtension: localExt,
+                thumbnailImage: localPreview,
+                hubSlug: nil,
+                onUploadProgress: progressHandler,
+                onPublishing: publishingHandler
+            )
+            await MainActor.run {
+                appState.finishFeedVideoUpload(placeholderID: placeholderID, post: post)
+                onPosted?(post)
+            }
+        } catch {
+            await MainActor.run {
+                appState.failFeedVideoUpload(placeholderID: placeholderID, message: error.localizedDescription)
+            }
+        }
+    }
 }
 
 struct PostVisibilityControl: View {
@@ -431,16 +724,16 @@ struct PostVisibilityControl: View {
                             Text(label(for: option))
                                 .font(.caption.weight(.semibold))
                         }
-                        .foregroundStyle(visibility == option ? Theme.accentBright : Theme.inkSecondary)
+                        .foregroundStyle(visibility == option ? Theme.ink : Theme.inkSecondary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                         .background(
-                            visibility == option ? Theme.accentSoft : Theme.surface,
+                            visibility == option ? Theme.matteDeep : Theme.surface,
                             in: Capsule()
                         )
                         .overlay(
                             Capsule()
-                                .stroke(visibility == option ? Theme.accent.opacity(0.45) : Theme.border, lineWidth: 0.5)
+                                .stroke(visibility == option ? Theme.ink.opacity(0.35) : Theme.border, lineWidth: 0.5)
                         )
                     }
                     .buttonStyle(.plain)

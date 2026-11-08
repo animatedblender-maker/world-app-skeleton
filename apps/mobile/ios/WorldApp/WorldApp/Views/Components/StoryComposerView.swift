@@ -73,7 +73,7 @@ struct StoryComposerView: View {
                 }
             }
         }
-        .tint(Theme.accentBright)
+        .tint(Theme.ink)
         .onChange(of: selectedPhoto) { _, item in
             Task { await loadPhoto(item) }
         }
@@ -86,9 +86,13 @@ struct StoryComposerView: View {
         HStack(spacing: 14) {
             Image(systemName: "circle.dashed")
                 .font(.title2)
-                .foregroundStyle(Theme.accentBright)
+                .foregroundStyle(Theme.ink)
                 .frame(width: 48, height: 48)
-                .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(Theme.matteDeep, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 0.5)
+                )
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Sharing to Globe moments")
@@ -132,11 +136,11 @@ struct StoryComposerView: View {
                     VStack(spacing: 10) {
                         if compressionProgress > 0 {
                             ProgressView(value: compressionProgress, total: 1)
-                                .tint(Theme.accentBright)
+                                .tint(Theme.ink)
                                 .frame(maxWidth: 220)
                         } else {
                             ProgressView()
-                                .tint(Theme.accentBright)
+                                .tint(Theme.ink)
                         }
                         Text(compressionProgress > 0 ? "Compressing video · \(compressionPercentText)" : "Preparing video…")
                             .font(.subheadline.weight(.semibold))
@@ -168,7 +172,7 @@ struct StoryComposerView: View {
                     VStack(spacing: 18) {
                         Image(systemName: "photo.on.rectangle.angled")
                             .font(.system(size: 40, weight: .light))
-                            .foregroundStyle(Theme.accentBright)
+                            .foregroundStyle(Theme.ink)
                         Text("Pick a photo or video")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Theme.ink)
@@ -233,20 +237,19 @@ struct StoryComposerView: View {
                     HStack(spacing: 8) {
                         if busy {
                             ProgressView()
-                                .tint(.white)
+                                .tint(Theme.paper)
                                 .scaleEffect(0.85)
                         }
                         Text(busy ? "Sharing…" : "Share moment")
                             .font(.subheadline.weight(.semibold))
                     }
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.paper)
                     .padding(.horizontal, 22)
                     .padding(.vertical, 12)
                     .background(
-                        canSubmit && !busy && canPostHere ? Theme.accentBright : Theme.inkMuted,
+                        canSubmit && !busy && canPostHere ? Theme.ink : Theme.inkMuted,
                         in: Capsule()
                     )
-                    .shadow(color: Theme.accentBright.opacity(canSubmit && canPostHere ? 0.28 : 0), radius: 12, y: 6)
                 }
                 .buttonStyle(.plain)
                 .disabled(busy || isPreparingVideo || !canSubmit || !canPostHere)

@@ -262,27 +262,23 @@ struct YouTubeCompactRelatedRow: View {
 
 struct YouTubeExpandableDescription: View {
     let text: String
-    @State private var expanded = false
 
     var body: some View {
-        if text.isEmpty {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
             EmptyView()
         } else {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(text)
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.inkSecondary)
-                    .lineLimit(expanded ? nil : 3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                Button(expanded ? "Show less" : "Show more") {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        expanded.toggle()
-                    }
-                }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Theme.accentBright)
-            }
+            ExpandableBodyText(
+                text: trimmed,
+                collapsedLineLimit: 3,
+                font: .subheadline,
+                color: Theme.inkSecondary,
+                moreTitle: "See more",
+                lessTitle: "See less",
+                uiTextStyle: .subheadline,
+                buttonTint: Theme.ink,
+                expandedLineLimit: nil
+            )
             .padding(14)
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(

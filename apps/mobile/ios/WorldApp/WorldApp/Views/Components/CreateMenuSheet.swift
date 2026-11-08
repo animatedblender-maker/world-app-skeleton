@@ -315,7 +315,7 @@ struct AnonymousPostSpacePickerView: View {
     }
 }
 
-/// Matterya + create sheet (Post / Hubs video / Spark).
+/// Matterya + create sheet (Post / Hubs video). Video-in-Post publishes as a spark under the hood.
 private struct CreateMenuPanel: View {
     @Environment(AppState.self) private var appState
 
@@ -349,7 +349,7 @@ private struct CreateMenuPanel: View {
             VStack(spacing: 0) {
                 createRow(
                     title: "Post",
-                    subtitle: "Share an update",
+                    subtitle: "Text, photo, or video",
                     icon: "square.and.pencil"
                 ) {
                     Task { await appState.presentCreateSheet(.post) }
@@ -363,16 +363,6 @@ private struct CreateMenuPanel: View {
                 ) {
                     Task { await appState.presentHubVideoCreate() }
                 }
-
-                createRow(
-                    title: MatteryaCopy.spark,
-                    subtitle: MatteryaCopy.sparksOnHubs,
-                    icon: "sparkles"
-                ) {
-                    // Sparks also live on Hubs — require channel the same way.
-                    Task { await appState.presentHubSparkCreate() }
-                }
-                // Moments removed — no create entry.
             }
             .padding(.vertical, 6)
         }
@@ -406,8 +396,13 @@ private struct CreateMenuPanel: View {
             HStack(spacing: 14) {
                 Image(systemName: icon)
                     .font(.system(size: 20))
-                    .frame(width: 24)
-                    .foregroundStyle(Theme.accent)
+                    .foregroundStyle(Theme.ink)
+                    .frame(width: 44, height: 44)
+                    .background(Theme.matteDeep, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Theme.border, lineWidth: 0.5)
+                    )
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)

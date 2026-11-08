@@ -59,6 +59,8 @@ struct ReelComposerView: View {
     private var isReelAudience: Bool { audience == .sparks }
     private var isHubAudience: Bool { audience == .hubs }
     private var needsCategory: Bool { audience == .hubs || audience == .sparks }
+    /// Hubs video sheet: stay on channel long-form — no Sparks/Feed audience switch.
+    private var locksToHubs: Bool { publishToHubChannel && !publishAsReel }
 
     private var categoryChoices: [YouTubeHomeFilter] {
         YouTubeHomeFilter.hubCategories.filter { $0.hubSlug != nil }
@@ -97,7 +99,9 @@ struct ReelComposerView: View {
                     VStack(alignment: .leading, spacing: 22) {
                         composerHeader
                         previewSection
-                        audiencePicker
+                        if !locksToHubs {
+                            audiencePicker
+                        }
                         if needsCategory {
                             categoryPicker
                         }
@@ -131,7 +135,7 @@ struct ReelComposerView: View {
                 }
             }
         }
-        .tint(Theme.accentBright)
+        .tint(Theme.ink)
         .onAppear {
             if publishAsReel {
                 audience = .sparks
@@ -150,9 +154,9 @@ struct ReelComposerView: View {
         HStack(spacing: 14) {
             Image(systemName: isReelAudience ? "sparkles" : "film")
                 .font(.title2)
-                .foregroundStyle(Theme.accentBright)
+                .foregroundStyle(Theme.ink)
                 .frame(width: 48, height: 48)
-                .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(Theme.matteDeep, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(destinationHeadline)
@@ -299,11 +303,11 @@ struct ReelComposerView: View {
                     VStack(spacing: 12) {
                         if compressionProgress > 0 {
                             ProgressView(value: compressionProgress, total: 1)
-                                .tint(Theme.accentBright)
+                                .tint(Theme.ink)
                                 .frame(maxWidth: 220)
                         } else {
                             ProgressView()
-                                .tint(Theme.accentBright)
+                                .tint(Theme.ink)
                         }
                         Text(compressionProgress > 0 ? "Compressing video · \(compressionPercentText)" : "Preparing video…")
                             .font(.subheadline.weight(.semibold))
@@ -333,7 +337,7 @@ struct ReelComposerView: View {
                     VStack(spacing: 14) {
                         Image(systemName: "video.badge.plus")
                             .font(.system(size: 42, weight: .light))
-                            .foregroundStyle(Theme.accentBright)
+                            .foregroundStyle(Theme.ink)
                         Text("Choose one video")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Theme.ink)
@@ -439,20 +443,19 @@ struct ReelComposerView: View {
                     HStack(spacing: 8) {
                         if busy {
                             ProgressView()
-                                .tint(.white)
+                                .tint(Theme.paper)
                                 .scaleEffect(0.85)
                         }
-                        Text(busy ? "Working…" : (isReelAudience ? MatteryaCopy.publishSpark : MatteryaCopy.publishVideo))
+                        Text(busy ? "Working…" : MatteryaCopy.publishVideo)
                             .font(.subheadline.weight(.semibold))
                     }
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.paper)
                     .padding(.horizontal, 20)
                     .padding(.vertical, 12)
                     .background(
-                        canSubmit && !busy && canPostHere ? Theme.accentBright : Theme.inkMuted,
+                        canSubmit && !busy && canPostHere ? Theme.ink : Theme.inkMuted,
                         in: Capsule()
                     )
-                    .shadow(color: Theme.accentBright.opacity(canSubmit && canPostHere ? 0.28 : 0), radius: 12, y: 6)
                 }
                 .buttonStyle(.plain)
                 .disabled(busy || isPreparingVideo || !canSubmit || !canPostHere)
