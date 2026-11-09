@@ -29,9 +29,18 @@ final class AnonymousStore {
     /// Keep painted For you warm across quick hops — 60s forced constant network weight.
     private let feedCacheMaxAge: TimeInterval = 20 * 60
     private let wildeSeenKey = "matterya.anonymous.wildeSeen.v1"
-    private let welcomeLetterSeenKey = "matterya.anonymous.welcomeLetterSeen.v1"
-    private let spacesOnboardingSeenKey = "matterya.anonymous.spacesOnboardingSeen.v1"
+    /// Legacy device-global flags (pre per-profile). Never inherit these for a new claim.
+    private let welcomeLetterSeenKeyLegacy = "matterya.anonymous.welcomeLetterSeen.v1"
+    private let spacesOnboardingSeenKeyLegacy = "matterya.anonymous.spacesOnboardingSeen.v1"
     private let pinnedUsernameKey = "matterya.anonymous.pinnedUsername.v1"
+
+    private func welcomeLetterSeenKey(for profileId: String) -> String {
+        "matterya.anonymous.welcomeLetterSeen.v2.\(profileId)"
+    }
+
+    private func spacesOnboardingSeenKey(for profileId: String) -> String {
+        "matterya.anonymous.spacesOnboardingSeen.v2.\(profileId)"
+    }
 
     var phase: AnonymousPhase = .loading
     var session: AnonymousSession = .empty
@@ -389,6 +398,12 @@ final class AnonymousStore {
             let profile = try await AnonymousService.claimProfile(username: candidate)
             // Pin the handle we claimed — Me must not drift to a later suggestion/regen.
             UserDefaults.standard.set(profile.username, forKey: pinnedUsernameKey)
+            // Drop device-global onboarding flags before any applySession — a prior
+            // Masquerade identity must not skip welcome / recommended Spaces.
+            UserDefaults.standard.removeObject(forKey: welcomeLetterSeenKeyLegacy)
+            UserDefaults.standard.removeObject(forKey: spacesOnboardingSeenKeyLegacy)
+            UserDefaults.standard.removeObject(forKey: welcomeLetterSeenKey(for: profile.id))
+            UserDefaults.standard.removeObject(forKey: spacesOnboardingSeenKey(for: profile.id))
             var next = session
             next.profile = profile
             next.suggestedUsername = profile.username
@@ -408,17 +423,8 @@ final class AnonymousStore {
                 applySession(patched, animated: false)
                 cacheSession(patched)
             }
-            // New name → welcome letter → Space picker → Feed.
-            if !hasCompletedWelcomeLetter {
-                withAnimation(MatteryaMotion.snappy) { phase = .welcomeLetter }
-            } else if !hasCompletedSpacesOnboarding {
-                withAnimation(MatteryaMotion.snappy) { phase = .pickSpaces }
-                await loadSpaces(filter: .forYou, force: true)
-                await loadSpaces(filter: .popular, force: true)
-            } else {
-                await loadFeed(force: true)
-                await loadSpaces(filter: .joined, force: true)
-            }
+            // New claim → welcome letter → recommended Spaces (never jump to Feed).
+            withAnimation(MatteryaMotion.snappy) { phase = .welcomeLetter }
             lastError = nil
         } catch let err as AnonymousError {
             shouldToastLastError = true
@@ -439,23 +445,50 @@ final class AnonymousStore {
     }
 
     var hasCompletedWelcomeLetter: Bool {
-        UserDefaults.standard.bool(forKey: welcomeLetterSeenKey)
+        hasCompletedWelcomeLetter(for: session.profile?.id)
     }
 
     var hasCompletedSpacesOnboarding: Bool {
-        UserDefaults.standard.bool(forKey: spacesOnboardingSeenKey)
+        hasCompletedSpacesOnboarding(for: session.profile?.id)
+    }
+
+    private func hasCompletedWelcomeLetter(for profileId: String?) -> Bool {
+        guard let id = profileId, !id.isEmpty else { return false }
+        let key = welcomeLetterSeenKey(for: id)
+        if UserDefaults.standard.object(forKey: key) != nil {
+            return UserDefaults.standard.bool(forKey: key)
+        }
+        // One-time migrate for the continuing profile on this device only.
+        guard UserDefaults.standard.bool(forKey: welcomeLetterSeenKeyLegacy) else { return false }
+        UserDefaults.standard.set(true, forKey: key)
+        return true
+    }
+
+    private func hasCompletedSpacesOnboarding(for profileId: String?) -> Bool {
+        guard let id = profileId, !id.isEmpty else { return false }
+        let key = spacesOnboardingSeenKey(for: id)
+        if UserDefaults.standard.object(forKey: key) != nil {
+            return UserDefaults.standard.bool(forKey: key)
+        }
+        guard UserDefaults.standard.bool(forKey: spacesOnboardingSeenKeyLegacy) else { return false }
+        UserDefaults.standard.set(true, forKey: key)
+        return true
     }
 
     func completeWelcomeLetter() {
-        UserDefaults.standard.set(true, forKey: welcomeLetterSeenKey)
-        if !hasCompletedSpacesOnboarding {
-            withAnimation(MatteryaMotion.snappy) { phase = .pickSpaces }
-            Task {
-                await loadSpaces(filter: .forYou, force: true)
-                await loadSpaces(filter: .popular, force: true)
+        if let id = session.profile?.id, !id.isEmpty {
+            UserDefaults.standard.set(true, forKey: welcomeLetterSeenKey(for: id))
+        }
+        // Always offer recommended Spaces after the letter for this profile.
+        withAnimation(MatteryaMotion.snappy) { phase = .pickSpaces }
+        Task {
+            await loadSpaces(filter: .forYou, force: true)
+            await loadSpaces(filter: .popular, force: true)
+            await loadSpaces(filter: .free, force: true)
+            // If For you is thin for a brand-new profile, popular/free still fill the picker.
+            if spacesOnboardingCandidates.isEmpty {
+                await loadSpaces(filter: .newest, force: true)
             }
-        } else {
-            completeSpacesOnboarding()
         }
     }
 
@@ -464,7 +497,12 @@ final class AnonymousStore {
     var spacesOnboardingCandidates: [AnonymousSpace] {
         var seen = Set<String>()
         var out: [AnonymousSpace] = []
-        for space in (spacesByFilter[.forYou] ?? []) + (spacesByFilter[.popular] ?? []) + (spacesByFilter[.free] ?? []) {
+        let pools =
+            (spacesByFilter[.forYou] ?? [])
+            + (spacesByFilter[.popular] ?? [])
+            + (spacesByFilter[.free] ?? [])
+            + (spacesByFilter[.newest] ?? [])
+        for space in pools {
             guard !space.isPaid else { continue }
             guard seen.insert(space.id).inserted else { continue }
             out.append(space)
@@ -474,7 +512,12 @@ final class AnonymousStore {
     }
 
     func completeSpacesOnboarding() {
-        UserDefaults.standard.set(true, forKey: spacesOnboardingSeenKey)
+        if let id = session.profile?.id, !id.isEmpty {
+            UserDefaults.standard.set(true, forKey: spacesOnboardingSeenKey(for: id))
+        }
+        // Stop reading legacy globals so a later re-claim cannot skip again.
+        UserDefaults.standard.removeObject(forKey: welcomeLetterSeenKeyLegacy)
+        UserDefaults.standard.removeObject(forKey: spacesOnboardingSeenKeyLegacy)
         withAnimation(MatteryaMotion.snappy) { phase = .ready }
         Task {
             await loadFeed(force: true)
@@ -1511,9 +1554,9 @@ final class AnonymousStore {
             next = .needAttest
         } else if remote.profile == nil {
             next = .needUsername
-        } else if !UserDefaults.standard.bool(forKey: welcomeLetterSeenKey) {
+        } else if !hasCompletedWelcomeLetter(for: remote.profile?.id) {
             next = .welcomeLetter
-        } else if !UserDefaults.standard.bool(forKey: spacesOnboardingSeenKey) {
+        } else if !hasCompletedSpacesOnboarding(for: remote.profile?.id) {
             next = .pickSpaces
         } else {
             next = .ready

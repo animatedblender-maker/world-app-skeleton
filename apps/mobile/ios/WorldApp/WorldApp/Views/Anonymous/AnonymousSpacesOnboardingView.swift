@@ -16,6 +16,10 @@ struct AnonymousSpacesOnboardingView: View {
             if store.spacesOnboardingCandidates.isEmpty {
                 await store.loadSpaces(filter: .forYou, force: true)
                 await store.loadSpaces(filter: .popular, force: true)
+                await store.loadSpaces(filter: .free, force: true)
+                if store.spacesOnboardingCandidates.isEmpty {
+                    await store.loadSpaces(filter: .newest, force: true)
+                }
             }
         }
     }
