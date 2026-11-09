@@ -143,6 +143,12 @@ import {
 import { hybridSearch } from './recommendation/mind-search.js';
 import { suggestPeople } from './recommendation/mind-people-discovery.js';
 import { getCreatorInsights } from './recommendation/mind-creator-insights.js';
+import {
+  getStudioChannel,
+  getStudioDashboard,
+  getStudioVideoAnalytics,
+  getStudioVideosPage,
+} from './studio/studio.service.js';
 import { worldCountryFeed } from './recommendation/mind-world.js';
 import { bustSessionCache } from './recommendation/mind-session.js';
 import { handlePosterBatch, handlePosterGet } from './media/poster-route.js';
@@ -1242,6 +1248,70 @@ app.get('/v1/creator/insights', async (req: Request, res: Response) => {
     return res.json({ ok: true, insights });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message ?? 'creator_insights_failed' });
+  }
+});
+
+// ─── Matterya Studio (Hubs creator console) ───────────────────────────────────
+// Owner-only. Web Studio UI consumes these; iOS lite later.
+
+app.get('/v1/studio/channel', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    const payload = await getStudioChannel(user.id);
+    return res.json({ ok: true, ...payload });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'studio_channel_failed' });
+  }
+});
+
+app.get('/v1/studio/dashboard', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    const result = await getStudioDashboard(user.id, req.query.range);
+    if ('error' in result) {
+      return res.status(result.status).json({ error: result.error });
+    }
+    return res.json({ ok: true, dashboard: result });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'studio_dashboard_failed' });
+  }
+});
+
+app.get('/v1/studio/videos', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    const limit = Number(req.query.limit);
+    const result = await getStudioVideosPage(user.id, {
+      range: req.query.range,
+      cursor: typeof req.query.cursor === 'string' ? req.query.cursor : null,
+      limit: Number.isFinite(limit) ? limit : 30,
+      sort: typeof req.query.sort === 'string' ? req.query.sort : 'views',
+    });
+    if ('error' in result) {
+      return res.status(result.status).json({ error: result.error });
+    }
+    return res.json({ ok: true, ...result });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'studio_videos_failed' });
+  }
+});
+
+app.get('/v1/studio/videos/:id/analytics', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  const id = String(req.params.id || '').trim();
+  if (!id) return res.status(400).json({ error: 'video_id_required' });
+  try {
+    const result = await getStudioVideoAnalytics(user.id, id, req.query.range);
+    if ('error' in result) {
+      return res.status(result.status).json({ error: result.error });
+    }
+    return res.json({ ok: true, analytics: result });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'studio_video_analytics_failed' });
   }
 });
 
