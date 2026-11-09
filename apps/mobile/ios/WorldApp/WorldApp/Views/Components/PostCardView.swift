@@ -321,18 +321,16 @@ struct AvatarView: View {
         .frame(width: size, height: size)
     }
 
-    /// Matterya standard illustration when the profile has no (usable) avatar URL.
+    /// Neutral person silhouette when the profile has no (usable) avatar URL.
     private var fallback: some View {
         ZStack {
             HandDrawnPictureFrame(seed: seed + "-fill")
                 .fill(Theme.matteDeep)
-            Image("DefaultAvatar")
-                .resizable()
-                .scaledToFill()
-                .frame(width: size * 0.78, height: size * 0.78)
-                .accessibilityLabel("Matterya default avatar")
+            Image(systemName: "person.fill")
+                .font(.system(size: size * 0.36, weight: .medium))
+                .foregroundStyle(Theme.inkMuted)
+                .accessibilityLabel("Default profile avatar")
         }
-        .clipped()
     }
 }
 
