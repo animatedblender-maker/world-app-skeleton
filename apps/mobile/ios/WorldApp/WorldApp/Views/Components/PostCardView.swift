@@ -321,19 +321,18 @@ struct AvatarView: View {
         .frame(width: size, height: size)
     }
 
+    /// Matterya standard illustration when the profile has no (usable) avatar URL.
     private var fallback: some View {
         ZStack {
             HandDrawnPictureFrame(seed: seed + "-fill")
-                .fill(Theme.canvasMuted)
-            Text(initials)
-                .font(.system(size: size * 0.30, weight: .semibold, design: .serif))
-                .foregroundStyle(Theme.inkSecondary)
+                .fill(Theme.matteDeep)
+            Image("DefaultAvatar")
+                .resizable()
+                .scaledToFill()
+                .frame(width: size * 0.78, height: size * 0.78)
+                .accessibilityLabel("Matterya default avatar")
         }
-    }
-
-    private var initials: String {
-        let cleaned = seed.replacingOccurrences(of: "user_", with: "")
-        return String(cleaned.prefix(1)).uppercased()
+        .clipped()
     }
 }
 
