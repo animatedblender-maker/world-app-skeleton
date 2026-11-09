@@ -76,6 +76,7 @@ type LibrarySection = 'posts' | 'savedPosts' | 'savedVideos' | 'savedReels';
           <div class="actions">
             <button type="button" class="text-pill" (click)="openEdit()">Edit profile</button>
             <button type="button" class="text-pill" (click)="openSettings()">Settings</button>
+            <button type="button" class="text-pill emphasized" (click)="openStudio()">Studio</button>
           </div>
 
           <p class="bio" *ngIf="bio">{{ bio }}</p>
@@ -490,6 +491,10 @@ export class OwnerProfilePageComponent implements OnInit {
 
   openSettings(): void {
     void this.router.navigate(['/settings']);
+  }
+
+  openStudio(): void {
+    void this.router.navigate(['/studio']);
   }
 
   openMyChannel(): void {

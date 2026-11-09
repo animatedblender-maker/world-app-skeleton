@@ -139,6 +139,36 @@ export const routes: Routes = [
       import('./pages/ads.page').then((m) => m.AdsPageComponent),
   },
   {
+    path: 'studio',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/studio/studio-shell.page').then((m) => m.StudioShellPageComponent),
+    children: [
+      {
+        path: '',
+        loadComponent: () =>
+          import('./pages/studio/studio-dashboard.page').then(
+            (m) => m.StudioDashboardPageComponent
+          ),
+      },
+      {
+        path: 'content',
+        loadComponent: () =>
+          import('./pages/studio/studio-content.page').then((m) => m.StudioContentPageComponent),
+      },
+      {
+        path: 'content/:id',
+        loadComponent: () =>
+          import('./pages/studio/studio-video.page').then((m) => m.StudioVideoPageComponent),
+      },
+      {
+        path: 'audience',
+        loadComponent: () =>
+          import('./pages/studio/studio-audience.page').then((m) => m.StudioAudiencePageComponent),
+      },
+    ],
+  },
+  {
     path: 'reels/:country',
     canActivate: [authGuard],
     loadComponent: () =>

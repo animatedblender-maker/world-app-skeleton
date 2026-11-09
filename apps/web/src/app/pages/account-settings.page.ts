@@ -91,6 +91,15 @@ import { ProfileService, type Profile } from '../core/services/profile.service';
         </section>
 
         <section class="section">
+          <div class="section-title">Creator</div>
+          <button type="button" class="action-row" (click)="openStudio()">
+            <span>Matterya Studio</span>
+            <span class="chev">›</span>
+          </button>
+          <p class="footer">Hubs analytics for your channel — dashboard, content, audience.</p>
+        </section>
+
+        <section class="section">
           <div class="section-title">Privacy</div>
           <button type="button" class="action-row" (click)="openPrivacy()">
             <span>Data &amp; privacy</span>
@@ -442,6 +451,10 @@ export class AccountSettingsPageComponent implements OnInit {
 
   openPrivacy(): void {
     void this.router.navigate(['/privacy']);
+  }
+
+  openStudio(): void {
+    void this.router.navigate(['/studio']);
   }
 
   async logout(): Promise<void> {
