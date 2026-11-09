@@ -183,6 +183,13 @@ struct ProfileView: View {
                     Text(MatteryaCopy.yourChannelOnHubs)
                 }
                 .buttonStyle(MatteryaTextPillButtonStyle(emphasized: true))
+
+                Button {
+                    appState.navigate(to: .studio)
+                } label: {
+                    Text("Studio")
+                }
+                .buttonStyle(MatteryaTextPillButtonStyle())
             }
         }
         .padding(.horizontal, Theme.pagePadding)

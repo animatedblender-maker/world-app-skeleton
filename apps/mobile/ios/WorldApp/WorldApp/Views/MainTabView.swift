@@ -387,6 +387,8 @@ struct MainTabView: View {
             EditProfileView().screenBackground()
         case .settings:
             SettingsView().screenBackground()
+        case .studio:
+            StudioRootView().screenBackground()
         case .premium:
             SettingsView().screenBackground()
         case .playWatch(let id):

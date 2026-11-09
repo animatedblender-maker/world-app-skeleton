@@ -2487,6 +2487,7 @@ enum AppDestination: Hashable, Identifiable {
     case ads
     case editProfile
     case settings
+    case studio
     case premium
     case conversation(String)
     case letters
@@ -2508,6 +2509,7 @@ enum AppDestination: Hashable, Identifiable {
         case .ads: "ads"
         case .editProfile: "edit-profile"
         case .settings: "settings"
+        case .studio: "studio"
         case .premium: "premium"
         case .conversation(let id): "conversation-\(id)"
         case .letters: "letters"

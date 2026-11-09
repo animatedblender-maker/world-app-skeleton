@@ -1005,7 +1005,7 @@ final class AppState {
             openPlayChannel(username: username)
         case .playChannelID(let authorID):
             openPlayChannel(authorID: authorID)
-        case .people, .ads, .editProfile, .settings, .premium, .search, .letters, .letterThread:
+        case .people, .ads, .editProfile, .settings, .studio, .premium, .search, .letters, .letterThread:
             selectedTab = .feed
             navigationPath.removeAll()
             navigationPath.append(destination)
@@ -2254,7 +2254,7 @@ final class AppState {
     func openFromMenu(_ destination: AppDestination) {
         showAppMenu = false
         switch destination {
-        case .people, .ads, .editProfile, .settings, .premium, .search:
+        case .people, .ads, .editProfile, .settings, .studio, .premium, .search:
             selectedTab = .feed
             navigationPath.removeAll()
             navigationPath.append(destination)

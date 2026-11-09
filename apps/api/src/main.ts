@@ -1252,7 +1252,7 @@ app.get('/v1/creator/insights', async (req: Request, res: Response) => {
 });
 
 // ─── Matterya Studio (Hubs creator console) ───────────────────────────────────
-// Owner-only. Web Studio UI consumes these; iOS lite later.
+// Owner-only. Web Studio + iOS Studio lite consume these.
 
 app.get('/v1/studio/channel', async (req: Request, res: Response) => {
   const user = await getUserFromRequest(req);

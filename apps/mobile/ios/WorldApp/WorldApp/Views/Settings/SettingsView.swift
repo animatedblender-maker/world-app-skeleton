@@ -45,6 +45,15 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.plain)
 
+                    NavigationLink {
+                        StudioRootView()
+                    } label: {
+                        settingsActionLabel("Studio", showsChevron: true)
+                            .matteryaSettingsCard()
+                    }
+                    .buttonStyle(.plain)
+                    .tint(Theme.ink)
+
                     Button {
                         currentPassword = ""
                         newPassword = ""
