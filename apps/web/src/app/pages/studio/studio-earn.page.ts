@@ -33,19 +33,40 @@ import {
 
     <p class="error" *ngIf="error">{{ error }}</p>
     <p class="hint" *ngIf="loading">Loading Earn…</p>
+    <p class="hint" *ngIf="actionMsg">{{ actionMsg }}</p>
 
     <ng-container *ngIf="earn as e">
       <section class="status" [attr.data-status]="e.status">
-        <div class="status-kicker">{{ e.payoutsLive ? 'Live' : 'Preview' }}</div>
+        <div class="status-kicker">{{ e.payoutsLive ? 'Live' : 'Ledger live · withdrawals closed' }}</div>
         <h2>{{ e.statusLabel }}</h2>
         <p>{{ e.statusDetail }}</p>
+        <button
+          type="button"
+          class="btn"
+          *ngIf="e.monetization?.canApply"
+          [disabled]="acting"
+          (click)="apply()"
+        >
+          {{ acting ? 'Applying…' : 'Apply for Earn' }}
+        </button>
       </section>
 
       <section class="kpis">
         <div class="kpi highlight">
-          <div class="lab">{{ e.estimate.label }}</div>
-          <div class="val">{{ studio.formatMoneyUsd(e.estimate.estimatedRevenueUsd) }}</div>
-          <div class="sub">Stub RPM {{ studio.formatMoneyUsd(e.estimate.rpmUsd) }} · {{ e.estimate.basis }}</div>
+          <div class="lab">Available balance</div>
+          <div class="val">{{ studio.formatMoneyUsd(e.balance?.availableUsd) }}</div>
+          <div class="sub">
+            Pending {{ studio.formatMoneyUsd(e.balance?.pendingUsd) }} · Min payout
+            {{ studio.formatMoneyUsd(e.monetization?.minPayoutUsd) }}
+          </div>
+        </div>
+        <div class="kpi">
+          <div class="lab">Lifetime earned</div>
+          <div class="val">{{ studio.formatMoneyUsd(e.balance?.lifetimeEarnedUsd) }}</div>
+        </div>
+        <div class="kpi">
+          <div class="lab">Lifetime paid</div>
+          <div class="val">{{ studio.formatMoneyUsd(e.balance?.lifetimePaidUsd) }}</div>
         </div>
         <div class="kpi">
           <div class="lab">Views</div>
@@ -61,7 +82,14 @@ import {
         </div>
       </section>
 
-      <p class="disclaimer">{{ e.estimate.disclaimer }}</p>
+      <section class="panel">
+        <div class="panel-title">{{ e.estimate.label }}</div>
+        <div class="estimate-val">{{ studio.formatMoneyUsd(e.estimate.estimatedRevenueUsd) }}</div>
+        <div class="meta">
+          Stub RPM {{ studio.formatMoneyUsd(e.estimate.rpmUsd) }} · {{ e.estimate.basis }}
+        </div>
+        <p class="disclaimer">{{ e.estimate.disclaimer }}</p>
+      </section>
 
       <section class="panel">
         <div class="panel-title">Eligibility checklist</div>
@@ -72,6 +100,35 @@ import {
             <div class="check-detail">{{ item.detail }}</div>
           </div>
         </div>
+      </section>
+
+      <section class="panel" *ngIf="e.payouts?.length">
+        <div class="panel-title">Payout history</div>
+        <div class="row" *ngFor="let p of e.payouts">
+          <div>
+            <div class="check-label">{{ studio.formatMoneyUsd(p.amountUsd) }}</div>
+            <div class="check-detail">{{ p.state }} · {{ p.createdAt | date: 'mediumDate' }}</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" *ngIf="e.ledger?.length">
+        <div class="panel-title">Ledger</div>
+        <div class="row" *ngFor="let row of e.ledger">
+          <div>
+            <div class="check-label">
+              {{ row.entryType }} · {{ studio.formatMoneyUsd(row.amountUsd) }}
+            </div>
+            <div class="check-detail">
+              {{ row.memo || '—' }} · {{ row.createdAt | date: 'mediumDate' }}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" *ngIf="!e.payouts?.length && !e.ledger?.length">
+        <div class="panel-title">Payouts &amp; ledger</div>
+        <p>No payouts or ledger credits yet. Balances stay at $0 until ads revshare credits your channel.</p>
       </section>
 
       <div class="grid">
@@ -145,7 +202,9 @@ import {
         padding: 18px 20px;
         margin-bottom: 16px;
       }
-      .status[data-status='ready_when_live'] {
+      .status[data-status='ready_when_live'],
+      .status[data-status='live'],
+      .status[data-status='approved'] {
         border-color: #2c2825;
       }
       .status-kicker {
@@ -160,7 +219,7 @@ import {
         letter-spacing: -0.02em;
       }
       .status p {
-        margin: 0;
+        margin: 0 0 12px;
         color: var(--m-ink-secondary, #5c564f);
         line-height: 1.45;
       }
@@ -200,10 +259,16 @@ import {
         font-size: 12px;
         color: var(--m-ink-muted, #948b82);
       }
+      .estimate-val {
+        font-size: 22px;
+        font-weight: 650;
+        letter-spacing: -0.02em;
+        margin-bottom: 6px;
+      }
       .disclaimer {
         font-size: 12px;
         color: var(--m-ink-muted, #948b82);
-        margin: 0 0 18px;
+        margin: 10px 0 0;
         line-height: 1.45;
       }
       .panel {
@@ -222,13 +287,15 @@ import {
         color: var(--m-ink-secondary, #5c564f);
         line-height: 1.45;
       }
-      .check {
+      .check,
+      .row {
         display: flex;
         gap: 12px;
         padding: 10px 0;
         border-top: 0.5px solid var(--m-border, #ddd8d1);
       }
-      .check:first-of-type {
+      .check:first-of-type,
+      .row:first-of-type {
         border-top: none;
         padding-top: 0;
       }
@@ -266,10 +333,16 @@ import {
         text-decoration: none;
         background: var(--m-ink, #2c2825);
         color: var(--m-paper, #f8f6f2);
+        border: none;
         border-radius: 999px;
         padding: 10px 14px;
         font-weight: 600;
         font-size: 13px;
+        cursor: pointer;
+      }
+      .btn:disabled {
+        opacity: 0.55;
+        cursor: default;
       }
       .meta {
         font-size: 13px;
@@ -288,7 +361,9 @@ export class StudioEarnPageComponent implements OnInit {
   range: StudioRange = '28d';
   earn: StudioEarn | null = null;
   loading = true;
+  acting = false;
   error = '';
+  actionMsg = '';
 
   constructor(public studio: StudioService) {}
 
@@ -312,6 +387,22 @@ export class StudioEarnPageComponent implements OnInit {
       this.error = e?.message === 'channel_required' ? 'Create a Hubs channel to open Earn.' : String(e?.message || e);
     } finally {
       this.loading = false;
+    }
+  }
+
+  async apply(): Promise<void> {
+    if (this.acting) return;
+    this.acting = true;
+    this.actionMsg = '';
+    this.error = '';
+    try {
+      await this.studio.applyEarn();
+      this.actionMsg = 'Application submitted.';
+      await this.load();
+    } catch (e: any) {
+      this.error = String(e?.message || e);
+    } finally {
+      this.acting = false;
     }
   }
 }

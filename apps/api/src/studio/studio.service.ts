@@ -644,12 +644,23 @@ async function loadRetentionBuckets(
   }
 }
 
-// ─── Earn (preview — no live payouts yet) ────────────────────────────────────
+// ─── Earn (ledger + balances; withdrawals gated by STUDIO_PAYOUTS_LIVE) ───────
 
 /** Stub RPM used only for clearly labeled estimates until ads revshare ships. */
 const EARN_ESTIMATE_RPM_USD = 1.5;
 const EARN_VIEWS_GATE = 1000;
 const EARN_VIDEOS_GATE = 1;
+const EARN_MIN_PAYOUT_USD = 50;
+const EARN_MIN_PAYOUT_MINOR = EARN_MIN_PAYOUT_USD * 100;
+
+export type StudioMonetizationState =
+  | 'not_applied'
+  | 'pending'
+  | 'approved'
+  | 'payouts_enabled'
+  | 'rejected'
+  | 'hold'
+  | 'disabled';
 
 export type StudioEarnChecklistItem = {
   id: string;
@@ -658,16 +669,56 @@ export type StudioEarnChecklistItem = {
   detail: string;
 };
 
+export type StudioEarnPayoutRow = {
+  id: string;
+  amountUsd: number;
+  currency: 'USD';
+  state: string;
+  createdAt: string;
+  paidAt: string | null;
+};
+
+export type StudioEarnLedgerRow = {
+  id: string;
+  entryType: string;
+  amountUsd: number;
+  currency: 'USD';
+  memo: string;
+  createdAt: string;
+};
+
 export type StudioEarn = {
   range: StudioRange;
   rangeDays: number;
   channelId: string;
-  /** Always false until Matterya opens creator payouts. */
+  /** True only when STUDIO_PAYOUTS_LIVE is enabled on the API. */
   payoutsLive: boolean;
-  status: 'preview' | 'on_track' | 'ready_when_live';
+  status:
+    | 'preview'
+    | 'on_track'
+    | 'ready_when_live'
+    | 'pending_review'
+    | 'approved'
+    | 'live'
+    | 'hold';
   statusLabel: string;
   statusDetail: string;
   checklist: StudioEarnChecklistItem[];
+  monetization: {
+    state: StudioMonetizationState;
+    canApply: boolean;
+    appliedAt: string | null;
+    minPayoutUsd: number;
+  };
+  balance: {
+    currency: 'USD';
+    availableUsd: number;
+    pendingUsd: number;
+    lifetimeEarnedUsd: number;
+    lifetimePaidUsd: number;
+  };
+  payouts: StudioEarnPayoutRow[];
+  ledger: StudioEarnLedgerRow[];
   metrics: {
     views: number;
     impressions: number;
@@ -698,6 +749,176 @@ export type StudioEarn = {
   note: string;
 };
 
+function studioPayoutsLive(): boolean {
+  const v = String(process.env.STUDIO_PAYOUTS_LIVE ?? '')
+    .trim()
+    .toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
+function minorToUsd(minor: number): number {
+  return Math.round((Number(minor) || 0)) / 100;
+}
+
+async function ensureEarnBalanceRow(channelId: string): Promise<void> {
+  await pool.query(
+    `
+    insert into public.studio_earn_balances (channel_id)
+    values ($1::uuid)
+    on conflict (channel_id) do nothing
+    `,
+    [channelId]
+  );
+}
+
+async function loadMonetization(
+  channelId: string,
+  ownerUserId: string
+): Promise<{ state: StudioMonetizationState; appliedAt: string | null }> {
+  try {
+    const { rows } = await pool.query<{
+      state: string;
+      applied_at: string | null;
+    }>(
+      `
+      select state, applied_at::text as applied_at
+      from public.studio_creator_monetization
+      where channel_id = $1::uuid
+      limit 1
+      `,
+      [channelId]
+    );
+    const row = rows[0];
+    if (!row) return { state: 'not_applied', appliedAt: null };
+    const state = (row.state || 'not_applied') as StudioMonetizationState;
+    return { state, appliedAt: row.applied_at };
+  } catch (err: any) {
+    // Table missing until migration applied — treat as not_applied.
+    if (String(err?.message || '').includes('studio_creator_monetization')) {
+      return { state: 'not_applied', appliedAt: null };
+    }
+    throw err;
+  }
+}
+
+async function loadBalance(channelId: string): Promise<{
+  availableUsd: number;
+  pendingUsd: number;
+  lifetimeEarnedUsd: number;
+  lifetimePaidUsd: number;
+}> {
+  try {
+    await ensureEarnBalanceRow(channelId);
+    const { rows } = await pool.query<{
+      available_minor: number;
+      pending_minor: number;
+      lifetime_earned_minor: number;
+      lifetime_paid_minor: number;
+    }>(
+      `
+      select available_minor, pending_minor, lifetime_earned_minor, lifetime_paid_minor
+      from public.studio_earn_balances
+      where channel_id = $1::uuid
+      limit 1
+      `,
+      [channelId]
+    );
+    const row = rows[0];
+    return {
+      availableUsd: minorToUsd(row?.available_minor ?? 0),
+      pendingUsd: minorToUsd(row?.pending_minor ?? 0),
+      lifetimeEarnedUsd: minorToUsd(row?.lifetime_earned_minor ?? 0),
+      lifetimePaidUsd: minorToUsd(row?.lifetime_paid_minor ?? 0),
+    };
+  } catch (err: any) {
+    if (String(err?.message || '').includes('studio_earn_balances')) {
+      return {
+        availableUsd: 0,
+        pendingUsd: 0,
+        lifetimeEarnedUsd: 0,
+        lifetimePaidUsd: 0,
+      };
+    }
+    throw err;
+  }
+}
+
+async function loadPayouts(channelId: string, limit = 20): Promise<StudioEarnPayoutRow[]> {
+  try {
+    const { rows } = await pool.query<{
+      id: string;
+      amount_minor: number;
+      currency: string;
+      state: string;
+      created_at: string;
+      paid_at: string | null;
+    }>(
+      `
+      select id::text as id,
+             amount_minor,
+             currency,
+             state,
+             created_at::text as created_at,
+             paid_at::text as paid_at
+      from public.studio_earn_payouts
+      where channel_id = $1::uuid
+      order by created_at desc
+      limit $2
+      `,
+      [channelId, limit]
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      amountUsd: minorToUsd(r.amount_minor),
+      currency: 'USD' as const,
+      state: r.state,
+      createdAt: r.created_at,
+      paidAt: r.paid_at,
+    }));
+  } catch (err: any) {
+    if (String(err?.message || '').includes('studio_earn_payouts')) return [];
+    throw err;
+  }
+}
+
+async function loadLedger(channelId: string, limit = 20): Promise<StudioEarnLedgerRow[]> {
+  try {
+    const { rows } = await pool.query<{
+      id: string;
+      entry_type: string;
+      amount_minor: number;
+      currency: string;
+      memo: string;
+      created_at: string;
+    }>(
+      `
+      select id::text as id,
+             entry_type,
+             amount_minor,
+             currency,
+             coalesce(memo, '') as memo,
+             created_at::text as created_at
+      from public.studio_earn_ledger
+      where channel_id = $1::uuid
+      order by created_at desc
+      limit $2
+      `,
+      [channelId, limit]
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      entryType: r.entry_type,
+      amountUsd: minorToUsd(r.amount_minor),
+      currency: 'USD' as const,
+      memo: r.memo || '',
+      createdAt: r.created_at,
+    }));
+  } catch (err: any) {
+    if (String(err?.message || '').includes('studio_earn_ledger')) return [];
+    throw err;
+  }
+}
+
 export async function getStudioEarn(
   userId: string,
   rangeRaw?: unknown
@@ -710,6 +931,7 @@ export async function getStudioEarn(
   const videoIds = await loadChannelVideoIds(channel.id);
   const kpis = await loadKpis(channel.id, videoIds, days);
   const videoCount = channel.video_count ?? videoIds.length;
+  const payoutsLive = studioPayoutsLive();
 
   let subscribers = 0;
   try {
@@ -747,6 +969,16 @@ export async function getStudioEarn(
   const hasVideos = videoCount >= EARN_VIDEOS_GATE;
   const hasViews = views >= EARN_VIEWS_GATE;
   const guidelinesOk = true;
+  const eligibilityMet = hasChannel && hasVideos && hasViews && guidelinesOk;
+
+  const monetization = await loadMonetization(channel.id, channel.owner_user_id);
+  const balance = await loadBalance(channel.id);
+  const payouts = await loadPayouts(channel.id);
+  const ledger = await loadLedger(channel.id);
+
+  const payoutsOpen =
+    payoutsLive &&
+    (monetization.state === 'payouts_enabled' || monetization.state === 'approved');
 
   const checklist: StudioEarnChecklistItem[] = [
     {
@@ -778,27 +1010,69 @@ export async function getStudioEarn(
       detail: 'Keep content safe for the community. Paid promotion and AI disclosures help.',
     },
     {
+      id: 'application',
+      label: 'Apply for Earn',
+      met: monetization.state !== 'not_applied' && monetization.state !== 'rejected',
+      detail:
+        monetization.state === 'not_applied'
+          ? 'Apply when you meet the checklist — Matterya reviews channel eligibility.'
+          : monetization.state === 'pending'
+            ? 'Application received — under review.'
+            : monetization.state === 'rejected'
+              ? 'Previous application was not approved. You can re-apply after fixing issues.'
+              : `Monetization state: ${monetization.state}.`,
+    },
+    {
       id: 'payouts',
-      label: 'Creator payouts live on Matterya',
-      met: false,
-      detail: 'Payouts are not open yet — Earn is a preview of what is coming.',
+      label: 'Creator payouts open',
+      met: payoutsOpen,
+      detail: payoutsLive
+        ? payoutsOpen
+          ? 'Withdrawals are enabled for eligible balances.'
+          : 'Payouts are open platform-wide; finish approval to withdraw.'
+        : 'Platform withdrawals are not open yet. Balances and history are live from the ledger.',
     },
   ];
 
-  const onTrack = hasChannel && hasVideos && hasViews;
-  const status: StudioEarn['status'] = onTrack ? 'ready_when_live' : hasVideos ? 'on_track' : 'preview';
-  const statusLabel =
-    status === 'ready_when_live'
-      ? 'Ready when Earn opens'
-      : status === 'on_track'
-        ? 'Building toward Earn'
-        : 'Earn preview';
-  const statusDetail =
-    status === 'ready_when_live'
-      ? 'You meet the early checklist. Matterya will invite channels when ads revenue share goes live.'
-      : status === 'on_track'
-        ? 'Keep publishing and growing views — Earn will use organic Hubs performance like this.'
-        : 'Publish Hubs videos, grow views, and disclose paid promotion / AI content when relevant.';
+  let status: StudioEarn['status'] = 'preview';
+  let statusLabel = 'Earn preview';
+  let statusDetail =
+    'Publish Hubs videos, grow views, and disclose paid promotion / AI content when relevant.';
+
+  if (monetization.state === 'hold' || monetization.state === 'disabled') {
+    status = 'hold';
+    statusLabel = 'Earn on hold';
+    statusDetail = 'Your Earn account is on hold. Contact support if you need a review.';
+  } else if (monetization.state === 'pending') {
+    status = 'pending_review';
+    statusLabel = 'Application under review';
+    statusDetail = 'We received your Earn application. Keep publishing while we review.';
+  } else if (
+    (monetization.state === 'approved' || monetization.state === 'payouts_enabled') &&
+    payoutsLive
+  ) {
+    status = 'live';
+    statusLabel = 'Earn is live';
+    statusDetail =
+      'Balances below are from the Studio ledger. Request a payout when you reach the minimum.';
+  } else if (monetization.state === 'approved' || monetization.state === 'payouts_enabled') {
+    status = 'approved';
+    statusLabel = 'Approved — payouts opening soon';
+    statusDetail =
+      'Your channel is approved. Ledger balances are live; withdrawals open when Matterya enables payouts.';
+  } else if (eligibilityMet) {
+    status = 'ready_when_live';
+    statusLabel = 'Ready to apply';
+    statusDetail = 'You meet the early checklist. Apply for Earn to join the review queue.';
+  } else if (hasVideos) {
+    status = 'on_track';
+    statusLabel = 'Building toward Earn';
+    statusDetail = 'Keep publishing and growing views — Earn uses organic Hubs performance like this.';
+  }
+
+  const canApply =
+    eligibilityMet &&
+    (monetization.state === 'not_applied' || monetization.state === 'rejected');
 
   const basis: 'impressions' | 'views' = impressions > 0 ? 'impressions' : 'views';
   const basisCount = basis === 'impressions' ? impressions : views;
@@ -809,11 +1083,23 @@ export async function getStudioEarn(
     range,
     rangeDays: days,
     channelId: channel.id,
-    payoutsLive: false,
+    payoutsLive,
     status,
     statusLabel,
     statusDetail,
     checklist,
+    monetization: {
+      state: monetization.state,
+      canApply,
+      appliedAt: monetization.appliedAt,
+      minPayoutUsd: EARN_MIN_PAYOUT_USD,
+    },
+    balance: {
+      currency: 'USD',
+      ...balance,
+    },
+    payouts,
+    ledger,
     metrics: {
       views,
       impressions,
@@ -831,7 +1117,7 @@ export async function getStudioEarn(
       label: 'Estimated reach value (not a balance)',
       disclaimer:
         `Uses a $${EARN_ESTIMATE_RPM_USD.toFixed(2)} stub RPM on ${basis} for planning only. ` +
-        'This is not money owed and will change when real ads revshare launches.',
+        'This is not money owed. Real balances come from the Studio ledger when ads revshare credits your channel.',
     },
     promotion: {
       disclosedCount: promotedVideos,
@@ -843,8 +1129,206 @@ export async function getStudioEarn(
     ads: {
       path: '/ads',
       label: 'Matterya Ads',
-      detail: 'Run your own campaigns while creator Earn payouts are still in preview.',
+      detail: payoutsLive
+        ? 'Run campaigns on Matterya Ads. Creator revshare credits appear in your Earn ledger.'
+        : 'Run your own campaigns while creator withdrawals wait for payouts to open.',
     },
-    note: 'Matterya Studio Earn — preview only. No withdrawals, balances, or tax forms until payouts go live.',
+    note: payoutsLive
+      ? 'Studio Earn ledger is live. Available balance can be withdrawn when you meet the minimum.'
+      : 'Studio Earn ledger and balances are live (starting at $0). Withdrawals stay closed until STUDIO_PAYOUTS_LIVE is enabled.',
   };
 }
+
+export async function applyStudioEarn(
+  userId: string
+): Promise<
+  | { ok: true; monetization: StudioEarn['monetization'] }
+  | { error: string; status: number }
+> {
+  const channel = await channels.myChannel(userId);
+  if (!channel) return { error: 'channel_required', status: 404 };
+
+  const earn = await getStudioEarn(userId, '28d');
+  if ('error' in earn) return earn;
+  if (!earn.monetization.canApply) {
+    return { error: 'not_eligible', status: 400 };
+  }
+
+  try {
+    await pool.query(
+      `
+      insert into public.studio_creator_monetization (
+        channel_id, owner_user_id, state, applied_at, updated_at
+      )
+      values ($1::uuid, $2::uuid, 'pending', now(), now())
+      on conflict (channel_id) do update set
+        state = 'pending',
+        applied_at = now(),
+        reviewed_at = null,
+        updated_at = now()
+      `,
+      [channel.id, channel.owner_user_id]
+    );
+    await ensureEarnBalanceRow(channel.id);
+  } catch (err: any) {
+    const msg = String(err?.message || err);
+    if (msg.includes('studio_creator_monetization')) {
+      return { error: 'schema_missing', status: 503 };
+    }
+    throw err;
+  }
+
+  const refreshed = await getStudioEarn(userId, '28d');
+  if ('error' in refreshed) return refreshed;
+  return { ok: true, monetization: refreshed.monetization };
+}
+
+export async function requestStudioPayout(
+  userId: string,
+  body?: { amountUsd?: unknown; idempotencyKey?: unknown }
+): Promise<
+  | { ok: true; payout: StudioEarnPayoutRow }
+  | { error: string; status: number; reason?: string }
+> {
+  if (!studioPayoutsLive()) {
+    return {
+      error: 'payouts_closed',
+      status: 503,
+      reason: 'Creator withdrawals are not open yet (STUDIO_PAYOUTS_LIVE).',
+    };
+  }
+
+  const channel = await channels.myChannel(userId);
+  if (!channel) return { error: 'channel_required', status: 404 };
+
+  const monetization = await loadMonetization(channel.id, channel.owner_user_id);
+  if (monetization.state === 'hold' || monetization.state === 'disabled') {
+    return { error: 'on_hold', status: 403 };
+  }
+  if (monetization.state !== 'approved' && monetization.state !== 'payouts_enabled') {
+    return { error: 'not_approved', status: 403 };
+  }
+
+  await ensureEarnBalanceRow(channel.id);
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    const { rows: balRows } = await client.query<{ available_minor: number }>(
+      `
+      select available_minor
+      from public.studio_earn_balances
+      where channel_id = $1::uuid
+      for update
+      `,
+      [channel.id]
+    );
+    const availableMinor = Number(balRows[0]?.available_minor) || 0;
+
+    let amountMinor = availableMinor;
+    if (body?.amountUsd != null && body.amountUsd !== '') {
+      const usd = Number(body.amountUsd);
+      if (!Number.isFinite(usd) || usd <= 0) {
+        await client.query('rollback');
+        return { error: 'invalid_amount', status: 400 };
+      }
+      amountMinor = Math.round(usd * 100);
+    }
+
+    if (amountMinor < EARN_MIN_PAYOUT_MINOR) {
+      await client.query('rollback');
+      return {
+        error: 'below_minimum',
+        status: 400,
+        reason: `Minimum payout is $${EARN_MIN_PAYOUT_USD}.`,
+      };
+    }
+    if (amountMinor > availableMinor) {
+      await client.query('rollback');
+      return { error: 'insufficient_balance', status: 400 };
+    }
+
+    const idem =
+      String(body?.idempotencyKey ?? '').trim() ||
+      `studio-payout:${channel.id}:${amountMinor}:${Date.now()}`;
+
+    const { rows: payRows } = await client.query<{
+      id: string;
+      amount_minor: number;
+      currency: string;
+      state: string;
+      created_at: string;
+      paid_at: string | null;
+    }>(
+      `
+      insert into public.studio_earn_payouts (
+        channel_id, amount_minor, currency, state, idempotency_key
+      )
+      values ($1::uuid, $2, 'USD', 'pending', $3)
+      on conflict (idempotency_key) do update set channel_id = excluded.channel_id
+      returning id::text as id, amount_minor, currency, state,
+                created_at::text as created_at, paid_at::text as paid_at
+      `,
+      [channel.id, amountMinor, idem]
+    );
+
+    await client.query(
+      `
+      update public.studio_earn_balances
+      set available_minor = available_minor - $2,
+          pending_minor = pending_minor + $2,
+          updated_at = now()
+      where channel_id = $1::uuid
+      `,
+      [channel.id, amountMinor]
+    );
+
+    await client.query(
+      `
+      insert into public.studio_earn_ledger (
+        channel_id, entry_type, amount_minor, currency, memo, source_ref
+      )
+      values ($1::uuid, 'payout', $2, 'USD', 'Payout requested', $3)
+      `,
+      [channel.id, -amountMinor, `payout:${payRows[0].id}`]
+    );
+
+    if (monetization.state === 'approved') {
+      await client.query(
+        `
+        update public.studio_creator_monetization
+        set state = 'payouts_enabled', updated_at = now()
+        where channel_id = $1::uuid
+        `,
+        [channel.id]
+      );
+    }
+
+    await client.query('commit');
+    const row = payRows[0];
+    return {
+      ok: true,
+      payout: {
+        id: row.id,
+        amountUsd: minorToUsd(row.amount_minor),
+        currency: 'USD',
+        state: row.state,
+        createdAt: row.created_at,
+        paidAt: row.paid_at,
+      },
+    };
+  } catch (err: any) {
+    try {
+      await client.query('rollback');
+    } catch {
+      /* ignore */
+    }
+    const msg = String(err?.message || err);
+    if (msg.includes('studio_earn_')) {
+      return { error: 'schema_missing', status: 503 };
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+

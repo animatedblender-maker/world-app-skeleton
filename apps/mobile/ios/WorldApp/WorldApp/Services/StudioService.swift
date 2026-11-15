@@ -127,6 +127,39 @@ enum StudioService {
         var detail: String
     }
 
+    struct EarnMonetization: Sendable {
+        var state: String
+        var canApply: Bool
+        var appliedAt: String?
+        var minPayoutUsd: Double
+    }
+
+    struct EarnBalance: Sendable {
+        var currency: String
+        var availableUsd: Double
+        var pendingUsd: Double
+        var lifetimeEarnedUsd: Double
+        var lifetimePaidUsd: Double
+    }
+
+    struct EarnPayoutRow: Sendable, Identifiable {
+        var id: String
+        var amountUsd: Double
+        var currency: String
+        var state: String
+        var createdAt: String
+        var paidAt: String?
+    }
+
+    struct EarnLedgerRow: Sendable, Identifiable {
+        var id: String
+        var entryType: String
+        var amountUsd: Double
+        var currency: String
+        var memo: String
+        var createdAt: String
+    }
+
     struct Earn: Sendable {
         var range: Range
         var rangeDays: Int
@@ -136,6 +169,10 @@ enum StudioService {
         var statusLabel: String
         var statusDetail: String
         var checklist: [EarnChecklistItem]
+        var monetization: EarnMonetization
+        var balance: EarnBalance
+        var payouts: [EarnPayoutRow]
+        var ledger: [EarnLedgerRow]
         var views: Int
         var impressions: Int
         var watchMs: Int
@@ -233,6 +270,27 @@ enum StudioService {
         return parsed
     }
 
+    static func applyEarn() async throws -> EarnMonetization {
+        let json = try await postJSON(path: "/v1/studio/earn/apply", body: [:])
+        guard let raw = json["monetization"] as? [String: Any] else {
+            throw StudioError.message("Invalid apply response.")
+        }
+        return parseMonetization(raw)
+    }
+
+    static func requestPayout(amountUsd: Double? = nil, idempotencyKey: String? = nil) async throws -> EarnPayoutRow {
+        var body: [String: Any] = [:]
+        if let amountUsd { body["amountUsd"] = amountUsd }
+        if let idempotencyKey, !idempotencyKey.isEmpty { body["idempotencyKey"] = idempotencyKey }
+        let json = try await postJSON(path: "/v1/studio/earn/payout", body: body)
+        guard let raw = json["payout"] as? [String: Any],
+              let row = parsePayoutRow(raw)
+        else {
+            throw StudioError.message("Invalid payout response.")
+        }
+        return row
+    }
+
     // MARK: - Formatters
 
     static func formatMoneyUsd(_ n: Double?) -> String {
@@ -282,6 +340,22 @@ enum StudioService {
         path: String,
         query: [String: String] = [:]
     ) async throws -> [String: Any] {
+        try await requestJSON(method: "GET", path: path, query: query, body: nil)
+    }
+
+    private static func postJSON(
+        path: String,
+        body: [String: Any]
+    ) async throws -> [String: Any] {
+        try await requestJSON(method: "POST", path: path, query: [:], body: body)
+    }
+
+    private static func requestJSON(
+        method: String,
+        path: String,
+        query: [String: String],
+        body: [String: Any]?
+    ) async throws -> [String: Any] {
         guard let token = try? await AuthService.shared.ensureValidToken(), !token.isEmpty else {
             throw StudioError.unauthenticated
         }
@@ -293,10 +367,14 @@ enum StudioService {
             throw StudioError.message("Invalid Studio URL.")
         }
         var req = URLRequest(url: url)
-        req.httpMethod = "GET"
+        req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.timeoutInterval = 20
+        if method == "POST" {
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try? JSONSerialization.data(withJSONObject: body ?? [:])
+        }
         do {
             let (data, response) = try await URLSession.shared.data(for: req)
             let http = response as? HTTPURLResponse
@@ -305,7 +383,11 @@ enum StudioService {
             if (200..<300).contains(status) {
                 return json
             }
-            let err = String(json["error"] as? String ?? "Request failed (\(status))")
+            let err = String(
+                json["error"] as? String
+                    ?? json["reason"] as? String
+                    ?? "Request failed (\(status))"
+            )
             if status == 404, err == "channel_required" {
                 throw StudioError.channelRequired
             }
@@ -323,6 +405,54 @@ enum StudioService {
     }
 
     // MARK: - Parse
+
+    private static func parseMonetization(_ raw: [String: Any]) -> EarnMonetization {
+        EarnMonetization(
+            state: stringValue(raw["state"]) ?? "not_applied",
+            canApply: (raw["canApply"] as? Bool) ?? (raw["can_apply"] as? Bool) ?? false,
+            appliedAt: stringValue(raw["appliedAt"]) ?? stringValue(raw["applied_at"]),
+            minPayoutUsd: doubleValue(raw["minPayoutUsd"]) ?? doubleValue(raw["min_payout_usd"]) ?? 50
+        )
+    }
+
+    private static func parseBalance(_ raw: [String: Any]?) -> EarnBalance {
+        let raw = raw ?? [:]
+        return EarnBalance(
+            currency: stringValue(raw["currency"]) ?? "USD",
+            availableUsd: doubleValue(raw["availableUsd"]) ?? doubleValue(raw["available_usd"]) ?? 0,
+            pendingUsd: doubleValue(raw["pendingUsd"]) ?? doubleValue(raw["pending_usd"]) ?? 0,
+            lifetimeEarnedUsd: doubleValue(raw["lifetimeEarnedUsd"])
+                ?? doubleValue(raw["lifetime_earned_usd"])
+                ?? 0,
+            lifetimePaidUsd: doubleValue(raw["lifetimePaidUsd"])
+                ?? doubleValue(raw["lifetime_paid_usd"])
+                ?? 0
+        )
+    }
+
+    private static func parsePayoutRow(_ raw: [String: Any]) -> EarnPayoutRow? {
+        guard let id = stringValue(raw["id"]) else { return nil }
+        return EarnPayoutRow(
+            id: id,
+            amountUsd: doubleValue(raw["amountUsd"]) ?? doubleValue(raw["amount_usd"]) ?? 0,
+            currency: stringValue(raw["currency"]) ?? "USD",
+            state: stringValue(raw["state"]) ?? "pending",
+            createdAt: stringValue(raw["createdAt"]) ?? stringValue(raw["created_at"]) ?? "",
+            paidAt: stringValue(raw["paidAt"]) ?? stringValue(raw["paid_at"])
+        )
+    }
+
+    private static func parseLedgerRow(_ raw: [String: Any]) -> EarnLedgerRow? {
+        guard let id = stringValue(raw["id"]) else { return nil }
+        return EarnLedgerRow(
+            id: id,
+            entryType: stringValue(raw["entryType"]) ?? stringValue(raw["entry_type"]) ?? "",
+            amountUsd: doubleValue(raw["amountUsd"]) ?? doubleValue(raw["amount_usd"]) ?? 0,
+            currency: stringValue(raw["currency"]) ?? "USD",
+            memo: stringValue(raw["memo"]) ?? "",
+            createdAt: stringValue(raw["createdAt"]) ?? stringValue(raw["created_at"]) ?? ""
+        )
+    }
 
     private static func parseEarn(_ raw: [String: Any]) -> Earn? {
         guard let channelId = stringValue(raw["channelId"]) ?? stringValue(raw["channel_id"]) else {
@@ -343,6 +473,8 @@ enum StudioService {
                 detail: stringValue(row["detail"]) ?? ""
             )
         }
+        let payouts = (raw["payouts"] as? [[String: Any]] ?? []).compactMap(parsePayoutRow)
+        let ledger = (raw["ledger"] as? [[String: Any]] ?? []).compactMap(parseLedgerRow)
         return Earn(
             range: Range(rawValue: stringValue(raw["range"]) ?? "28d") ?? .d28,
             rangeDays: intValue(raw["rangeDays"]) ?? intValue(raw["range_days"]) ?? 28,
@@ -352,6 +484,10 @@ enum StudioService {
             statusLabel: stringValue(raw["statusLabel"]) ?? "Earn preview",
             statusDetail: stringValue(raw["statusDetail"]) ?? "",
             checklist: checklist,
+            monetization: parseMonetization(raw["monetization"] as? [String: Any] ?? [:]),
+            balance: parseBalance(raw["balance"] as? [String: Any]),
+            payouts: payouts,
+            ledger: ledger,
             views: intValue(metrics["views"]) ?? 0,
             impressions: intValue(metrics["impressions"]) ?? 0,
             watchMs: intValue(metrics["watchMs"]) ?? intValue(metrics["watch_ms"]) ?? 0,

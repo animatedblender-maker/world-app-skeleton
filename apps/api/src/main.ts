@@ -144,11 +144,13 @@ import { hybridSearch } from './recommendation/mind-search.js';
 import { suggestPeople } from './recommendation/mind-people-discovery.js';
 import { getCreatorInsights } from './recommendation/mind-creator-insights.js';
 import {
+  applyStudioEarn,
   getStudioChannel,
   getStudioDashboard,
   getStudioEarn,
   getStudioVideoAnalytics,
   getStudioVideosPage,
+  requestStudioPayout,
 } from './studio/studio.service.js';
 import { worldCountryFeed } from './recommendation/mind-world.js';
 import { bustSessionCache } from './recommendation/mind-session.js';
@@ -1327,6 +1329,37 @@ app.get('/v1/studio/earn', async (req: Request, res: Response) => {
     return res.json({ ok: true, earn: result });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message ?? 'studio_earn_failed' });
+  }
+});
+
+app.post('/v1/studio/earn/apply', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    const result = await applyStudioEarn(user.id);
+    if ('error' in result) {
+      return res.status(result.status).json({ error: result.error });
+    }
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'studio_earn_apply_failed' });
+  }
+});
+
+app.post('/v1/studio/earn/payout', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    const result = await requestStudioPayout(user.id, req.body ?? {});
+    if ('error' in result) {
+      return res.status(result.status).json({
+        error: result.error,
+        ...(result.reason ? { reason: result.reason } : {}),
+      });
+    }
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'studio_earn_payout_failed' });
   }
 });
 

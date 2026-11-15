@@ -82,15 +82,55 @@ export type StudioEarnChecklistItem = {
   detail: string;
 };
 
+export type StudioEarnPayoutRow = {
+  id: string;
+  amountUsd: number;
+  currency: 'USD';
+  state: string;
+  createdAt: string;
+  paidAt: string | null;
+};
+
+export type StudioEarnLedgerRow = {
+  id: string;
+  entryType: string;
+  amountUsd: number;
+  currency: 'USD';
+  memo: string;
+  createdAt: string;
+};
+
 export type StudioEarn = {
   range: StudioRange;
   rangeDays: number;
   channelId: string;
   payoutsLive: boolean;
-  status: 'preview' | 'on_track' | 'ready_when_live';
+  status:
+    | 'preview'
+    | 'on_track'
+    | 'ready_when_live'
+    | 'pending_review'
+    | 'approved'
+    | 'live'
+    | 'hold';
   statusLabel: string;
   statusDetail: string;
   checklist: StudioEarnChecklistItem[];
+  monetization: {
+    state: string;
+    canApply: boolean;
+    appliedAt: string | null;
+    minPayoutUsd: number;
+  };
+  balance: {
+    currency: 'USD';
+    availableUsd: number;
+    pendingUsd: number;
+    lifetimeEarnedUsd: number;
+    lifetimePaidUsd: number;
+  };
+  payouts: StudioEarnPayoutRow[];
+  ledger: StudioEarnLedgerRow[];
   metrics: {
     views: number;
     impressions: number;
@@ -174,6 +214,27 @@ export class StudioService {
     return json.earn;
   }
 
+  async applyEarn(): Promise<StudioEarn['monetization']> {
+    const json = await this.post<{ ok: boolean; monetization: StudioEarn['monetization'] }>(
+      '/v1/studio/earn/apply'
+    );
+    return json.monetization;
+  }
+
+  async requestPayout(opts?: {
+    amountUsd?: number;
+    idempotencyKey?: string;
+  }): Promise<StudioEarnPayoutRow> {
+    const json = await this.post<{ ok: boolean; payout: StudioEarnPayoutRow }>(
+      '/v1/studio/earn/payout',
+      {
+        ...(opts?.amountUsd != null ? { amountUsd: opts.amountUsd } : {}),
+        ...(opts?.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
+      }
+    );
+    return json.payout;
+  }
+
   formatMoneyUsd(n: number | null | undefined): string {
     const v = Number(n) || 0;
     return new Intl.NumberFormat('en-US', {
@@ -207,6 +268,19 @@ export class StudioService {
   }
 
   private async get<T>(path: string, query: Record<string, string> = {}): Promise<T> {
+    return this.request<T>('GET', path, undefined, query);
+  }
+
+  private async post<T>(path: string, body: Record<string, unknown> = {}): Promise<T> {
+    return this.request<T>('POST', path, body);
+  }
+
+  private async request<T>(
+    method: 'GET' | 'POST',
+    path: string,
+    body?: Record<string, unknown>,
+    query: Record<string, string> = {}
+  ): Promise<T> {
     const base = (environment.apiBaseUrl || 'https://api.matterya.com').replace(/\/$/, '');
     const url = new URL(`${base}${path}`);
     for (const [k, v] of Object.entries(query)) {
@@ -216,14 +290,20 @@ export class StudioService {
     const token = await this.auth.getAccessToken();
     if (!token) throw new Error('Sign in to open Studio.');
     headers['authorization'] = `Bearer ${token}`;
+    if (method === 'POST') headers['content-type'] = 'application/json';
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 20000);
     try {
-      const res = await fetch(url.toString(), { headers, signal: controller.signal });
+      const res = await fetch(url.toString(), {
+        method,
+        headers,
+        signal: controller.signal,
+        ...(method === 'POST' ? { body: JSON.stringify(body ?? {}) } : {}),
+      });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const err = String(json?.error || `Request failed (${res.status})`);
+        const err = String(json?.error || json?.reason || `Request failed (${res.status})`);
         if (res.status === 404 && err === 'channel_required') {
           throw new Error('channel_required');
         }
