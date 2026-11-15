@@ -149,17 +149,6 @@ struct FeedView: View {
                 LazyVStack(spacing: 0) {
                     Color.clear.frame(height: 1).id("feed-top")
 
-                    ForEach(store.pendingUploads) { draft in
-                        FeedUploadingShadowCard(draft: draft)
-                            .id("upload-\(draft.id)")
-                            .transition(
-                                .asymmetric(
-                                    insertion: .opacity.combined(with: .move(edge: .top)),
-                                    removal: .opacity.combined(with: .scale(scale: 0.96))
-                                )
-                            )
-                    }
-
                     // Sparks → Continue watching (Hubs) → New on Hubs — always above posts.
                     // Single unified feed (Phase-0 recsys mixes following + discovery).
                     if !feedReels.isEmpty {
@@ -170,6 +159,18 @@ struct FeedView: View {
                     }
                     if !newOnPlay.isEmpty {
                         newOnPlayStrip
+                    }
+
+                    // Uploading video sits under the rails as the first feed card (not above Sparks).
+                    ForEach(store.pendingUploads) { draft in
+                        FeedUploadingShadowCard(draft: draft)
+                            .id("upload-\(draft.id)")
+                            .transition(
+                                .asymmetric(
+                                    insertion: .opacity.combined(with: .move(edge: .top)),
+                                    removal: .opacity.combined(with: .scale(scale: 0.96))
+                                )
+                            )
                     }
 
                     // Posts still bootstrapping but rails already visible.
@@ -250,22 +251,42 @@ struct FeedView: View {
             // Hold the feed still while pinching a photo (Instagram-style).
             .scrollDisabled(photoZoomGate.isZooming)
             .onChange(of: appState.feedScrollToTopToken) { _, _ in
-                withAnimation(MatteryaMotion.scroll) {
-                    if let firstUpload = store.pendingUploads.first {
-                        proxy.scrollTo("upload-\(firstUpload.id)", anchor: .top)
-                    } else if let first = store.displayedPosts.first {
-                        proxy.scrollTo(first.id, anchor: .top)
-                    } else {
-                        proxy.scrollTo("feed-top", anchor: .top)
-                    }
-                }
+                scrollFeedToUploadOrHead(proxy: proxy, animated: true)
             }
             .onChange(of: store.pendingUploads.first?.id) { _, newID in
-                guard let newID else { return }
-                withAnimation(MatteryaMotion.insert) {
-                    proxy.scrollTo("upload-\(newID)", anchor: .top)
+                guard newID != nil else { return }
+                // After rails paint, land on the uploading card under Sparks / Continue / New.
+                scrollFeedToUploadOrHead(proxy: proxy, animated: true, preferUpload: true)
+            }
+        }
+    }
+
+    /// Scroll so an in-flight upload (under the rails) is the first visible feed card.
+    private func scrollFeedToUploadOrHead(
+        proxy: ScrollViewProxy,
+        animated: Bool,
+        preferUpload: Bool = false
+    ) {
+        let run = {
+            if preferUpload || !store.pendingUploads.isEmpty,
+               let firstUpload = store.pendingUploads.first {
+                proxy.scrollTo("upload-\(firstUpload.id)", anchor: .top)
+            } else if let first = store.displayedPosts.first {
+                proxy.scrollTo(first.id, anchor: .top)
+            } else {
+                proxy.scrollTo("feed-top", anchor: .top)
+            }
+        }
+        if animated {
+            // Two ticks: LazyVStack needs the upload row registered under the rails first.
+            DispatchQueue.main.async {
+                withAnimation(MatteryaMotion.scroll) { run() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                    withAnimation(MatteryaMotion.scroll) { run() }
                 }
             }
+        } else {
+            run()
         }
     }
 

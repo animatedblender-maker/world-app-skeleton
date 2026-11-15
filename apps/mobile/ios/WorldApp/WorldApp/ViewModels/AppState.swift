@@ -2484,7 +2484,7 @@ final class AppState {
         }
     }
 
-    /// Register an uploading video shadow on the feed and navigate there immediately.
+    /// Register an uploading video shadow under the home rails and scroll to it.
     @discardableResult
     func beginFeedVideoUpload(
         caption: String,
@@ -2496,6 +2496,7 @@ final class AppState {
             previewImage: previewImage,
             isHub: isHub
         )
+        // FeedView scrolls to `upload-{id}` (under Sparks / Continue / New), not feed-top.
         goToFeedTop(scroll: true)
         return id
     }

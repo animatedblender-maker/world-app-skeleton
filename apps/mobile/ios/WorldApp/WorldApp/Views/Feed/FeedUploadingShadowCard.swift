@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Animated “shadow” of a post card while a video is uploading — pins at the top of the feed.
+/// Animated “shadow” of a post card while a video is uploading — first card under the home rails.
 struct FeedUploadingShadowCard: View {
     let draft: FeedUploadPlaceholder
 

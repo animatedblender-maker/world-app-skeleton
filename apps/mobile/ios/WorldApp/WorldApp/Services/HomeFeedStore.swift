@@ -12,7 +12,7 @@ struct HomeFeedPage: Sendable {
     let feedSessionId: String
 }
 
-/// Shadow card while a video (or video share) is uploading — pins to the top of the feed.
+/// Shadow card while a video (or video share) is uploading — first feed card under home rails.
 struct FeedUploadPlaceholder: Identifiable, Equatable {
     let id: String
     var caption: String
@@ -49,7 +49,7 @@ final class HomeFeedStore {
     private(set) var feedSessionId = UUID().uuidString
     /// True once we painted anything (cache/demo/network).
     private(set) var didPaint = false
-    /// Uploading / sharing video shadows at the top of the feed.
+    /// Uploading / sharing video shadows — first cards under Sparks / Continue / New rails.
     private(set) var pendingUploads: [FeedUploadPlaceholder] = []
     /// Single home surface — Phase-0 recsys (following priority + discovery in one stream).
     private let homeSurface: RecommendationSurface = .homeForYou
