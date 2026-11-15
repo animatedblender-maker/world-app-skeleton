@@ -5,11 +5,13 @@ struct StudioRootView: View {
     private enum Tab: String, CaseIterable, Identifiable {
         case dashboard
         case content
+        case earn
         var id: String { rawValue }
         var title: String {
             switch self {
             case .dashboard: "Dashboard"
             case .content: "Content"
+            case .earn: "Earn"
             }
         }
     }
@@ -39,6 +41,8 @@ struct StudioRootView: View {
                             StudioDashboardView()
                         case .content:
                             StudioContentView()
+                        case .earn:
+                            StudioEarnView()
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

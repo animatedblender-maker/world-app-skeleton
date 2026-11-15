@@ -120,6 +120,42 @@ enum StudioService {
         var note: String
     }
 
+    struct EarnChecklistItem: Sendable, Identifiable {
+        var id: String
+        var label: String
+        var met: Bool
+        var detail: String
+    }
+
+    struct Earn: Sendable {
+        var range: Range
+        var rangeDays: Int
+        var channelId: String
+        var payoutsLive: Bool
+        var status: String
+        var statusLabel: String
+        var statusDetail: String
+        var checklist: [EarnChecklistItem]
+        var views: Int
+        var impressions: Int
+        var watchMs: Int
+        var watchHours: Double
+        var videos: Int
+        var promotedVideos: Int
+        var subscribers: Int
+        var estimatedRevenueUsd: Double
+        var rpmUsd: Double
+        var estimateBasis: String
+        var estimateLabel: String
+        var estimateDisclaimer: String
+        var promotionNote: String
+        var promotionCount: Int
+        var adsPath: String
+        var adsLabel: String
+        var adsDetail: String
+        var note: String
+    }
+
     enum StudioError: LocalizedError, Equatable {
         case unauthenticated
         case channelRequired
@@ -187,7 +223,26 @@ enum StudioService {
         return parsed
     }
 
+    static func earn(range: Range = .d28) async throws -> Earn {
+        let json = try await getJSON(path: "/v1/studio/earn", query: ["range": range.rawValue])
+        guard let raw = json["earn"] as? [String: Any],
+              let parsed = parseEarn(raw)
+        else {
+            throw StudioError.message("Invalid Earn response.")
+        }
+        return parsed
+    }
+
     // MARK: - Formatters
+
+    static func formatMoneyUsd(_ n: Double?) -> String {
+        let v = n ?? 0
+        let f = NumberFormatter()
+        f.numberStyle = .currency
+        f.currencyCode = "USD"
+        f.maximumFractionDigits = 2
+        return f.string(from: NSNumber(value: v)) ?? String(format: "$%.2f", v)
+    }
 
     static func formatWatch(_ ms: Int?) -> String {
         let s = max(0, Int(round(Double(ms ?? 0) / 1000.0)))
@@ -268,6 +323,59 @@ enum StudioService {
     }
 
     // MARK: - Parse
+
+    private static func parseEarn(_ raw: [String: Any]) -> Earn? {
+        guard let channelId = stringValue(raw["channelId"]) ?? stringValue(raw["channel_id"]) else {
+            return nil
+        }
+        let metrics = raw["metrics"] as? [String: Any] ?? [:]
+        let estimate = raw["estimate"] as? [String: Any] ?? [:]
+        let promotion = raw["promotion"] as? [String: Any] ?? [:]
+        let ads = raw["ads"] as? [String: Any] ?? [:]
+        let checklist = (raw["checklist"] as? [[String: Any]] ?? []).compactMap { row -> EarnChecklistItem? in
+            guard let id = stringValue(row["id"]),
+                  let label = stringValue(row["label"])
+            else { return nil }
+            return EarnChecklistItem(
+                id: id,
+                label: label,
+                met: (row["met"] as? Bool) ?? false,
+                detail: stringValue(row["detail"]) ?? ""
+            )
+        }
+        return Earn(
+            range: Range(rawValue: stringValue(raw["range"]) ?? "28d") ?? .d28,
+            rangeDays: intValue(raw["rangeDays"]) ?? intValue(raw["range_days"]) ?? 28,
+            channelId: channelId,
+            payoutsLive: (raw["payoutsLive"] as? Bool) ?? false,
+            status: stringValue(raw["status"]) ?? "preview",
+            statusLabel: stringValue(raw["statusLabel"]) ?? "Earn preview",
+            statusDetail: stringValue(raw["statusDetail"]) ?? "",
+            checklist: checklist,
+            views: intValue(metrics["views"]) ?? 0,
+            impressions: intValue(metrics["impressions"]) ?? 0,
+            watchMs: intValue(metrics["watchMs"]) ?? intValue(metrics["watch_ms"]) ?? 0,
+            watchHours: doubleValue(metrics["watchHours"]) ?? doubleValue(metrics["watch_hours"]) ?? 0,
+            videos: intValue(metrics["videos"]) ?? 0,
+            promotedVideos: intValue(metrics["promotedVideos"]) ?? intValue(metrics["promoted_videos"]) ?? 0,
+            subscribers: intValue(metrics["subscribers"]) ?? 0,
+            estimatedRevenueUsd: doubleValue(estimate["estimatedRevenueUsd"])
+                ?? doubleValue(estimate["estimated_revenue_usd"])
+                ?? 0,
+            rpmUsd: doubleValue(estimate["rpmUsd"]) ?? doubleValue(estimate["rpm_usd"]) ?? 0,
+            estimateBasis: stringValue(estimate["basis"]) ?? "views",
+            estimateLabel: stringValue(estimate["label"]) ?? "Estimated reach value",
+            estimateDisclaimer: stringValue(estimate["disclaimer"]) ?? "",
+            promotionNote: stringValue(promotion["note"]) ?? "",
+            promotionCount: intValue(promotion["disclosedCount"])
+                ?? intValue(promotion["disclosed_count"])
+                ?? 0,
+            adsPath: stringValue(ads["path"]) ?? "/ads",
+            adsLabel: stringValue(ads["label"]) ?? "Matterya Ads",
+            adsDetail: stringValue(ads["detail"]) ?? "",
+            note: stringValue(raw["note"]) ?? ""
+        )
+    }
 
     private static func parseChannel(_ raw: [String: Any]?) -> Channel? {
         guard let raw,

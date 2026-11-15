@@ -643,3 +643,208 @@ async function loadRetentionBuckets(
     return buckets.map((b) => ({ bucket: b, reached: 0 }));
   }
 }
+
+// ─── Earn (preview — no live payouts yet) ────────────────────────────────────
+
+/** Stub RPM used only for clearly labeled estimates until ads revshare ships. */
+const EARN_ESTIMATE_RPM_USD = 1.5;
+const EARN_VIEWS_GATE = 1000;
+const EARN_VIDEOS_GATE = 1;
+
+export type StudioEarnChecklistItem = {
+  id: string;
+  label: string;
+  met: boolean;
+  detail: string;
+};
+
+export type StudioEarn = {
+  range: StudioRange;
+  rangeDays: number;
+  channelId: string;
+  /** Always false until Matterya opens creator payouts. */
+  payoutsLive: boolean;
+  status: 'preview' | 'on_track' | 'ready_when_live';
+  statusLabel: string;
+  statusDetail: string;
+  checklist: StudioEarnChecklistItem[];
+  metrics: {
+    views: number;
+    impressions: number;
+    watchMs: number;
+    watchHours: number;
+    videos: number;
+    promotedVideos: number;
+    subscribers: number;
+  };
+  estimate: {
+    currency: 'USD';
+    /** Clearly an estimate — never present as a balance. */
+    estimatedRevenueUsd: number;
+    rpmUsd: number;
+    basis: 'impressions' | 'views';
+    label: string;
+    disclaimer: string;
+  };
+  promotion: {
+    disclosedCount: number;
+    note: string;
+  };
+  ads: {
+    path: string;
+    label: string;
+    detail: string;
+  };
+  note: string;
+};
+
+export async function getStudioEarn(
+  userId: string,
+  rangeRaw?: unknown
+): Promise<StudioEarn | { error: string; status: number }> {
+  const range = parseRange(rangeRaw);
+  const days = rangeDays(range);
+  const channel = await channels.myChannel(userId);
+  if (!channel) return { error: 'channel_required', status: 404 };
+
+  const videoIds = await loadChannelVideoIds(channel.id);
+  const kpis = await loadKpis(channel.id, videoIds, days);
+  const videoCount = channel.video_count ?? videoIds.length;
+
+  let subscribers = 0;
+  try {
+    const { rows } = await pool.query<{ n: number }>(
+      `select count(*)::int as n from public.user_follows where following_id = $1::uuid`,
+      [channel.owner_user_id]
+    );
+    subscribers = Number(rows[0]?.n) || 0;
+  } catch {
+    subscribers = 0;
+  }
+
+  let promotedVideos = 0;
+  try {
+    const { rows } = await pool.query<{ n: number }>(
+      `
+      select count(*)::int as n
+      from public.posts p
+      where ${CHANNEL_VIDEO_WHERE}
+        and coalesce(p.has_paid_promotion, false) = true
+      `,
+      [channel.id]
+    );
+    promotedVideos = Number(rows[0]?.n) || 0;
+  } catch {
+    promotedVideos = 0;
+  }
+
+  const views = kpis.views;
+  const impressions = kpis.impressions;
+  const watchMs = kpis.watchMs;
+  const watchHours = Math.round((watchMs / 3_600_000) * 100) / 100;
+
+  const hasChannel = true;
+  const hasVideos = videoCount >= EARN_VIDEOS_GATE;
+  const hasViews = views >= EARN_VIEWS_GATE;
+  const guidelinesOk = true;
+
+  const checklist: StudioEarnChecklistItem[] = [
+    {
+      id: 'channel',
+      label: 'Hubs channel',
+      met: hasChannel,
+      detail: 'You own a Matterya Hubs channel.',
+    },
+    {
+      id: 'videos',
+      label: 'Publish a Hubs video or Spark',
+      met: hasVideos,
+      detail: hasVideos
+        ? `${videoCount} channel video${videoCount === 1 ? '' : 's'} live.`
+        : 'Publish at least one Hubs video or Spark from your channel.',
+    },
+    {
+      id: 'views',
+      label: `${EARN_VIEWS_GATE.toLocaleString()} views in the selected range`,
+      met: hasViews,
+      detail: hasViews
+        ? `${views.toLocaleString()} views in the last ${days} days.`
+        : `${views.toLocaleString()} / ${EARN_VIEWS_GATE.toLocaleString()} views in the last ${days} days.`,
+    },
+    {
+      id: 'guidelines',
+      label: 'Follow Matterya guidelines',
+      met: guidelinesOk,
+      detail: 'Keep content safe for the community. Paid promotion and AI disclosures help.',
+    },
+    {
+      id: 'payouts',
+      label: 'Creator payouts live on Matterya',
+      met: false,
+      detail: 'Payouts are not open yet — Earn is a preview of what is coming.',
+    },
+  ];
+
+  const onTrack = hasChannel && hasVideos && hasViews;
+  const status: StudioEarn['status'] = onTrack ? 'ready_when_live' : hasVideos ? 'on_track' : 'preview';
+  const statusLabel =
+    status === 'ready_when_live'
+      ? 'Ready when Earn opens'
+      : status === 'on_track'
+        ? 'Building toward Earn'
+        : 'Earn preview';
+  const statusDetail =
+    status === 'ready_when_live'
+      ? 'You meet the early checklist. Matterya will invite channels when ads revenue share goes live.'
+      : status === 'on_track'
+        ? 'Keep publishing and growing views — Earn will use organic Hubs performance like this.'
+        : 'Publish Hubs videos, grow views, and disclose paid promotion / AI content when relevant.';
+
+  const basis: 'impressions' | 'views' = impressions > 0 ? 'impressions' : 'views';
+  const basisCount = basis === 'impressions' ? impressions : views;
+  const estimatedRevenueUsd =
+    Math.round(((basisCount / 1000) * EARN_ESTIMATE_RPM_USD) * 100) / 100;
+
+  return {
+    range,
+    rangeDays: days,
+    channelId: channel.id,
+    payoutsLive: false,
+    status,
+    statusLabel,
+    statusDetail,
+    checklist,
+    metrics: {
+      views,
+      impressions,
+      watchMs,
+      watchHours,
+      videos: videoCount,
+      promotedVideos,
+      subscribers,
+    },
+    estimate: {
+      currency: 'USD',
+      estimatedRevenueUsd,
+      rpmUsd: EARN_ESTIMATE_RPM_USD,
+      basis,
+      label: 'Estimated reach value (not a balance)',
+      disclaimer:
+        `Uses a $${EARN_ESTIMATE_RPM_USD.toFixed(2)} stub RPM on ${basis} for planning only. ` +
+        'This is not money owed and will change when real ads revshare launches.',
+    },
+    promotion: {
+      disclosedCount: promotedVideos,
+      note:
+        promotedVideos > 0
+          ? `${promotedVideos} video${promotedVideos === 1 ? '' : 's'} marked “Includes paid promotion”.`
+          : 'When a video includes sponsorship, turn on “Includes paid promotion” in the Hubs composer.',
+    },
+    ads: {
+      path: '/ads',
+      label: 'Matterya Ads',
+      detail: 'Run your own campaigns while creator Earn payouts are still in preview.',
+    },
+    note: 'Matterya Studio Earn — preview only. No withdrawals, balances, or tax forms until payouts go live.',
+  };
+}

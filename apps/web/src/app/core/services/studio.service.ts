@@ -75,6 +75,51 @@ export type StudioVideoAnalytics = {
   note: string;
 };
 
+export type StudioEarnChecklistItem = {
+  id: string;
+  label: string;
+  met: boolean;
+  detail: string;
+};
+
+export type StudioEarn = {
+  range: StudioRange;
+  rangeDays: number;
+  channelId: string;
+  payoutsLive: boolean;
+  status: 'preview' | 'on_track' | 'ready_when_live';
+  statusLabel: string;
+  statusDetail: string;
+  checklist: StudioEarnChecklistItem[];
+  metrics: {
+    views: number;
+    impressions: number;
+    watchMs: number;
+    watchHours: number;
+    videos: number;
+    promotedVideos: number;
+    subscribers: number;
+  };
+  estimate: {
+    currency: 'USD';
+    estimatedRevenueUsd: number;
+    rpmUsd: number;
+    basis: 'impressions' | 'views';
+    label: string;
+    disclaimer: string;
+  };
+  promotion: {
+    disclosedCount: number;
+    note: string;
+  };
+  ads: {
+    path: string;
+    label: string;
+    detail: string;
+  };
+  note: string;
+};
+
 @Injectable({ providedIn: 'root' })
 export class StudioService {
   constructor(private auth: AuthService) {}
@@ -122,6 +167,20 @@ export class StudioService {
       { range }
     );
     return json.analytics;
+  }
+
+  async earn(range: StudioRange = '28d'): Promise<StudioEarn> {
+    const json = await this.get<{ ok: boolean; earn: StudioEarn }>('/v1/studio/earn', { range });
+    return json.earn;
+  }
+
+  formatMoneyUsd(n: number | null | undefined): string {
+    const v = Number(n) || 0;
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      maximumFractionDigits: 2,
+    }).format(v);
   }
 
   formatWatch(ms: number): string {

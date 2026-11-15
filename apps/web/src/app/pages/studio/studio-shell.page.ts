@@ -22,6 +22,7 @@ import { StudioService, type StudioChannel } from '../../core/services/studio.se
           >
           <a routerLink="/studio/content" routerLinkActive="on">Content</a>
           <a routerLink="/studio/audience" routerLinkActive="on">Audience</a>
+          <a routerLink="/studio/earn" routerLinkActive="on">Earn</a>
         </nav>
 
         <div class="channel" *ngIf="channel as c">

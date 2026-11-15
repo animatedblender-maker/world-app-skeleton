@@ -146,6 +146,7 @@ import { getCreatorInsights } from './recommendation/mind-creator-insights.js';
 import {
   getStudioChannel,
   getStudioDashboard,
+  getStudioEarn,
   getStudioVideoAnalytics,
   getStudioVideosPage,
 } from './studio/studio.service.js';
@@ -1312,6 +1313,20 @@ app.get('/v1/studio/videos/:id/analytics', async (req: Request, res: Response) =
     return res.json({ ok: true, analytics: result });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message ?? 'studio_video_analytics_failed' });
+  }
+});
+
+app.get('/v1/studio/earn', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    const result = await getStudioEarn(user.id, req.query.range);
+    if ('error' in result) {
+      return res.status(result.status).json({ error: result.error });
+    }
+    return res.json({ ok: true, earn: result });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'studio_earn_failed' });
   }
 });
 

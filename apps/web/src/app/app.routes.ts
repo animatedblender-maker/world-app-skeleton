@@ -166,6 +166,11 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./pages/studio/studio-audience.page').then((m) => m.StudioAudiencePageComponent),
       },
+      {
+        path: 'earn',
+        loadComponent: () =>
+          import('./pages/studio/studio-earn.page').then((m) => m.StudioEarnPageComponent),
+      },
     ],
   },
   {
