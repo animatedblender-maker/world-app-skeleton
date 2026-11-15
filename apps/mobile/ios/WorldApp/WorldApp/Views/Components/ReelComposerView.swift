@@ -55,26 +55,48 @@ struct ReelComposerView: View {
     @State private var preparedVideoSizeBytes = 0
     @State private var videoMimeType = "video/mp4"
     @State private var videoFileExtension = "mp4"
+    /// Custom thumbnail (Hubs / channel Spark). Falls back to frame-0 when nil.
+    @State private var customThumbImage: UIImage?
+    @State private var thumbPickerItem: PhotosPickerItem?
+    /// nil until the creator answers (required for channel publishes).
+    @State private var madeForKids: Bool? = nil
+    @State private var hasPaidPromotion = false
+    @State private var alteredContent = false
+    /// Auto-detected short from Hubs video sheet (vertical + ≤60s).
+    @State private var detectedAsSpark = false
+    @State private var videoDurationSeconds: Double = 0
+    @State private var videoAspectHeightOverWidth: Double = 0
 
-    private var isReelAudience: Bool { audience == .sparks }
+    private var isReelAudience: Bool { audience == .sparks || (locksToHubs && detectedAsSpark) }
     private var isHubAudience: Bool { audience == .hubs }
-    private var needsCategory: Bool { audience == .hubs || audience == .sparks }
-    /// Hubs video sheet: stay on channel long-form — no Sparks/Feed audience switch.
+    private var needsCategory: Bool { audience == .hubs || audience == .sparks || detectedAsSpark }
+    /// Hubs video sheet: stay on channel — no Sparks/Feed audience switch.
     private var locksToHubs: Bool { publishToHubChannel && !publishAsReel }
+    /// Channel Spark or Hubs video — show Studio-style disclosures + thumbnail.
+    private var showsChannelDetails: Bool { publishToHubChannel }
 
     private var categoryChoices: [YouTubeHomeFilter] {
         YouTubeHomeFilter.hubCategories.filter { $0.hubSlug != nil }
     }
 
     private var titleOK: Bool {
-        // Hub long-form always needs a title; feed videos / sparks use caption only.
+        // Auto-Spark and Plus→Spark use caption only; long-form Hubs needs a title.
         if isReelAudience { return true }
         if !isHubAudience { return true }
         return !videoTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var kidsOK: Bool {
+        if showsChannelDetails { return madeForKids != nil }
+        return true
+    }
+
     private var canSubmit: Bool {
-        uploadVideoURL != nil && !isPreparingVideo && titleOK
+        uploadVideoURL != nil && !isPreparingVideo && titleOK && kidsOK
+    }
+
+    private var effectiveThumb: UIImage? {
+        customThumbImage ?? previewImage
     }
 
     private var canPostHere: Bool {
@@ -82,6 +104,7 @@ struct ReelComposerView: View {
     }
 
     private var navTitle: String {
+        if locksToHubs && detectedAsSpark { return MatteryaCopy.newSpark }
         switch audience {
         case .sparks: return MatteryaCopy.newSpark
         case .hubs: return "New channel video"
@@ -99,16 +122,23 @@ struct ReelComposerView: View {
                     VStack(alignment: .leading, spacing: 22) {
                         composerHeader
                         previewSection
+                        if detectedAsSpark && locksToHubs {
+                            sparkDetectedChip
+                        }
                         if !locksToHubs {
                             audiencePicker
                         }
                         if needsCategory {
                             categoryPicker
                         }
-                        if isHubAudience {
+                        if isHubAudience && !detectedAsSpark {
                             titleField
                         }
                         captionField
+                        if showsChannelDetails {
+                            thumbnailSection
+                            detailsSection
+                        }
                         if let errorMessage { errorBanner(errorMessage) }
                     }
                     .padding(.horizontal, Theme.pagePadding)
@@ -148,6 +178,179 @@ struct ReelComposerView: View {
         .onChange(of: selectedVideo) { _, item in
             Task { await loadVideo(item) }
         }
+        .onChange(of: thumbPickerItem) { _, item in
+            Task { await loadCustomThumb(item) }
+        }
+    }
+
+    private var sparkDetectedChip: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "sparkles")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Theme.ink)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Detected as \(MatteryaCopy.spark)")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.ink)
+                Text("Vertical · under 1 min · publishes on your Hubs channel")
+                    .font(.caption)
+                    .foregroundStyle(Theme.inkMuted)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(Theme.matteDeep, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                .stroke(Theme.border, lineWidth: 0.5)
+        )
+    }
+
+    private var thumbnailSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("THUMBNAIL")
+                .font(.caption.weight(.semibold))
+                .tracking(1.2)
+                .foregroundStyle(Theme.inkMuted)
+            Text("Shown on \(MatteryaCopy.matteryaHubs) shelves and your channel.")
+                .font(.caption2)
+                .foregroundStyle(Theme.inkMuted)
+
+            HStack(alignment: .center, spacing: 14) {
+                Group {
+                    if let thumb = effectiveThumb {
+                        Image(uiImage: thumb)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        Theme.matteDeep
+                    }
+                }
+                .frame(width: 96, height: detectedAsSpark || isReelAudience ? 170 : 54)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 0.5)
+                )
+
+                VStack(alignment: .leading, spacing: 8) {
+                    PhotosPicker(selection: $thumbPickerItem, matching: .images) {
+                        Text(customThumbImage == nil ? "Upload thumbnail" : "Change thumbnail")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.ink)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(Theme.matte, in: Capsule(style: .continuous))
+                            .overlay(Capsule(style: .continuous).stroke(Theme.border, lineWidth: 0.5))
+                    }
+                    .buttonStyle(.plain)
+
+                    if customThumbImage != nil {
+                        Button("Use auto frame") {
+                            customThumbImage = nil
+                            thumbPickerItem = nil
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.inkMuted)
+                        .buttonStyle(.plain)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private var detailsSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("DETAILS")
+                .font(.caption.weight(.semibold))
+                .tracking(1.2)
+                .foregroundStyle(Theme.inkMuted)
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 6) {
+                    Text("Made for kids")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.ink)
+                    Text("Required")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(Theme.danger)
+                }
+                Text("Tell Matterya if this video is made for kids. This affects where it can appear.")
+                    .font(.caption)
+                    .foregroundStyle(Theme.inkMuted)
+                HStack(spacing: 8) {
+                    kidsChip(title: "Yes", value: true)
+                    kidsChip(title: "No", value: false)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                    .stroke(
+                        kidsOK ? Theme.border : Theme.danger.opacity(0.55),
+                        lineWidth: 0.5
+                    )
+            )
+
+            disclosureToggle(
+                title: "Includes paid promotion",
+                subtitle: "Turn on if this video includes paid product placement, sponsorship, or promotion.",
+                isOn: $hasPaidPromotion
+            )
+
+            disclosureToggle(
+                title: "Altered or AI-made content",
+                subtitle: "Turn on if this video includes realistic altered or AI-made content that could mislead viewers.",
+                isOn: $alteredContent
+            )
+        }
+    }
+
+    private func kidsChip(title: String, value: Bool) -> some View {
+        Button {
+            madeForKids = value
+        } label: {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(madeForKids == value ? Theme.paper : Theme.ink)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 10)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(madeForKids == value ? Theme.ink : Theme.matte)
+                )
+                .overlay {
+                    if madeForKids != value {
+                        Capsule(style: .continuous).stroke(Theme.border, lineWidth: 0.5)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func disclosureToggle(title: String, subtitle: String, isOn: Binding<Bool>) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.ink)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(Theme.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            MatteryaSwitch(isOn: isOn)
+        }
+        .padding(14)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+                .stroke(Theme.border, lineWidth: 0.5)
+        )
     }
 
     private var composerHeader: some View {
@@ -467,8 +670,16 @@ struct ReelComposerView: View {
     }
 
     private var destinationHeadline: String {
+        if locksToHubs && detectedAsSpark {
+            let name = LivingChannelMarker.parse(from: appState.currentProfile?.bio)
+            return name.map { "\(MatteryaCopy.spark) on \($0)" } ?? "\(MatteryaCopy.spark) on your channel"
+        }
         switch audience {
         case .sparks:
+            if publishToHubChannel {
+                let name = LivingChannelMarker.parse(from: appState.currentProfile?.bio)
+                return name.map { "\(MatteryaCopy.spark) on \($0)" } ?? "\(MatteryaCopy.spark) on your channel"
+            }
             return MatteryaCopy.postToYourFeed
         case .hubs:
             let name = LivingChannelMarker.parse(from: appState.currentProfile?.bio)
@@ -479,9 +690,14 @@ struct ReelComposerView: View {
     }
 
     private var destinationHint: String {
+        if locksToHubs && detectedAsSpark {
+            return "Vertical short · Sparks + your Hubs channel"
+        }
         switch audience {
         case .sparks:
-            return MatteryaCopy.publishSparkHint
+            return publishToHubChannel
+                ? MatteryaCopy.sparksOnHubs
+                : MatteryaCopy.publishSparkHint
         case .hubs:
             return "Appears on your Hubs channel and as a simple card in the feed."
         case .feed:
@@ -566,6 +782,13 @@ struct ReelComposerView: View {
             videoMimeType = "video/mp4"
             videoFileExtension = "mp4"
             previewImage = await generateThumbnail(from: preparedURL)
+            customThumbImage = nil
+            thumbPickerItem = nil
+            let probe = await probeVideoGeometry(preparedURL)
+            videoDurationSeconds = probe.duration
+            videoAspectHeightOverWidth = probe.aspect
+            // Hubs video sheet: vertical (≥0.8) + ≤60s → channel Spark automatically.
+            detectedAsSpark = locksToHubs && probe.aspect >= 0.8 && probe.duration > 0 && probe.duration <= 60
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -586,6 +809,11 @@ struct ReelComposerView: View {
         preparedVideoSizeBytes = 0
         videoMimeType = "video/mp4"
         videoFileExtension = "mp4"
+        customThumbImage = nil
+        thumbPickerItem = nil
+        detectedAsSpark = false
+        videoDurationSeconds = 0
+        videoAspectHeightOverWidth = 0
         if !keepPreparingFlag {
             isPreparingVideo = false
         }
@@ -597,6 +825,39 @@ struct ReelComposerView: View {
         generator.appliesPreferredTrackTransform = true
         guard let cgImage = try? generator.copyCGImage(at: .zero, actualTime: nil) else { return nil }
         return UIImage(cgImage: cgImage)
+    }
+
+    private func loadCustomThumb(_ item: PhotosPickerItem?) async {
+        guard let item else { return }
+        do {
+            if let data = try await item.loadTransferable(type: Data.self),
+               let image = UIImage(data: data) {
+                customThumbImage = image
+            }
+        } catch {
+            errorMessage = "Could not load thumbnail."
+        }
+    }
+
+    /// Display aspect after preferred transform (height / width). ≥0.8 ≈ vertical / square-ish short.
+    private func probeVideoGeometry(_ url: URL) async -> (duration: Double, aspect: Double) {
+        let asset = AVURLAsset(url: url)
+        do {
+            let duration = try await asset.load(.duration).seconds
+            let tracks = try await asset.loadTracks(withMediaType: .video)
+            guard let track = tracks.first else {
+                return (duration, 0)
+            }
+            let size = try await track.load(.naturalSize)
+            let transform = try await track.load(.preferredTransform)
+            let transformed = size.applying(transform)
+            let width = abs(Double(transformed.width))
+            let height = abs(Double(transformed.height))
+            let aspect = width > 0 ? height / width : 0
+            return (duration, aspect)
+        } catch {
+            return (0, 0)
+        }
     }
 
     private func submit() async {
@@ -618,19 +879,31 @@ struct ReelComposerView: View {
             return
         }
 
+        if showsChannelDetails, madeForKids == nil {
+            busy = false
+            uploadPhase = .idle
+            uploadProgress = nil
+            errorMessage = "Choose whether this video is made for kids."
+            return
+        }
+
         let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         let localVideoURL = uploadVideoURL
         let localMime = videoMimeType
         let localExt = videoFileExtension
-        let localPreview = previewImage
+        let localPreview = effectiveThumb
         let localCountry = country
         let localProfileCity = profile.cityName
         let asReel = isReelAudience
-        let toHub = isHubAudience
+        let toHub = isHubAudience || (locksToHubs && detectedAsSpark)
         let hubSlug = resolvedHubSlug
+        let localKids = madeForKids
+        let localPromo = hasPaidPromotion
+        let localAI = alteredContent
+        let channelBoundSpark = publishToHubChannel || (locksToHubs && detectedAsSpark)
 
-        // Long-form video (feed or hubs): jump to feed top with a shadow card while uploading.
-        // Sparks still publish then open sparks — they don't pin on the home feed list.
+        // Long-form video (feed or hubs): jump to feed with a shadow card while uploading.
+        // Sparks publish then open Sparks — they don't pin on the home feed list.
         let landsOnFeed = !asReel
         let placeholderID: String? = landsOnFeed
             ? appState.beginFeedVideoUpload(
@@ -676,8 +949,8 @@ struct ReelComposerView: View {
         do {
             let post: CountryPost
             if asReel {
-                // Sparks from Create also live on Hubs — stamp channel unless Feed-only.
-                let sparkBody = audience != .feed
+                // Channel Sparks (Plus → Spark or auto-detected Hubs short) stamp the channel.
+                let sparkBody = channelBoundSpark
                     ? HubChannelPostMarker.markBody(trimmedCaption)
                     : trimmedCaption
                 post = try await PostsService.shared.createReel(
@@ -690,7 +963,10 @@ struct ReelComposerView: View {
                     mimeType: localMime,
                     fileExtension: localExt,
                     thumbnailImage: localPreview,
-                    hubSlug: hubSlug,
+                    hubSlug: channelBoundSpark ? hubSlug : nil,
+                    madeForKids: localKids,
+                    hasPaidPromotion: localPromo,
+                    alteredContent: localAI,
                     onUploadProgress: progressHandler,
                     onPublishing: publishingHandler
                 )
@@ -714,6 +990,9 @@ struct ReelComposerView: View {
                     thumbnailImage: localPreview,
                     publishToHubChannel: true,
                     hubSlug: hubSlug,
+                    madeForKids: localKids,
+                    hasPaidPromotion: localPromo,
+                    alteredContent: localAI,
                     onUploadProgress: progressHandler,
                     onPublishing: publishingHandler
                 )
@@ -728,6 +1007,9 @@ struct ReelComposerView: View {
                     mimeType: localMime,
                     fileExtension: localExt,
                     thumbnailImage: localPreview,
+                    madeForKids: localKids,
+                    hasPaidPromotion: localPromo,
+                    alteredContent: localAI,
                     onUploadProgress: progressHandler,
                     onPublishing: publishingHandler
                 )

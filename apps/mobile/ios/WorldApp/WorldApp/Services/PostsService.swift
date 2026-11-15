@@ -1780,6 +1780,9 @@ final class PostsService {
         fileExtension: String = "mp4",
         thumbnailImage: UIImage? = nil,
         hubSlug: String? = nil,
+        madeForKids: Bool? = nil,
+        hasPaidPromotion: Bool = false,
+        alteredContent: Bool = false,
         onUploadProgress: (@Sendable (UploadProgress) -> Void)? = nil,
         onPublishing: (@Sendable () -> Void)? = nil
     ) async throws -> CountryPost {
@@ -1800,11 +1803,17 @@ final class PostsService {
             reel: true
         )
         // Explicit spark marker so isReel stays true even if media JSON is stripped.
-        let cleaned = body
+        // Keep any HubChannelPostMarker already stamped by the caller (channel Sparks).
+        let hasChannel = HubChannelPostMarker.isMarked(body)
+        let strippedChannel = HubChannelPostMarker.strip(body)
+        let cleaned = strippedChannel
             .replacingOccurrences(of: "__spark__|", with: "")
             .replacingOccurrences(of: "__reel__|", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let bodyOut = "__spark__|\(cleaned.isEmpty ? "Spark" : cleaned)"
+        var bodyOut = "__spark__|\(cleaned.isEmpty ? "Spark" : cleaned)"
+        if hasChannel {
+            bodyOut = HubChannelPostMarker.markBody(bodyOut)
+        }
         let created = try await createPost(
             authorID: authorID,
             body: bodyOut,
@@ -1815,7 +1824,10 @@ final class PostsService {
             mediaType: "reel",
             mediaURL: mediaURL,
             thumbURL: thumbURL,
-            hubSlug: hubSlug
+            hubSlug: hubSlug,
+            madeForKids: madeForKids,
+            hasPaidPromotion: hasPaidPromotion,
+            alteredContent: alteredContent
         )
         // Profile grid + home feed must see the new Spark immediately.
         ContentCache.shared.invalidate(.profilePosts)
@@ -1844,6 +1856,9 @@ final class PostsService {
         mimeType: String = "video/mp4",
         fileExtension: String = "mp4",
         thumbnailImage: UIImage? = nil,
+        madeForKids: Bool? = nil,
+        hasPaidPromotion: Bool = false,
+        alteredContent: Bool = false,
         onUploadProgress: (@Sendable (UploadProgress) -> Void)? = nil,
         onPublishing: (@Sendable () -> Void)? = nil
     ) async throws -> CountryPost {
@@ -1859,6 +1874,9 @@ final class PostsService {
             fileExtension: fileExtension,
             thumbnailImage: thumbnailImage,
             publishToHubChannel: false,
+            madeForKids: madeForKids,
+            hasPaidPromotion: hasPaidPromotion,
+            alteredContent: alteredContent,
             onUploadProgress: onUploadProgress,
             onPublishing: onPublishing
         )
@@ -1878,6 +1896,9 @@ final class PostsService {
         thumbnailImage: UIImage? = nil,
         publishToHubChannel: Bool = true,
         hubSlug: String? = nil,
+        madeForKids: Bool? = nil,
+        hasPaidPromotion: Bool = false,
+        alteredContent: Bool = false,
         onUploadProgress: (@Sendable (UploadProgress) -> Void)? = nil,
         onPublishing: (@Sendable () -> Void)? = nil
     ) async throws -> CountryPost {
@@ -1894,6 +1915,9 @@ final class PostsService {
             thumbnailImage: thumbnailImage,
             publishToHubChannel: publishToHubChannel,
             hubSlug: hubSlug,
+            madeForKids: madeForKids,
+            hasPaidPromotion: hasPaidPromotion,
+            alteredContent: alteredContent,
             onUploadProgress: onUploadProgress,
             onPublishing: onPublishing
         )
@@ -1912,6 +1936,9 @@ final class PostsService {
         thumbnailImage: UIImage?,
         publishToHubChannel: Bool,
         hubSlug: String? = nil,
+        madeForKids: Bool? = nil,
+        hasPaidPromotion: Bool = false,
+        alteredContent: Bool = false,
         onUploadProgress: (@Sendable (UploadProgress) -> Void)?,
         onPublishing: (@Sendable () -> Void)?
     ) async throws -> CountryPost {
@@ -1942,7 +1969,10 @@ final class PostsService {
             mediaType: "video",
             mediaURL: mediaURL,
             thumbURL: thumbURL,
-            hubSlug: publishToHubChannel ? hubSlug : nil
+            hubSlug: publishToHubChannel ? hubSlug : nil,
+            madeForKids: madeForKids,
+            hasPaidPromotion: hasPaidPromotion,
+            alteredContent: alteredContent
         )
     }
 
@@ -2221,7 +2251,10 @@ final class PostsService {
         mediaURL: String? = nil,
         thumbURL: String? = nil,
         sharedPostID: String? = nil,
-        hubSlug: String? = nil
+        hubSlug: String? = nil,
+        madeForKids: Bool? = nil,
+        hasPaidPromotion: Bool = false,
+        alteredContent: Bool = false
     ) async throws -> CountryPost {
         struct Response: Decodable { let createPost: GraphQLPost }
         let normalizedMediaType = (mediaType ?? "").lowercased()
@@ -2248,6 +2281,9 @@ final class PostsService {
             let slug = hubSlug.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if !slug.isEmpty { input["hub_slug"] = slug }
         }
+        if let madeForKids { input["made_for_kids"] = madeForKids }
+        if hasPaidPromotion { input["has_paid_promotion"] = true }
+        if alteredContent { input["altered_content"] = true }
 
         // Prefer hub_slug in the selection set; older APIs without the field still create the post.
         let mutationWithSlug = "mutation($input: CreatePostInput!) { createPost(input: $input) { \(postFields) } }"
@@ -2260,8 +2296,11 @@ final class PostsService {
             )
             created = result.createPost.toModel
         } catch {
-            // API not redeployed yet — retry without hub_slug field/input.
+            // API not redeployed yet — retry without newer CreatePostInput fields.
             input.removeValue(forKey: "hub_slug")
+            input.removeValue(forKey: "made_for_kids")
+            input.removeValue(forKey: "has_paid_promotion")
+            input.removeValue(forKey: "altered_content")
             let result: Response = try await gql.authenticatedRequest(
                 query: mutationPlain,
                 variables: ["input": input]

@@ -315,7 +315,7 @@ struct AnonymousPostSpacePickerView: View {
     }
 }
 
-/// Matterya + create sheet (Post / Hubs video). Video-in-Post publishes as a spark under the hood.
+/// Matterya + create sheet (Post / Spark / Hubs video). Video-in-Post publishes as a personal spark.
 private struct CreateMenuPanel: View {
     @Environment(AppState.self) private var appState
 
@@ -355,7 +355,15 @@ private struct CreateMenuPanel: View {
                     Task { await appState.presentCreateSheet(.post) }
                 }
 
-                // Hubs long-form only — channel is created on demand if missing (not for every user).
+                createRow(
+                    title: MatteryaCopy.spark,
+                    subtitle: MatteryaCopy.sparksOnHubs,
+                    icon: "sparkles"
+                ) {
+                    Task { await appState.presentHubSparkCreate() }
+                }
+
+                // Hubs long-form — channel created on demand; vertical ≤60s auto-routes to Spark.
                 createRow(
                     title: "Hubs video",
                     subtitle: "Long-form on \(MatteryaCopy.matteryaHubs)",

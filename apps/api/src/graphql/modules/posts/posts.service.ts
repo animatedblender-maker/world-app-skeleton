@@ -81,6 +81,10 @@ type CreatePostInput = {
   channel_id?: string | null;
   /** Hubs vibe shelf slug (food, nature, …). */
   hub_slug?: string | null;
+  /** null = unset; true = made for kids; false = not made for kids. */
+  made_for_kids?: boolean | null;
+  has_paid_promotion?: boolean | null;
+  altered_content?: boolean | null;
 };
 
 /** Keep in sync with HUB_PARENT_SLUGS in recommendation/shelf.service.ts */
@@ -1331,6 +1335,10 @@ export class PostsService {
     }
 
     const hubSlug = normalizeHubSlug(input.hub_slug);
+    const madeForKids =
+      typeof input.made_for_kids === 'boolean' ? input.made_for_kids : null;
+    const hasPaidPromotion = input.has_paid_promotion === true;
+    const alteredContent = input.altered_content === true;
 
     let rows: { id: string }[];
     try {
@@ -1338,9 +1346,10 @@ export class PostsService {
         `
         insert into public.posts
           (author_id, category_id, country_name, country_code, city_name, title, body, visibility,
-           media_type, media_url, thumb_url, shared_post_id, channel_id, posted_by_user_id, hub_slug)
+           media_type, media_url, thumb_url, shared_post_id, channel_id, posted_by_user_id, hub_slug,
+           made_for_kids, has_paid_promotion, altered_content)
         values
-          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         returning id
         `,
         [
@@ -1359,40 +1368,76 @@ export class PostsService {
           channelId,
           postedByUserId,
           hubSlug,
+          madeForKids,
+          hasPaidPromotion,
+          alteredContent,
         ]
       );
       rows = result.rows;
     } catch (err: any) {
-      // Migration lag: hub_slug column missing — insert without it.
+      // Migration lag: new Studio columns or hub_slug missing — insert without them.
       const msg = String(err?.message ?? err ?? '');
-      if (!/hub_slug/i.test(msg)) throw err;
-      const result = await pool.query(
-        `
-        insert into public.posts
-          (author_id, category_id, country_name, country_code, city_name, title, body, visibility,
-           media_type, media_url, thumb_url, shared_post_id, channel_id, posted_by_user_id)
-        values
-          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-        returning id
-        `,
-        [
-          authorId,
-          categoryId,
-          input.country_name,
-          iso,
-          input.city_name ?? null,
-          input.title?.trim() || null,
-          bodyValue,
-          visibility,
-          mediaType,
-          mediaUrl,
-          thumbUrl,
-          sharedPostId,
-          channelId,
-          postedByUserId,
-        ]
-      );
-      rows = result.rows;
+      if (!/hub_slug|made_for_kids|has_paid_promotion|altered_content/i.test(msg)) throw err;
+      try {
+        const result = await pool.query(
+          `
+          insert into public.posts
+            (author_id, category_id, country_name, country_code, city_name, title, body, visibility,
+             media_type, media_url, thumb_url, shared_post_id, channel_id, posted_by_user_id, hub_slug)
+          values
+            ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          returning id
+          `,
+          [
+            authorId,
+            categoryId,
+            input.country_name,
+            iso,
+            input.city_name ?? null,
+            input.title?.trim() || null,
+            bodyValue,
+            visibility,
+            mediaType,
+            mediaUrl,
+            thumbUrl,
+            sharedPostId,
+            channelId,
+            postedByUserId,
+            hubSlug,
+          ]
+        );
+        rows = result.rows;
+      } catch (err2: any) {
+        const msg2 = String(err2?.message ?? err2 ?? '');
+        if (!/hub_slug/i.test(msg2)) throw err2;
+        const result = await pool.query(
+          `
+          insert into public.posts
+            (author_id, category_id, country_name, country_code, city_name, title, body, visibility,
+             media_type, media_url, thumb_url, shared_post_id, channel_id, posted_by_user_id)
+          values
+            ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          returning id
+          `,
+          [
+            authorId,
+            categoryId,
+            input.country_name,
+            iso,
+            input.city_name ?? null,
+            input.title?.trim() || null,
+            bodyValue,
+            visibility,
+            mediaType,
+            mediaUrl,
+            thumbUrl,
+            sharedPostId,
+            channelId,
+            postedByUserId,
+          ]
+        );
+        rows = result.rows;
+      }
     }
 
     const createdId = rows[0]?.id;

@@ -111,6 +111,12 @@ export const typeDefs = `#graphql
     channel_hidden_at: String
     """Hubs vibe shelf slug (food, nature, …) for long-form / Sparks cataloging."""
     hub_slug: String
+    """null = legacy/unset; true = made for kids; false = not made for kids."""
+    made_for_kids: Boolean
+    """Creator disclosed paid promotion / sponsorship."""
+    has_paid_promotion: Boolean
+    """Creator disclosed altered or AI-made content."""
+    altered_content: Boolean
   }
 
   enum ChannelMemberRole {
@@ -330,6 +336,12 @@ export const typeDefs = `#graphql
     channel_id: ID
     """Optional Hubs category slug (food, travel, nature, …)."""
     hub_slug: String
+    """Required for Hubs publishes when set: true = kids, false = not for kids."""
+    made_for_kids: Boolean
+    """Paid promotion / sponsorship disclosure."""
+    has_paid_promotion: Boolean
+    """Altered or AI-made content disclosure."""
+    altered_content: Boolean
   }
 
   input UpdatePostInput {
