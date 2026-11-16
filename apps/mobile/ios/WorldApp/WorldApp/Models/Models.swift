@@ -41,6 +41,8 @@ struct PostMediaPayload: Sendable {
     let expiresAt: Date?
     /// R2 object key — used when signed GET URLs expire and need a fresh post fetch.
     let r2Key: String?
+    /// Optional media duration in seconds (stamped at publish for channel short→Spark).
+    let durationSeconds: Double?
 
     static func parse(from mediaURL: String?) -> PostMediaPayload? {
         guard let raw = mediaURL?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
@@ -61,7 +63,8 @@ struct PostMediaPayload: Sendable {
                     isReel: false,
                     isStory: false,
                     expiresAt: nil,
-                    r2Key: nil
+                    r2Key: nil,
+                    durationSeconds: nil
                 )
             }
 
@@ -109,13 +112,21 @@ struct PostMediaPayload: Sendable {
             let r2Raw = (object["r2_key"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let r2Key = (r2Raw?.isEmpty == false) ? r2Raw : nil
+            let durationSeconds: Double? = {
+                if let d = object["duration_seconds"] as? Double, d > 0 { return d }
+                if let d = object["durationSeconds"] as? Double, d > 0 { return d }
+                if let i = object["duration_seconds"] as? Int, i > 0 { return Double(i) }
+                if let s = object["duration_seconds"] as? String, let d = Double(s), d > 0 { return d }
+                return nil
+            }()
             return PostMediaPayload(
                 urls: urls,
                 types: types,
                 isReel: reel,
                 isStory: story,
                 expiresAt: expiresAt,
-                r2Key: r2Key
+                r2Key: r2Key,
+                durationSeconds: durationSeconds
             )
         }
 
@@ -125,7 +136,8 @@ struct PostMediaPayload: Sendable {
             isReel: false,
             isStory: false,
             expiresAt: nil,
-            r2Key: nil
+            r2Key: nil,
+            durationSeconds: nil
         )
     }
 
@@ -134,7 +146,8 @@ struct PostMediaPayload: Sendable {
         types: [String],
         reel: Bool = false,
         story: Bool = false,
-        expiresAt: Date? = nil
+        expiresAt: Date? = nil,
+        durationSeconds: Double? = nil
     ) -> String? {
         guard !urls.isEmpty else { return nil }
         var object: [String: Any] = [
@@ -145,6 +158,9 @@ struct PostMediaPayload: Sendable {
         if story { object["story"] = true }
         if let expiresAt {
             object["expires_at"] = ISO8601DateFormatter().string(from: expiresAt)
+        }
+        if let durationSeconds, durationSeconds > 0 {
+            object["duration_seconds"] = durationSeconds
         }
         guard let data = try? JSONSerialization.data(withJSONObject: object),
               let json = String(data: data, encoding: .utf8)

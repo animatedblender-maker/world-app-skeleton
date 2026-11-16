@@ -2668,8 +2668,8 @@ struct YouTubeAppView: View {
                     countryCode: nil,
                     lastReadAt: nil
                 ),
-                videos: post.isReel ? [] : [post],
-                reels: post.isReel ? [post] : [],
+                videos: PlayPlatformBridge.isChannelSparkContent(post) ? [] : [post],
+                reels: PlayPlatformBridge.isChannelSparkContent(post) ? [post] : [],
                 hasCustomChannelName: true
             )
         }
@@ -2678,14 +2678,15 @@ struct YouTubeAppView: View {
         }
         let title = post.author?.displayName
             ?? post.authorDisplayName
+        let spark = PlayPlatformBridge.isChannelSparkContent(post)
         return YouTubeChannel(
             id: post.authorID,
             authorID: post.authorID,
             title: title,
             handle: post.author?.username.map { "@\($0)" },
             author: post.author,
-            videos: [post],
-            reels: [],
+            videos: spark ? [] : [post],
+            reels: spark ? [post] : [],
             hasCustomChannelName: false
         )
     }

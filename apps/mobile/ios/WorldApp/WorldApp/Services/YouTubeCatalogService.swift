@@ -250,8 +250,13 @@ final class YouTubeCatalogService {
                 channelPosts = posts.filter { PlayPlatformBridge.isHubChannelUpload($0) }
             }
 
-            let longForm = channelPosts.filter { !$0.isReel }.sorted { $0.createdAt > $1.createdAt }
-            let reels = channelPosts.filter(\.isReel).sorted { $0.createdAt > $1.createdAt }
+            // Sparks/shorts only under Sparks — never also under Videos.
+            let reels = channelPosts
+                .filter { PlayPlatformBridge.isChannelSparkContent($0) }
+                .sorted { $0.createdAt > $1.createdAt }
+            let longForm = channelPosts
+                .filter { !PlayPlatformBridge.isChannelSparkContent($0) }
+                .sorted { $0.createdAt > $1.createdAt }
             // No channel row without real channel content (setup-only profiles stay off Hubs rails).
             guard !longForm.isEmpty || !reels.isEmpty else { continue }
 

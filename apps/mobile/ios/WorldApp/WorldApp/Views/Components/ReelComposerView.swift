@@ -894,13 +894,20 @@ struct ReelComposerView: View {
         let localPreview = effectiveThumb
         let localCountry = country
         let localProfileCity = profile.cityName
-        let asReel = isReelAudience
-        let toHub = isHubAudience || (locksToHubs && detectedAsSpark)
+        // Re-assert short→Spark at publish (probe can miss on pick; square/vertical ≤60s must be Spark).
+        let shortHubSpark =
+            locksToHubs
+            && videoDurationSeconds > 0
+            && videoDurationSeconds <= 60
+            && videoAspectHeightOverWidth >= 0.8
+        if shortHubSpark { detectedAsSpark = true }
+        let asReel = isReelAudience || shortHubSpark
+        let toHub = isHubAudience || (locksToHubs && (detectedAsSpark || shortHubSpark))
         let hubSlug = resolvedHubSlug
         let localKids = madeForKids
         let localPromo = hasPaidPromotion
         let localAI = alteredContent
-        let channelBoundSpark = publishToHubChannel || (locksToHubs && detectedAsSpark)
+        let channelBoundSpark = publishToHubChannel || (locksToHubs && (detectedAsSpark || shortHubSpark))
 
         // Long-form video (feed or hubs): jump to feed with a shadow card while uploading.
         // Sparks publish then open Sparks — they don't pin on the home feed list.
@@ -967,6 +974,7 @@ struct ReelComposerView: View {
                     madeForKids: localKids,
                     hasPaidPromotion: localPromo,
                     alteredContent: localAI,
+                    durationSeconds: videoDurationSeconds > 0 ? videoDurationSeconds : nil,
                     onUploadProgress: progressHandler,
                     onPublishing: publishingHandler
                 )

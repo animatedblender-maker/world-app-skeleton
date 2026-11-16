@@ -343,7 +343,8 @@ struct YouTubeChannelView: View {
     private var tabContent: some View {
         switch selectedTab {
         case .videos:
-            videoList(channel.videos)
+            // Defensive: never list Sparks/shorts under Videos.
+            videoList(channel.videos.filter { !PlayPlatformBridge.isChannelSparkContent($0) })
         case .reels:
             reelsGrid
         case .about:

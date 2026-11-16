@@ -1783,6 +1783,7 @@ final class PostsService {
         madeForKids: Bool? = nil,
         hasPaidPromotion: Bool = false,
         alteredContent: Bool = false,
+        durationSeconds: Double? = nil,
         onUploadProgress: (@Sendable (UploadProgress) -> Void)? = nil,
         onPublishing: (@Sendable () -> Void)? = nil
     ) async throws -> CountryPost {
@@ -1800,7 +1801,8 @@ final class PostsService {
         let mediaURL = PostMediaPayload.encode(
             urls: [upload.publicURL],
             types: ["video"],
-            reel: true
+            reel: true,
+            durationSeconds: durationSeconds
         )
         // Explicit spark marker so isReel stays true even if media JSON is stripped.
         // Keep any HubChannelPostMarker already stamped by the caller (channel Sparks).

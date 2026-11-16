@@ -138,6 +138,56 @@ enum PlayPlatformBridge {
         return HubChannelPostMarker.isMarked(post.body)
     }
 
+    /// Channel **Spark** (short) — belongs only under the Sparks tab, never Videos.
+    static func isChannelSparkContent(_ post: CountryPost) -> Bool {
+        if post.isStory { return false }
+        if post.isReel || post.isSpark { return true }
+        let type = (post.mediaType ?? "").lowercased()
+        if type == "reel" || type == "spark" { return true }
+        if post.mediaPayload?.isReel == true { return true }
+        let body = post.body
+        if body.hasPrefix("__spark__|") || body.hasPrefix("__reel__|")
+            || body.contains("\n__spark__|") || body.contains("\n__reel__|") {
+            // Feed spark shares use __spark_share__ — never count those as channel Sparks.
+            if SparkShareMarker.isMarked(body) { return false }
+            return true
+        }
+        // Channel short stamped with duration_seconds ≤ 60 at publish.
+        if isHubChannelUpload(post),
+           let seconds = mediaDurationSeconds(post),
+           seconds > 0,
+           seconds <= 60,
+           !isR2LongFormMedia(post) {
+            return true
+        }
+        return false
+    }
+
+    /// Optional duration from media payload / URL JSON.
+    static func mediaDurationSeconds(_ post: CountryPost) -> Double? {
+        if let d = post.mediaPayload?.durationSeconds, d > 0 { return d }
+        let blobs = [post.mediaURL, post.primaryMediaURL].compactMap { $0 }
+        for blob in blobs {
+            if let v = jsonNumber(blob, keys: ["duration_seconds", "durationSeconds"]) {
+                return v
+            }
+        }
+        return nil
+    }
+
+    private static func jsonNumber(_ raw: String, keys: [String]) -> Double? {
+        guard let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        for key in keys {
+            if let n = obj[key] as? Double, n > 0 { return n }
+            if let n = obj[key] as? Int, n > 0 { return Double(n) }
+            if let s = obj[key] as? String, let n = Double(s), n > 0 { return n }
+        }
+        return nil
+    }
+
     /// Feed share of a Hubs clip (badge + open Hubs) without granting the sharer a channel.
     static func isHubOriginShare(_ post: CountryPost) -> Bool {
         HubOriginShareMarker.isMarked(post.body)
