@@ -35,9 +35,10 @@ struct YouTubeChannelView: View {
             || channel.authorID == appState.currentProfile?.userID
     }
 
-    /// Live count — parent may already resolve deltas; still re-read AppState so Follow updates instantly.
-    private var liveFollowerCount: Int {
-        appState.resolvedFollowerCount(for: channel.authorID, base: subscriberCount)
+    @State private var liveSubscriberCount: Int?
+
+    private var displayedSubscriberCount: Int {
+        liveSubscriberCount ?? subscriberCount ?? 0
     }
 
     var body: some View {
@@ -227,7 +228,13 @@ struct YouTubeChannelView: View {
 
                 Spacer()
 
-                YouTubeSubscribeButton(authorID: channel.authorID)
+                YouTubeSubscribeButton(
+                    authorID: channel.authorID,
+                    channelID: managedChannel?.id,
+                    onSubscriptionChange: { count, _ in
+                        liveSubscriberCount = count
+                    }
+                )
             }
             .padding(.top, -32)
 
@@ -252,8 +259,7 @@ struct YouTubeChannelView: View {
 
     private var statsLine: String {
         var parts: [String] = []
-        // Always show followers so Follow/Unfollow is visible immediately.
-        parts.append("\(liveFollowerCount.formatted()) \(MatteryaCopy.followers)")
+        parts.append("\(displayedSubscriberCount.formatted()) \(MatteryaCopy.subscribers)")
         parts.append("\(channel.videoCount) videos")
         if channel.totalViews > 0 {
             parts.append("\(channel.totalViews.formatted()) views")

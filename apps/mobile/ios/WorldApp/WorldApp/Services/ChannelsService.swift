@@ -96,6 +96,90 @@ final class ChannelsService {
         return result.channelsIAdmin.map(\.toModel)
     }
 
+    // MARK: - Channel Subscribe (REST — not profile Follow)
+
+    struct ChannelSubscriptionStatus: Equatable {
+        var channelId: String
+        var subscribed: Bool
+        var subscriberCount: Int
+    }
+
+    func subscriptionStatus(channelID: String? = nil, ownerUserID: String? = nil) async throws -> ChannelSubscriptionStatus {
+        var query: [String: String] = [:]
+        if let channelID, !channelID.isEmpty { query["channel_id"] = channelID }
+        if let ownerUserID, !ownerUserID.isEmpty { query["owner_user_id"] = ownerUserID }
+        let json = try await restJSON(method: "GET", path: "/v1/channels/subscription", query: query, body: nil)
+        return parseSubscription(json)
+    }
+
+    func subscribe(channelID: String? = nil, ownerUserID: String? = nil) async throws -> ChannelSubscriptionStatus {
+        var body: [String: Any] = [:]
+        if let channelID, !channelID.isEmpty { body["channel_id"] = channelID }
+        if let ownerUserID, !ownerUserID.isEmpty { body["owner_user_id"] = ownerUserID }
+        let json = try await restJSON(method: "POST", path: "/v1/channels/subscribe", query: [:], body: body)
+        return parseSubscription(json)
+    }
+
+    func unsubscribe(channelID: String? = nil, ownerUserID: String? = nil) async throws -> ChannelSubscriptionStatus {
+        var body: [String: Any] = [:]
+        if let channelID, !channelID.isEmpty { body["channel_id"] = channelID }
+        if let ownerUserID, !ownerUserID.isEmpty { body["owner_user_id"] = ownerUserID }
+        let json = try await restJSON(method: "POST", path: "/v1/channels/unsubscribe", query: [:], body: body)
+        return parseSubscription(json)
+    }
+
+    func toggleSubscribe(channelID: String? = nil, ownerUserID: String? = nil) async throws -> ChannelSubscriptionStatus {
+        let status = try await subscriptionStatus(channelID: channelID, ownerUserID: ownerUserID)
+        if status.subscribed {
+            return try await unsubscribe(channelID: channelID ?? status.channelId, ownerUserID: ownerUserID)
+        }
+        return try await subscribe(channelID: channelID ?? status.channelId, ownerUserID: ownerUserID)
+    }
+
+    private func parseSubscription(_ json: [String: Any]) -> ChannelSubscriptionStatus {
+        ChannelSubscriptionStatus(
+            channelId: String(json["channelId"] as? String ?? json["channel_id"] as? String ?? ""),
+            subscribed: (json["subscribed"] as? Bool) ?? false,
+            subscriberCount: Int(json["subscriberCount"] as? Int ?? json["subscriber_count"] as? Int ?? 0)
+        )
+    }
+
+    private func restJSON(
+        method: String,
+        path: String,
+        query: [String: String],
+        body: [String: Any]?
+    ) async throws -> [String: Any] {
+        guard let token = try? await AuthService.shared.ensureValidToken(), !token.isEmpty else {
+            throw ChannelsRESTError.unauthenticated
+        }
+        var comps = URLComponents(string: "\(AppConfig.apiBaseURL)\(path)")
+        if !query.isEmpty {
+            comps?.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
+        }
+        guard let url = comps?.url else { throw ChannelsRESTError.message("Invalid URL") }
+        var req = URLRequest(url: url)
+        req.httpMethod = method
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.timeoutInterval = 20
+        if method == "POST" {
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try? JSONSerialization.data(withJSONObject: body ?? [:])
+        }
+        let (data, response) = try await URLSession.shared.data(for: req)
+        let http = response as? HTTPURLResponse
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        let status = http?.statusCode ?? 0
+        guard (200..<300).contains(status) else {
+            let err = String(json["error"] as? String ?? "Request failed (\(status))")
+            if status == 401 { throw ChannelsRESTError.unauthenticated }
+            if err == "channel_not_found" { throw ChannelsRESTError.channelNotFound }
+            throw ChannelsRESTError.message(err)
+        }
+        return json
+    }
+
     // MARK: - Mutations
 
     func createChannel(
@@ -236,6 +320,20 @@ final class ChannelsService {
             variables: ["commentId": commentID]
         )
         return result.deleteChannelComment
+    }
+}
+
+enum ChannelsRESTError: LocalizedError {
+    case unauthenticated
+    case channelNotFound
+    case message(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unauthenticated: return "Sign in to subscribe."
+        case .channelNotFound: return "Channel not found."
+        case .message(let s): return s
+        }
     }
 }
 

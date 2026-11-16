@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import UIKit
 
 enum YouTubeTheme {
     static let accent = Theme.accentBright
@@ -143,38 +144,94 @@ struct YouTubeSubscribeButton: View {
     @Environment(AppState.self) private var appState
 
     let authorID: String
+    /// When set (or resolvable via owner), this is Hubs channel Subscribe — not profile Follow.
+    var channelID: String? = nil
     var compact = false
+    var onSubscriptionChange: ((Int, Bool) -> Void)? = nil
 
-    private var isFollowing: Bool {
-        appState.isFollowing(authorID)
+    @State private var subscribed = false
+    @State private var subscriberCount: Int?
+    @State private var busy = false
+    @State private var resolvedChannelID: String?
+
+    private var isOwnChannel: Bool {
+        authorID == appState.currentProfile?.userID
     }
+
+    private var isOn: Bool { subscribed }
 
     var body: some View {
         Button {
-            Task { await appState.toggleFollow(authorID) }
+            Task { await toggle() }
         } label: {
             HStack(spacing: compact ? 4 : 6) {
-                if !isFollowing {
+                if !isOn {
                     MatteryaHubsLogoView(size: compact ? 16 : 18)
                 }
-                Text(isFollowing ? MatteryaCopy.following : MatteryaCopy.follow)
+                Text(isOn ? MatteryaCopy.subscribed : MatteryaCopy.subscribe)
                     .font(compact ? .caption.weight(.bold) : .subheadline.weight(.semibold))
             }
-            .foregroundStyle(isFollowing ? Theme.ink : Theme.paper)
+            .foregroundStyle(isOn ? Theme.ink : Theme.paper)
             .padding(.horizontal, compact ? 12 : 16)
             .padding(.vertical, compact ? 8 : 10)
             .background(
                 Capsule()
-                    .fill(isFollowing ? Theme.canvasMuted : Theme.ink)
+                    .fill(isOn ? Theme.canvasMuted : Theme.ink)
             )
             .overlay {
-                if isFollowing {
+                if isOn {
                     Capsule().stroke(Theme.border, lineWidth: 0.5)
                 }
             }
+            .opacity(busy ? 0.7 : 1)
         }
         .buttonStyle(.plain)
-        .disabled(authorID == appState.currentProfile?.userID)
+        .disabled(isOwnChannel || busy)
+        .task(id: "\(channelID ?? "")|\(authorID)") {
+            await refreshStatus()
+        }
+    }
+
+    @MainActor
+    private func refreshStatus() async {
+        guard !isOwnChannel else {
+            subscribed = false
+            return
+        }
+        do {
+            let status = try await ChannelsService.shared.subscriptionStatus(
+                channelID: channelID,
+                ownerUserID: channelID == nil ? authorID : nil
+            )
+            subscribed = status.subscribed
+            subscriberCount = status.subscriberCount
+            resolvedChannelID = status.channelId
+            onSubscriptionChange?(status.subscriberCount, status.subscribed)
+        } catch {
+            // Channel may not exist yet — leave button off.
+            subscribed = false
+        }
+    }
+
+    @MainActor
+    private func toggle() async {
+        guard !busy, !isOwnChannel else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            let status = try await ChannelsService.shared.toggleSubscribe(
+                channelID: channelID ?? resolvedChannelID,
+                ownerUserID: (channelID ?? resolvedChannelID) == nil ? authorID : nil
+            )
+            subscribed = status.subscribed
+            subscriberCount = status.subscriberCount
+            resolvedChannelID = status.channelId
+            onSubscriptionChange?(status.subscriberCount, status.subscribed)
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        } catch {
+            // Keep prior state; surface via haptic only.
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+        }
     }
 }
 
@@ -184,6 +241,8 @@ struct YouTubeChannelRow: View {
     let channel: YouTubeChannel
     var subscriberCount: Int?
     var onTapChannel: () -> Void
+
+    @State private var liveSubscriberCount: Int?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -206,14 +265,20 @@ struct YouTubeChannelRow: View {
             }
             .buttonStyle(.plain)
 
-            YouTubeSubscribeButton(authorID: channel.authorID, compact: true)
+            YouTubeSubscribeButton(
+                authorID: channel.authorID,
+                compact: true,
+                onSubscriptionChange: { count, _ in
+                    liveSubscriberCount = count
+                }
+            )
         }
     }
 
     private var followerLine: String {
         var parts: [String] = []
-        let count = appState.resolvedFollowerCount(for: channel.authorID, base: subscriberCount)
-        parts.append("\(count.formatted()) \(MatteryaCopy.followers)")
+        let count = liveSubscriberCount ?? subscriberCount ?? 0
+        parts.append("\(count.formatted()) \(MatteryaCopy.subscribers)")
         if channel.videoCount > 0 {
             parts.append("\(channel.videoCount) videos")
         }

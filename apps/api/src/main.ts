@@ -152,6 +152,7 @@ import {
   getStudioVideosPage,
   requestStudioPayout,
 } from './studio/studio.service.js';
+import { ChannelsService } from './graphql/modules/channels/channels.service.js';
 import { worldCountryFeed } from './recommendation/mind-world.js';
 import { bustSessionCache } from './recommendation/mind-session.js';
 import { handlePosterBatch, handlePosterGet } from './media/poster-route.js';
@@ -1360,6 +1361,82 @@ app.post('/v1/studio/earn/payout', async (req: Request, res: Response) => {
     return res.json(result);
   } catch (err: any) {
     return res.status(500).json({ error: err?.message ?? 'studio_earn_payout_failed' });
+  }
+});
+
+// ─── Hubs channel Subscribe (not profile Follow) ───────────────────────────────
+const channelSubscribeSvc = new ChannelsService();
+
+async function resolveChannelIdForSubscribe(raw: {
+  channelId?: string;
+  ownerUserId?: string;
+}): Promise<string | null> {
+  const channelId = String(raw.channelId || '').trim();
+  if (channelId) {
+    const ch = await channelSubscribeSvc.channelById(channelId, null);
+    return ch?.id ?? null;
+  }
+  const ownerUserId = String(raw.ownerUserId || '').trim();
+  if (ownerUserId) {
+    const ch = await channelSubscribeSvc.channelByOwner(ownerUserId, null);
+    return ch?.id ?? null;
+  }
+  return null;
+}
+
+app.get('/v1/channels/subscription', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  try {
+    const channelId = await resolveChannelIdForSubscribe({
+      channelId: typeof req.query.channel_id === 'string' ? req.query.channel_id : undefined,
+      ownerUserId: typeof req.query.owner_user_id === 'string' ? req.query.owner_user_id : undefined,
+    });
+    if (!channelId) return res.status(404).json({ error: 'channel_not_found' });
+    const status = await channelSubscribeSvc.subscriptionStatus(channelId, user?.id ?? null);
+    return res.json({ ok: true, ...status });
+  } catch (err: any) {
+    const msg = String(err?.message || err);
+    if (msg === 'SCHEMA_MISSING') return res.status(503).json({ error: 'schema_missing' });
+    return res.status(500).json({ error: err?.message ?? 'subscription_status_failed' });
+  }
+});
+
+app.post('/v1/channels/subscribe', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    const channelId = await resolveChannelIdForSubscribe({
+      channelId: req.body?.channel_id,
+      ownerUserId: req.body?.owner_user_id,
+    });
+    if (!channelId) return res.status(404).json({ error: 'channel_not_found' });
+    const result = await channelSubscribeSvc.subscribe(channelId, user.id);
+    return res.json({ ok: true, ...result, channelId });
+  } catch (err: any) {
+    const msg = String(err?.message || err);
+    if (msg === 'CANNOT_SUBSCRIBE_OWN') return res.status(400).json({ error: 'cannot_subscribe_own' });
+    if (msg === 'CHANNEL_NOT_FOUND') return res.status(404).json({ error: 'channel_not_found' });
+    if (msg === 'SCHEMA_MISSING') return res.status(503).json({ error: 'schema_missing' });
+    return res.status(500).json({ error: err?.message ?? 'subscribe_failed' });
+  }
+});
+
+app.post('/v1/channels/unsubscribe', async (req: Request, res: Response) => {
+  const user = await getUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'unauthenticated' });
+  try {
+    const channelId = await resolveChannelIdForSubscribe({
+      channelId: req.body?.channel_id,
+      ownerUserId: req.body?.owner_user_id,
+    });
+    if (!channelId) return res.status(404).json({ error: 'channel_not_found' });
+    const result = await channelSubscribeSvc.unsubscribe(channelId, user.id);
+    return res.json({ ok: true, ...result, channelId });
+  } catch (err: any) {
+    const msg = String(err?.message || err);
+    if (msg === 'CHANNEL_NOT_FOUND') return res.status(404).json({ error: 'channel_not_found' });
+    if (msg === 'SCHEMA_MISSING') return res.status(503).json({ error: 'schema_missing' });
+    return res.status(500).json({ error: err?.message ?? 'unsubscribe_failed' });
   }
 });
 

@@ -283,6 +283,10 @@ enum MatteryaCopy {
     static let follow = "Follow"
     static let following = "Following"
     static let followers = "followers"
+    /// Hubs channel Subscribe (distinct from profile Follow).
+    static let subscribe = "Subscribe"
+    static let subscribed = "Subscribed"
+    static let subscribers = "subscribers"
     static let creator = "Creator"
     static let creators = "Creators"
     static let viewCreatorHub = "View creator hub"

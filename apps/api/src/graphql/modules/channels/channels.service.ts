@@ -621,6 +621,96 @@ export class ChannelsService {
     return { channelId, ownerUserId: rows[0].owner_user_id };
   }
 
+  /** Hubs channel Subscribe count (not profile Follow). */
+  async subscriberCount(channelId: string): Promise<number> {
+    if (!isUuid(channelId)) return 0;
+    try {
+      const { rows } = await pool.query<{ n: number }>(
+        `select count(*)::int as n from public.channel_subscribers where channel_id = $1::uuid`,
+        [channelId]
+      );
+      return Number(rows[0]?.n) || 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  async isSubscribed(channelId: string, userId: string): Promise<boolean> {
+    if (!isUuid(channelId) || !isUuid(userId)) return false;
+    try {
+      const { rows } = await pool.query<{ ok: boolean }>(
+        `
+        select exists(
+          select 1 from public.channel_subscribers
+          where channel_id = $1::uuid and user_id = $2::uuid
+        ) as ok
+        `,
+        [channelId, userId]
+      );
+      return !!rows[0]?.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async subscribe(channelId: string, userId: string): Promise<{ subscribed: boolean; subscriberCount: number }> {
+    if (!isUuid(channelId) || !isUuid(userId)) throw new Error('CHANNEL_NOT_FOUND');
+    const { rows: ch } = await pool.query<{ owner_user_id: string }>(
+      `select owner_user_id::text as owner_user_id from public.channels where id = $1::uuid limit 1`,
+      [channelId]
+    );
+    if (!ch[0]) throw new Error('CHANNEL_NOT_FOUND');
+    if (ch[0].owner_user_id === userId) throw new Error('CANNOT_SUBSCRIBE_OWN');
+    try {
+      await pool.query(
+        `
+        insert into public.channel_subscribers (channel_id, user_id)
+        values ($1::uuid, $2::uuid)
+        on conflict (channel_id, user_id) do nothing
+        `,
+        [channelId, userId]
+      );
+    } catch (err: any) {
+      if (String(err?.message || '').includes('channel_subscribers')) {
+        throw new Error('SCHEMA_MISSING');
+      }
+      throw err;
+    }
+    return {
+      subscribed: true,
+      subscriberCount: await this.subscriberCount(channelId),
+    };
+  }
+
+  async unsubscribe(channelId: string, userId: string): Promise<{ subscribed: boolean; subscriberCount: number }> {
+    if (!isUuid(channelId) || !isUuid(userId)) throw new Error('CHANNEL_NOT_FOUND');
+    try {
+      await pool.query(
+        `delete from public.channel_subscribers where channel_id = $1::uuid and user_id = $2::uuid`,
+        [channelId, userId]
+      );
+    } catch (err: any) {
+      if (String(err?.message || '').includes('channel_subscribers')) {
+        throw new Error('SCHEMA_MISSING');
+      }
+      throw err;
+    }
+    return {
+      subscribed: false,
+      subscriberCount: await this.subscriberCount(channelId),
+    };
+  }
+
+  async subscriptionStatus(
+    channelId: string,
+    viewerId: string | null
+  ): Promise<{ channelId: string; subscribed: boolean; subscriberCount: number }> {
+    const subscriberCount = await this.subscriberCount(channelId);
+    const subscribed =
+      viewerId && isUuid(viewerId) ? await this.isSubscribed(channelId, viewerId) : false;
+    return { channelId, subscribed, subscriberCount };
+  }
+
   private async dualWriteBioMarker(userId: string, channelName: string): Promise<void> {
     const name = cleanName(channelName);
     if (!name) return;

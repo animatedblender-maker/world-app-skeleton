@@ -110,18 +110,10 @@ export async function getStudioDashboard(
     days,
   });
 
-  // Subscribers ≈ channel follows if table exists; else 0.
+  // Channel subscribers (Subscribe) — never profile followers.
   let subscribers = 0;
   try {
-    const { rows } = await pool.query<{ n: number }>(
-      `
-      select count(*)::int as n
-      from public.user_follows
-      where following_id = $1::uuid
-      `,
-      [channel.owner_user_id]
-    );
-    subscribers = Number(rows[0]?.n) || 0;
+    subscribers = await channels.subscriberCount(channel.id);
   } catch {
     subscribers = 0;
   }
@@ -648,7 +640,10 @@ async function loadRetentionBuckets(
 
 /** Stub RPM used only for clearly labeled estimates until ads revshare ships. */
 const EARN_ESTIMATE_RPM_USD = 1.5;
-const EARN_VIEWS_GATE = 1000;
+/** Apply unlocks only after 2000 watch hours (rolling 365d) + 500 channel subscribers. */
+const EARN_WATCH_HOURS_GATE = 2000;
+const EARN_SUBSCRIBERS_GATE = 500;
+const EARN_WATCH_HOURS_WINDOW_DAYS = 365;
 const EARN_VIDEOS_GATE = 1;
 const EARN_MIN_PAYOUT_USD = 50;
 const EARN_MIN_PAYOUT_MINOR = EARN_MIN_PAYOUT_USD * 100;
@@ -1075,16 +1070,17 @@ export async function getStudioEarn(
 
   const videoIds = await loadChannelVideoIds(channel.id);
   const kpis = await loadKpis(channel.id, videoIds, days);
+  // Earn apply uses rolling 365d watch hours (not the selected dashboard range).
+  const eligibilityKpis =
+    days === EARN_WATCH_HOURS_WINDOW_DAYS
+      ? kpis
+      : await loadKpis(channel.id, videoIds, EARN_WATCH_HOURS_WINDOW_DAYS);
   const videoCount = channel.video_count ?? videoIds.length;
   const payoutsLive = studioPayoutsLive();
 
   let subscribers = 0;
   try {
-    const { rows } = await pool.query<{ n: number }>(
-      `select count(*)::int as n from public.user_follows where following_id = $1::uuid`,
-      [channel.owner_user_id]
-    );
-    subscribers = Number(rows[0]?.n) || 0;
+    subscribers = await channels.subscriberCount(channel.id);
   } catch {
     subscribers = 0;
   }
@@ -1109,12 +1105,17 @@ export async function getStudioEarn(
   const impressions = kpis.impressions;
   const watchMs = kpis.watchMs;
   const watchHours = Math.round((watchMs / 3_600_000) * 100) / 100;
+  const eligibilityWatchMs = eligibilityKpis.watchMs;
+  const eligibilityWatchHours =
+    Math.round((eligibilityWatchMs / 3_600_000) * 100) / 100;
 
   const hasChannel = true;
   const hasVideos = videoCount >= EARN_VIDEOS_GATE;
-  const hasViews = views >= EARN_VIEWS_GATE;
+  const hasWatchHours = eligibilityWatchHours >= EARN_WATCH_HOURS_GATE;
+  const hasSubscribers = subscribers >= EARN_SUBSCRIBERS_GATE;
   const guidelinesOk = true;
-  const eligibilityMet = hasChannel && hasVideos && hasViews && guidelinesOk;
+  const eligibilityMet =
+    hasChannel && hasVideos && hasWatchHours && hasSubscribers && guidelinesOk;
 
   const monetization = await loadMonetization(channel.id, channel.owner_user_id);
   const balance = await loadBalance(channel.id);
@@ -1141,12 +1142,20 @@ export async function getStudioEarn(
         : 'Publish at least one Hubs video or Spark from your channel.',
     },
     {
-      id: 'views',
-      label: `${EARN_VIEWS_GATE.toLocaleString()} views in the selected range`,
-      met: hasViews,
-      detail: hasViews
-        ? `${views.toLocaleString()} views in the last ${days} days.`
-        : `${views.toLocaleString()} / ${EARN_VIEWS_GATE.toLocaleString()} views in the last ${days} days.`,
+      id: 'watch_hours',
+      label: `${EARN_WATCH_HOURS_GATE.toLocaleString()} public watch hours (last ${EARN_WATCH_HOURS_WINDOW_DAYS} days)`,
+      met: hasWatchHours,
+      detail: hasWatchHours
+        ? `${eligibilityWatchHours.toLocaleString()} watch hours in the last ${EARN_WATCH_HOURS_WINDOW_DAYS} days.`
+        : `${eligibilityWatchHours.toLocaleString()} / ${EARN_WATCH_HOURS_GATE.toLocaleString()} watch hours in the last ${EARN_WATCH_HOURS_WINDOW_DAYS} days.`,
+    },
+    {
+      id: 'subscribers',
+      label: `${EARN_SUBSCRIBERS_GATE.toLocaleString()} channel subscribers`,
+      met: hasSubscribers,
+      detail: hasSubscribers
+        ? `${subscribers.toLocaleString()} people subscribed to your Hubs channel.`
+        : `${subscribers.toLocaleString()} / ${EARN_SUBSCRIBERS_GATE.toLocaleString()} channel subscribers (Subscribe — not profile Follow).`,
     },
     {
       id: 'guidelines',
@@ -1160,7 +1169,7 @@ export async function getStudioEarn(
       met: monetization.state !== 'not_applied' && monetization.state !== 'rejected',
       detail:
         monetization.state === 'not_applied'
-          ? 'Apply when you meet the checklist — Matterya reviews channel eligibility.'
+          ? 'When watch hours and subscribers are met, you can apply for Earn.'
           : monetization.state === 'pending'
             ? 'Application received — under review.'
             : monetization.state === 'rejected'
@@ -1182,7 +1191,7 @@ export async function getStudioEarn(
   let status: StudioEarn['status'] = 'preview';
   let statusLabel = 'Earn preview';
   let statusDetail =
-    'Publish Hubs videos, grow views, and disclose paid promotion / AI content when relevant.';
+    `Reach ${EARN_WATCH_HOURS_GATE.toLocaleString()} watch hours and ${EARN_SUBSCRIBERS_GATE.toLocaleString()} channel subscribers, then apply for Earn.`;
 
   if (monetization.state === 'hold' || monetization.state === 'disabled') {
     status = 'hold';
@@ -1208,11 +1217,13 @@ export async function getStudioEarn(
   } else if (eligibilityMet) {
     status = 'ready_when_live';
     statusLabel = 'Ready to apply';
-    statusDetail = 'You meet the early checklist. Apply for Earn to join the review queue.';
+    statusDetail =
+      'You hit 2000 watch hours and 500 channel subscribers. Apply for Earn when you are ready.';
   } else if (hasVideos) {
     status = 'on_track';
     statusLabel = 'Building toward Earn';
-    statusDetail = 'Keep publishing and growing views — Earn uses organic Hubs performance like this.';
+    statusDetail =
+      `Keep growing — ${eligibilityWatchHours.toLocaleString()} / ${EARN_WATCH_HOURS_GATE.toLocaleString()} watch hours · ${subscribers.toLocaleString()} / ${EARN_SUBSCRIBERS_GATE.toLocaleString()} subscribers.`;
   }
 
   const canApply =
