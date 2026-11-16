@@ -398,6 +398,7 @@ struct YouTubeChannelView: View {
             Text(MatteryaCopy.aboutThisHub)
                 .font(.system(.headline, design: .serif))
                 .fontWeight(.regular)
+                .foregroundStyle(Theme.ink)
 
             if channelAboutText.isEmpty {
                 Text("No about text yet.")
@@ -413,7 +414,7 @@ struct YouTubeChannelView: View {
             if channel.hasCustomChannelName {
                 Label(MatteryaCopy.verifiedHubsChannel, systemImage: "checkmark.seal.fill")
                     .font(.subheadline)
-                    .foregroundStyle(Theme.accentBright)
+                    .foregroundStyle(Theme.ink)
             }
             if let country = channel.author?.countryName {
                 Label(country, systemImage: "mappin.and.ellipse")
@@ -431,13 +432,16 @@ struct YouTubeChannelView: View {
                 Label(MatteryaCopy.shareCreatorHub, systemImage: "square.and.arrow.up")
                     .font(.subheadline.weight(.semibold))
             }
-            .foregroundStyle(Theme.accentBright)
+            .foregroundStyle(Theme.ink)
+            .tint(Theme.ink)
             .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .foregroundStyle(Theme.ink)
+        .tint(Theme.ink)
         .padding(Theme.pagePadding)
         .padding(.top, 16)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Theme.canvasMuted, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(Theme.border, lineWidth: 0.5)
