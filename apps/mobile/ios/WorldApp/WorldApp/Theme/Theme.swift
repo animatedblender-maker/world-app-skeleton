@@ -600,6 +600,8 @@ struct PremiumTextField: View {
                         .keyboardType(keyboard)
                 }
             }
+            .foregroundStyle(Theme.ink)
+            .tint(Theme.ink)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .padding(12)

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { pool } from '../../../db.js';
+import { creditStudioEarnFromAdImpression } from '../../../studio/studio.service.js';
 
 type AdAdvertiserRow = {
   user_id: string;
@@ -662,17 +663,39 @@ export class AdsService {
   }
 
   async logImpression(impressionToken: string, userId: string | null): Promise<boolean> {
-    const { rowCount } = await pool.query(
+    const { rows } = await pool.query<{
+      id: string;
+      post_id: string | null;
+    }>(
       `
       update public.ad_impressions
       set
         viewed_at = coalesce(viewed_at, now()),
         viewer_user_id = coalesce(viewer_user_id, $2)
       where impression_token = $1
+      returning
+        id::text as id,
+        post_id::text as post_id
       `,
       [impressionToken, userId]
     );
-    return Number(rowCount ?? 0) > 0;
+    const row = rows[0];
+    if (!row) return false;
+
+    // Credit creator ledger once per impression (idempotent on source_ref).
+    try {
+      await creditStudioEarnFromAdImpression({
+        impressionId: row.id,
+        postId: row.post_id,
+      });
+    } catch (err) {
+      console.error('[ads] studio earn credit failed (non-fatal)', {
+        impression_id: row.id,
+        post_id: row.post_id,
+        error: err,
+      });
+    }
+    return true;
   }
 
   async logClick(impressionToken: string, userId: string | null): Promise<boolean> {

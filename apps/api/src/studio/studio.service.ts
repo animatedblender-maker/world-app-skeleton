@@ -756,6 +756,151 @@ function studioPayoutsLive(): boolean {
   return v === '1' || v === 'true' || v === 'yes' || v === 'on';
 }
 
+/** Creator share per viewed ad impression (USD cents). Default 1¢ ≈ $10 CPM share. */
+function adsCreatorShareMinorPerImpression(): number {
+  const raw = Number(process.env.ADS_CREATOR_SHARE_MINOR_PER_IMPRESSION ?? '1');
+  if (!Number.isFinite(raw) || raw <= 0) return 1;
+  return Math.min(100, Math.max(1, Math.round(raw)));
+}
+
+function studioEarnAutoApprove(): boolean {
+  const v = String(process.env.STUDIO_EARN_AUTO_APPROVE ?? 'true')
+    .trim()
+    .toLowerCase();
+  // Default on until admin review tooling ships — set STUDIO_EARN_AUTO_APPROVE=false to require pending.
+  return v !== '0' && v !== 'false' && v !== 'no' && v !== 'off';
+}
+
+/**
+ * Credit a Hubs channel when an ad is viewed on one of its posts.
+ * Idempotent via source_ref = ad_impression:<uuid>. No-op when post has no channel.
+ */
+export async function creditStudioEarnFromAdImpression(input: {
+  impressionId: string;
+  postId: string | null;
+}): Promise<{ credited: boolean; channelId?: string; amountMinor?: number; reason?: string }> {
+  const impressionId = String(input.impressionId || '').trim();
+  const postId = input.postId ? String(input.postId).trim() : '';
+  if (!impressionId) return { credited: false, reason: 'missing_impression' };
+  if (!postId) return { credited: false, reason: 'missing_post' };
+
+  const sourceRef = `ad_impression:${impressionId}`;
+  const amountMinor = adsCreatorShareMinorPerImpression();
+
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+
+    const { rows: existing } = await client.query<{ id: string }>(
+      `
+      select id::text as id
+      from public.studio_earn_ledger
+      where source_ref = $1
+      limit 1
+      `,
+      [sourceRef]
+    );
+    if (existing[0]) {
+      await client.query('rollback');
+      return { credited: false, reason: 'already_credited' };
+    }
+
+    const { rows: postRows } = await client.query<{
+      channel_id: string | null;
+      hub_slug: string | null;
+    }>(
+      `
+      select
+        p.channel_id::text as channel_id,
+        nullif(trim(coalesce(p.hub_slug, '')), '') as hub_slug
+      from public.posts p
+      where p.id = $1::uuid
+      limit 1
+      `,
+      [postId]
+    );
+    const post = postRows[0];
+    if (!post) {
+      await client.query('rollback');
+      return { credited: false, reason: 'post_not_found' };
+    }
+
+    let channelId = post.channel_id;
+    if (!channelId && post.hub_slug) {
+      const { rows: chRows } = await client.query<{ id: string }>(
+        `
+        select id::text as id
+        from public.channels
+        where lower(coalesce(handle, '')) = lower($1)
+        limit 1
+        `,
+        [post.hub_slug]
+      );
+      channelId = chRows[0]?.id ?? null;
+    }
+    if (!channelId) {
+      await client.query('rollback');
+      return { credited: false, reason: 'no_channel' };
+    }
+
+    await client.query(
+      `
+      insert into public.studio_earn_balances (channel_id)
+      values ($1::uuid)
+      on conflict (channel_id) do nothing
+      `,
+      [channelId]
+    );
+
+    await client.query(
+      `
+      insert into public.studio_earn_ledger (
+        channel_id, entry_type, amount_minor, currency, memo, source_ref
+      )
+      values (
+        $1::uuid,
+        'credit',
+        $2,
+        'USD',
+        'Ads revshare — viewed impression on your Hubs video',
+        $3
+      )
+      `,
+      [channelId, amountMinor, sourceRef]
+    );
+
+    await client.query(
+      `
+      update public.studio_earn_balances
+      set available_minor = available_minor + $2,
+          lifetime_earned_minor = lifetime_earned_minor + $2,
+          updated_at = now()
+      where channel_id = $1::uuid
+      `,
+      [channelId, amountMinor]
+    );
+
+    await client.query('commit');
+    return { credited: true, channelId, amountMinor };
+  } catch (err: any) {
+    try {
+      await client.query('rollback');
+    } catch {
+      /* ignore */
+    }
+    const msg = String(err?.message || err);
+    // Schema lag / missing tables — never break ad playback analytics.
+    if (msg.includes('studio_earn_') || msg.includes('hub_slug')) {
+      console.error('[studio] ads revshare credit skipped', { impressionId, postId, msg });
+      return { credited: false, reason: 'schema_or_query' };
+    }
+    console.error('[studio] ads revshare credit failed', { impressionId, postId, err });
+    return { credited: false, reason: 'error' };
+  } finally {
+    client.release();
+  }
+}
+
 function minorToUsd(minor: number): number {
   return Math.round((Number(minor) || 0)) / 100;
 }
@@ -1135,7 +1280,7 @@ export async function getStudioEarn(
     },
     note: payoutsLive
       ? 'Studio Earn ledger is live. Available balance can be withdrawn when you meet the minimum.'
-      : 'Studio Earn ledger and balances are live (starting at $0). Withdrawals stay closed until STUDIO_PAYOUTS_LIVE is enabled.',
+      : 'Studio Earn ledger is live. Ads viewed on your Hubs videos credit your balance; withdrawals stay closed until STUDIO_PAYOUTS_LIVE is enabled.',
   };
 }
 
@@ -1154,20 +1299,29 @@ export async function applyStudioEarn(
     return { error: 'not_eligible', status: 400 };
   }
 
+  // Auto-approve when review tooling is not live so creators are not stuck in pending forever.
+  const nextState = studioEarnAutoApprove() ? 'approved' : 'pending';
   try {
     await pool.query(
       `
       insert into public.studio_creator_monetization (
-        channel_id, owner_user_id, state, applied_at, updated_at
+        channel_id, owner_user_id, state, applied_at, reviewed_at, updated_at
       )
-      values ($1::uuid, $2::uuid, 'pending', now(), now())
+      values (
+        $1::uuid,
+        $2::uuid,
+        $3,
+        now(),
+        case when $3 = 'approved' then now() else null end,
+        now()
+      )
       on conflict (channel_id) do update set
-        state = 'pending',
+        state = excluded.state,
         applied_at = now(),
-        reviewed_at = null,
+        reviewed_at = excluded.reviewed_at,
         updated_at = now()
       `,
-      [channel.id, channel.owner_user_id]
+      [channel.id, channel.owner_user_id, nextState]
     );
     await ensureEarnBalanceRow(channel.id);
   } catch (err: any) {

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import re
+import sys
 import uuid
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -347,20 +348,22 @@ add("\t\t};")
 add("/* End PBXSourcesBuildPhase section */")
 add("")
 add("/* Begin XCRemoteSwiftPackageReference section */")
+# Pin exact SPM versions — upToNextMajor once drifted WhisperKit to 1.x and
+# Xcode reported Missing package product for LiveKit + WhisperKit together.
 add(f"\t\t{livekit_package_ref} /* XCRemoteSwiftPackageReference \"client-sdk-swift\" */ = {{")
 add("\t\t\tisa = XCRemoteSwiftPackageReference;")
 add("\t\t\trepositoryURL = \"https://github.com/livekit/client-sdk-swift\";")
 add("\t\t\trequirement = {")
-add("\t\t\t\tkind = upToNextMajorVersion;")
-add("\t\t\t\tminimumVersion = 2.5.0;")
+add("\t\t\t\tkind = exactVersion;")
+add("\t\t\t\tversion = 2.15.1;")
 add("\t\t\t};")
 add("\t\t};")
 add(f"\t\t{whisperkit_package_ref} /* XCRemoteSwiftPackageReference \"WhisperKit\" */ = {{")
 add("\t\t\tisa = XCRemoteSwiftPackageReference;")
 add("\t\t\trepositoryURL = \"https://github.com/argmaxinc/WhisperKit.git\";")
 add("\t\t\trequirement = {")
-add("\t\t\t\tkind = upToNextMajorVersion;")
-add("\t\t\t\tminimumVersion = 0.12.0;")
+add("\t\t\t\tkind = exactVersion;")
+add("\t\t\t\tversion = 0.18.0;")
 add("\t\t\t};")
 add("\t\t};")
 add("/* End XCRemoteSwiftPackageReference section */")
@@ -483,3 +486,17 @@ with open(PBXPROJ, "w", encoding="utf-8") as f:
 
 print(f"Wrote {PBXPROJ}")
 print(f"Swift files: {len(swift_files)}")
+
+# Keep LiveKit / WhisperKit products resolvable after every regen.
+resolve_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resolve_spm.sh")
+if os.environ.get("WORLDAPP_SKIP_SPM_RESOLVE", "").strip() not in ("1", "true", "yes"):
+    if os.path.isfile(resolve_script):
+        print(f"Resolving SPM via {resolve_script} …")
+        rc = os.system(f"bash {resolve_script!s}")
+        if rc != 0:
+            print(
+                "warning: resolve_spm.sh failed — run apps/mobile/ios/resolve_spm.sh manually",
+                file=sys.stderr,
+            )
+    else:
+        print(f"warning: missing {resolve_script}", file=sys.stderr)

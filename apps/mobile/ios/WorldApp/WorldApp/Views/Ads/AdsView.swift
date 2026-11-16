@@ -54,6 +54,8 @@ struct AdsView: View {
         .navigationTitle("Ads")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Theme.canvas, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarColorScheme(.light, for: .navigationBar)
         .refreshable { await loadCampaigns() }
         .task {
             await loadCampaigns()
@@ -61,7 +63,9 @@ struct AdsView: View {
             await loadCampaigns(silent: true)
         }
         .onReceive(clock) { now = $0 }
-        .tint(Theme.accentBright)
+        // accentBright is matte/off-white — on paper it made nav titles + controls invisible.
+        .tint(Theme.ink)
+        .preferredColorScheme(.light)
     }
 
     // MARK: - Hero
@@ -134,7 +138,7 @@ struct AdsView: View {
 
     private var composerSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .top) {
+            HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(editingCampaignID == nil ? "New campaign" : "Edit campaign")
                         .font(.headline)
@@ -144,17 +148,19 @@ struct AdsView: View {
                          : "Update campaign settings and replace the video creative at any time.")
                         .font(.subheadline)
                         .foregroundStyle(Theme.inkSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
                 if editingCampaignID != nil {
                     Button("Cancel") { cancelEdit() }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .frame(width: 90)
+                        .buttonStyle(MatteryaSecondaryButtonStyle())
+                        .fixedSize()
                         .disabled(saving)
                 }
             }
 
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
+            // Single column on phone — 2-up grids crushed labels/date pickers.
+            VStack(alignment: .leading, spacing: 14) {
                 PremiumTextField(title: "Name", text: $campaignName)
                 adsPicker(title: "Placement", selection: $placement, options: [("video", "Video"), ("reel", MatteryaCopy.spark)])
                 adsPicker(title: "Status", selection: $status, options: [("draft", "Draft"), ("active", "Active"), ("paused", "Paused")])
@@ -189,7 +195,7 @@ struct AdsView: View {
                 .background(Theme.canvasMuted, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
             }
 
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
+            VStack(alignment: .leading, spacing: 14) {
                 PremiumTextField(title: "Creative title", text: $creativeTitle)
                 PremiumTextField(title: "CTA label", text: $ctaLabel)
                 PremiumTextField(title: "Click URL", text: $clickURL, keyboard: .URL)
@@ -201,6 +207,7 @@ struct AdsView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Theme.inkMuted)
                 TextField("Optional ad copy shown in the pre-roll overlay", text: $creativeBody, axis: .vertical)
+                    .foregroundStyle(Theme.ink)
                     .lineLimit(3...6)
                     .padding(12)
                     .background(Theme.canvasMuted, in: RoundedRectangle(cornerRadius: Theme.controlRadius))
@@ -245,7 +252,7 @@ struct AdsView: View {
             PhotosPicker(selection: $selectedVideo, matching: .videos) {
                 Text(uploadingCreative ? "Uploading…" : "Upload video")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Theme.surface)
+                    .foregroundStyle(Theme.paper)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(Theme.ink, in: RoundedRectangle(cornerRadius: Theme.controlRadius))
@@ -266,6 +273,8 @@ struct AdsView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Theme.inkMuted)
             Stepper("\(durationSeconds)s", value: $durationSeconds, in: 3...30)
+                .foregroundStyle(Theme.ink)
+                .tint(Theme.ink)
                 .padding(12)
                 .background(Theme.canvasMuted, in: RoundedRectangle(cornerRadius: Theme.controlRadius))
                 .overlay(
@@ -286,6 +295,7 @@ struct AdsView: View {
                 }
             }
             .pickerStyle(.menu)
+            .tint(Theme.ink)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -304,10 +314,14 @@ struct AdsView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Theme.inkMuted)
             }
+            .tint(Theme.ink)
             if isOn.wrappedValue {
                 DatePicker("", selection: date)
                     .labelsHidden()
+                    .tint(Theme.ink)
+                    .colorScheme(.light)
                     .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.canvasMuted, in: RoundedRectangle(cornerRadius: Theme.controlRadius))
                     .overlay(
                         RoundedRectangle(cornerRadius: Theme.controlRadius)
@@ -341,8 +355,8 @@ struct AdsView: View {
                 Button(isLoading ? "Refreshing…" : "Refresh") {
                     Task { await loadCampaigns() }
                 }
-                .buttonStyle(SecondaryButtonStyle())
-                .frame(width: 110)
+                .buttonStyle(MatteryaSecondaryButtonStyle())
+                .fixedSize()
                 .disabled(isLoading)
             }
 
@@ -365,18 +379,18 @@ struct AdsView: View {
 
     private func campaignCard(_ campaign: AdCampaign) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(campaign.name)
-                        .font(.headline)
-                        .foregroundStyle(Theme.ink)
-                    FlowPills(items: campaignMetaPills(campaign))
-                }
-                Spacer(minLength: 8)
-                HStack(spacing: 10) {
-                    statPill(value: campaign.impressionCount, label: "Impressions")
-                    statPill(value: campaign.clickCount, label: "Clicks")
-                }
+            VStack(alignment: .leading, spacing: 8) {
+                Text(campaign.name)
+                    .font(.headline)
+                    .foregroundStyle(Theme.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                FlowPills(items: campaignMetaPills(campaign))
+            }
+
+            HStack(spacing: 10) {
+                statPill(value: campaign.impressionCount, label: "Impressions")
+                statPill(value: campaign.clickCount, label: "Clicks")
+                Spacer(minLength: 0)
             }
 
             FlowPills(items: budgetPills(campaign))
@@ -384,28 +398,29 @@ struct AdsView: View {
             Text(campaignTimerText(campaign))
                 .font(.caption)
                 .foregroundStyle(Theme.inkSecondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             if !campaign.creatives.isEmpty {
                 VStack(spacing: 8) {
                     ForEach(campaign.creatives) { creative in
-                        HStack(alignment: .top) {
-                            VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(alignment: .firstTextBaseline) {
                                 Text(creative.title ?? "Creative")
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(Theme.ink)
-                                Text(creative.body ?? creative.mediaURL)
-                                    .font(.caption)
-                                    .foregroundStyle(Theme.inkSecondary)
-                                    .lineLimit(2)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Spacer(minLength: 8)
+                                Text("\(creative.mediaKind) · \(creative.durationSeconds)s")
+                                    .font(.caption2)
+                                    .foregroundStyle(Theme.inkMuted)
                             }
-                            Spacer(minLength: 8)
-                            VStack(alignment: .trailing, spacing: 4) {
-                                Text(creative.mediaKind)
-                                Text("\(creative.durationSeconds)s")
-                            }
-                            .font(.caption2)
-                            .foregroundStyle(Theme.inkMuted)
+                            Text(creative.body ?? creative.mediaURL)
+                                .font(.caption)
+                                .foregroundStyle(Theme.inkSecondary)
+                                .lineLimit(3)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(12)
                         .background(Theme.canvasMuted, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
                     }
@@ -441,7 +456,7 @@ struct AdsView: View {
     }
 
     private func statPill(value: Int, label: String) -> some View {
-        VStack(alignment: .trailing, spacing: 2) {
+        VStack(alignment: .leading, spacing: 2) {
             Text("\(value)")
                 .font(.title3.weight(.bold))
                 .foregroundStyle(Theme.ink)
@@ -450,6 +465,7 @@ struct AdsView: View {
                 .foregroundStyle(Theme.inkMuted)
                 .textCase(.uppercase)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(Theme.canvasMuted, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
     }
