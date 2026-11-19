@@ -4,6 +4,7 @@
  * without requiring the literal word. Public posts only.
  */
 import { pool } from '../db.js';
+import { seedAuthorSqlFilter } from '../catalog/seed-catalog.js';
 import { annCandidates, mindEmbeddingsEnabled } from './mind-embeddings.js';
 import {
   MIND_RERANK_CANDIDATE_CAP,
@@ -181,6 +182,7 @@ async function lexicalSearch(
           p.visibility = 'public'
           or ($${viewerIdx}::uuid is not null and p.author_id = $${viewerIdx}::uuid)
         )
+        ${seedAuthorSqlFilter('pr')}
         and (${orParts.join(' or ')})
       order by rank_bucket asc, p.created_at desc
       limit $${limitIdx}

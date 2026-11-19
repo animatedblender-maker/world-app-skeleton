@@ -1,4 +1,5 @@
 import { pool } from '../../../db.js';
+import { seedAuthorSqlFilter } from '../../../catalog/seed-catalog.js';
 import { deleteAuthUser, supabaseAdminConfigured } from '../../../supabase-admin.js';
 
 export type AccountStatus = 'active' | 'deactivated' | 'deleted';
@@ -521,25 +522,26 @@ export class ProfilesService {
     const { rows } = await pool.query(
       `
       select *
-      from public.profiles
-      where coalesce(account_status, 'active') = 'active'
+      from public.profiles pr
+      where coalesce(pr.account_status, 'active') = 'active'
+        ${seedAuthorSqlFilter('pr')}
         and (
-          lower(coalesce(username, '')) = $1
-          or lower(coalesce(username, '')) like $2 escape '\\'
-          or lower(coalesce(display_name, '')) like $2 escape '\\'
+          lower(coalesce(pr.username, '')) = $1
+          or lower(coalesce(pr.username, '')) like $2 escape '\\'
+          or lower(coalesce(pr.display_name, '')) like $2 escape '\\'
           or ($4::int >= 3 and (
-            lower(coalesce(username, '')) like $3 escape '\\'
-            or lower(coalesce(display_name, '')) like $3 escape '\\'
+            lower(coalesce(pr.username, '')) like $3 escape '\\'
+            or lower(coalesce(pr.display_name, '')) like $3 escape '\\'
           ))
         )
       order by
         case
-          when lower(coalesce(username, '')) = $1 then 0
-          when lower(coalesce(username, '')) like $2 escape '\\' then 1
-          when lower(coalesce(display_name, '')) like $2 escape '\\' then 2
+          when lower(coalesce(pr.username, '')) = $1 then 0
+          when lower(coalesce(pr.username, '')) like $2 escape '\\' then 1
+          when lower(coalesce(pr.display_name, '')) like $2 escape '\\' then 2
           else 3
         end,
-        username nulls last
+        pr.username nulls last
       limit $5
       offset $6
       `,
@@ -561,9 +563,10 @@ export class ProfilesService {
     const { rows } = await pool.query(
       `
       select *
-      from public.profiles
-      where coalesce(account_status, 'active') = 'active'
-      order by updated_at desc nulls last, created_at desc, username nulls last
+      from public.profiles pr
+      where coalesce(pr.account_status, 'active') = 'active'
+        ${seedAuthorSqlFilter('pr')}
+      order by pr.updated_at desc nulls last, pr.created_at desc, pr.username nulls last
       limit $1
       offset $2
       `,

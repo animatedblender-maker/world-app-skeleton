@@ -1,4 +1,5 @@
 import { pool } from '../../../db.js';
+import { seedAuthorSqlFilter } from '../../../catalog/seed-catalog.js';
 import {
   emitContentPosted,
   emitServerEngagement,
@@ -857,6 +858,7 @@ export class PostsService {
           )
         )
         ${await this.privateAuthorVisibleSql('$2::uuid')}
+        ${seedAuthorSqlFilter('pr')}
         ${beforeClause}
       order by greatest(p.updated_at, p.created_at) desc, p.id desc
       limit $1
@@ -956,6 +958,7 @@ export class PostsService {
           )
         )
         ${privacySql}
+        ${seedAuthorSqlFilter('pr')}
         and (
           lower(coalesce(pr.username, '')) like $2 escape '\\'
           or lower(coalesce(pr.display_name, '')) like $2 escape '\\'
@@ -1033,6 +1036,7 @@ export class PostsService {
             )
           )
           ${privacySql}
+          ${seedAuthorSqlFilter('pr')}
         `,
         [ids, viewerId]
       );
@@ -1070,6 +1074,7 @@ export class PostsService {
       `
       select count(*)::text as n
       from public.posts p
+      left join public.profiles pr on pr.user_id = p.author_id
       where coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted', 'sensitive')
         and p.visibility in ('public', 'country')
         and lower(coalesce(p.media_type, '')) in ('video', 'reel', 'spark')
@@ -1085,6 +1090,7 @@ export class PostsService {
           or position('__spark_share__|' in coalesce(p.body, '')) > 0
           or position('"reel":true' in lower(coalesce(p.media_url, ''))) > 0
         )
+        ${seedAuthorSqlFilter('pr')}
         ${excludeSql}
       `,
       countParams
@@ -1182,6 +1188,7 @@ export class PostsService {
           or position('__spark_share__|' in coalesce(p.body, '')) > 0
           or position('"reel":true' in lower(coalesce(p.media_url, ''))) > 0
         )
+        ${seedAuthorSqlFilter('pr')}
         ${excludeClause}
       order by p.id
       offset $3

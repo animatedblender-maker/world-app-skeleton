@@ -10,6 +10,7 @@
  */
 import { pool } from '../db.js';
 import { freshenMediaUrlString, freshenThumbUrlString } from '../media/r2-playback.js';
+import { seedAuthorSqlFilter } from '../catalog/seed-catalog.js';
 import {
   adultContentSqlFilter,
   rebrandCompetitorNames,
@@ -470,6 +471,7 @@ async function queryVideoPage(opts: {
     and length(trim(p.media_url)) > 8
     and coalesce(p.body, '') not ilike '%__story__%'
     and coalesce(p.body, '') not ilike '%__spark__%'
+    ${seedAuthorSqlFilter('pr')}
   `;
 
   if (hasCol && opts.sqlSlug) {
@@ -1151,6 +1153,7 @@ async function fetchHomeLaneRows(opts: {
     and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
     and coalesce(p.body, '') not ilike '%__story__%'
     ${adult}
+    ${seedAuthorSqlFilter('pr')}
   `;
 
   if (opts.kind === 'spark') {
@@ -1660,6 +1663,7 @@ export async function fetchSparksPage(input: {
     and coalesce(p.media_path, '') not like '%/LongForm/%'
     and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
     ${adultContentSqlFilter(under18, 'p')}
+    ${seedAuthorSqlFilter('pr')}
     and (
       lower(coalesce(p.media_type, '')) in ('reel', 'spark')
       or lower(coalesce(p.body, '')) like '%__spark__|%'

@@ -25,6 +25,8 @@ export type RemoteFlags = {
   mind_hybrid_search_enabled: boolean;
   /** MIND-017 session short-TTL features. */
   mind_session_features_enabled: boolean;
+  /** Pipeline seed catalog on public Feed/Sparks/Hubs (Render SEED_CATALOG_PUBLIC). */
+  seed_catalog_public: boolean;
 };
 
 const DEFAULT_FLAGS: RemoteFlags = {
@@ -44,6 +46,7 @@ const DEFAULT_FLAGS: RemoteFlags = {
   mind_trained_ranker_enabled: false,
   mind_hybrid_search_enabled: true,
   mind_session_features_enabled: true,
+  seed_catalog_public: false,
 };
 
 /** Bump when flag defaults change so clients refresh. */
@@ -113,6 +116,10 @@ export function getRemoteConfig(clientVersion?: string | null): {
     moderation_text_enabled: envBool(
       'MODERATION_TEXT_ENABLED',
       DEFAULT_FLAGS.moderation_text_enabled
+    ),
+    seed_catalog_public: envBool(
+      'SEED_CATALOG_PUBLIC',
+      DEFAULT_FLAGS.seed_catalog_public
     ),
   };
 
