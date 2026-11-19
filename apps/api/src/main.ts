@@ -153,7 +153,7 @@ import {
   requestStudioPayout,
 } from './studio/studio.service.js';
 import { ChannelsService } from './graphql/modules/channels/channels.service.js';
-import { seedCatalogPublic } from './catalog/seed-catalog.js';
+import { masqueradePublic, seedCatalogPublic } from './catalog/seed-catalog.js';
 import { worldCountryFeed } from './recommendation/mind-world.js';
 import { bustSessionCache } from './recommendation/mind-session.js';
 import { handlePosterBatch, handlePosterGet } from './media/poster-route.js';
@@ -464,13 +464,15 @@ app.get('/health', (_req: Request, res: Response) =>
       hubsSlugShelves: true,
       performanceMetrics: true,
       remoteConfig: true,
-      anonymous: true,
+      /** false during App Review — flip MASQUERADE_PUBLIC=true after accept. */
+      anonymous: masqueradePublic(),
       anonymousPaid: process.env.ANONYMOUS_PAID_ENABLED === 'true',
       videoTranscripts: !!process.env.GROQ_API_KEY?.trim(),
       mindAdminPage: true,
       mindPolicyVersion: MIND_POLICY_VERSION,
       /** false during App Review — flip SEED_CATALOG_PUBLIC=true after accept (no app update). */
       seedCatalogPublic: seedCatalogPublic(),
+      masqueradePublic: masqueradePublic(),
     },
     apnsConfigured: apns.isConfigured(),
     authMail: authMailStatus(),

@@ -10,7 +10,11 @@
  */
 import { pool } from '../db.js';
 import { freshenMediaUrlString, freshenThumbUrlString } from '../media/r2-playback.js';
-import { seedAuthorSqlFilter } from '../catalog/seed-catalog.js';
+import {
+  hubsCatalogPublic,
+  seedAuthorSqlFilter,
+  seedHubCatalogSqlFilter,
+} from '../catalog/seed-catalog.js';
 import {
   adultContentSqlFilter,
   rebrandCompetitorNames,
@@ -472,6 +476,7 @@ async function queryVideoPage(opts: {
     and coalesce(p.body, '') not ilike '%__story__%'
     and coalesce(p.body, '') not ilike '%__spark__%'
     ${seedAuthorSqlFilter('pr')}
+    ${seedHubCatalogSqlFilter('p')}
   `;
 
   if (hasCol && opts.sqlSlug) {
@@ -551,6 +556,10 @@ export async function fetchShelfPage(input: {
   cursor?: string | null;
 }): Promise<ShelfPage> {
   const slug = normalizeParentSlug(input.slug);
+  // App Review: LongForm hub catalog is pipeline seed — return empty fast (no 7s scan).
+  if (!hubsCatalogPublic()) {
+    return { slug, items: [], nextCursor: null, count: 0 };
+  }
   const want = Math.min(Math.max(Number(input.limit) || 36, 1), 80);
   const hasCol = await hasHubSlugColumn();
 
@@ -648,6 +657,22 @@ export async function fetchForYouPage(input: {
   const viewerId = input.viewerUserId ? String(input.viewerUserId).trim() : '';
   const idem =
     String(input.idempotencyKey ?? '').trim().slice(0, 128) || null;
+
+  // App Review: hide entire Hubs LongForm catalog — empty + instant (fixes 7s timeout lag).
+  if (!hubsCatalogPublic()) {
+    return {
+      surface: 'hubs_for_you',
+      items: [],
+      nextCursor: null,
+      slugsUsed: [],
+      count: 0,
+      session,
+      batchId: null,
+      deliveryPolicy: 'cursor',
+      requestId: newMindRequestId(),
+      modelVersion: MIND_POLICY_VERSION,
+    };
+  }
 
   if (viewerId && idem) {
     const prior = await loadCommittedBatch(viewerId, 'hubs_for_you', idem);
@@ -1145,6 +1170,8 @@ async function fetchHomeLaneRows(opts: {
   slugSelect: string;
   under18: boolean;
 }): Promise<RawPostRow[]> {
+  // App Review: no pipeline LongForm on Home hub lane.
+  if (opts.kind === 'hub' && !hubsCatalogPublic()) return [];
   const want = Math.min(Math.max(opts.limit, 1), 32);
   const params: unknown[] = [];
   const adult = adultContentSqlFilter(opts.under18, 'p');
@@ -1154,6 +1181,7 @@ async function fetchHomeLaneRows(opts: {
     and coalesce(p.body, '') not ilike '%__story__%'
     ${adult}
     ${seedAuthorSqlFilter('pr')}
+    ${opts.kind === 'hub' ? '' : seedHubCatalogSqlFilter('p')}
   `;
 
   if (opts.kind === 'spark') {

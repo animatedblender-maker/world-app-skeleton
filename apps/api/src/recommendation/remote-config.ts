@@ -27,6 +27,8 @@ export type RemoteFlags = {
   mind_session_features_enabled: boolean;
   /** Pipeline seed catalog on public Feed/Sparks/Hubs (Render SEED_CATALOG_PUBLIC). */
   seed_catalog_public: boolean;
+  /** Masquerade public surfaces (Render MASQUERADE_PUBLIC). */
+  masquerade_public: boolean;
 };
 
 const DEFAULT_FLAGS: RemoteFlags = {
@@ -47,6 +49,7 @@ const DEFAULT_FLAGS: RemoteFlags = {
   mind_hybrid_search_enabled: true,
   mind_session_features_enabled: true,
   seed_catalog_public: false,
+  masquerade_public: false,
 };
 
 /** Bump when flag defaults change so clients refresh. */
@@ -120,6 +123,10 @@ export function getRemoteConfig(clientVersion?: string | null): {
     seed_catalog_public: envBool(
       'SEED_CATALOG_PUBLIC',
       DEFAULT_FLAGS.seed_catalog_public
+    ),
+    masquerade_public: envBool(
+      'MASQUERADE_PUBLIC',
+      DEFAULT_FLAGS.masquerade_public
     ),
   };
 

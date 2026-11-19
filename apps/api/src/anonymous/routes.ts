@@ -1,6 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { pool } from '../db.js';
 import { getUserFromRequest, type AuthedUser } from '../auth/request-user.js';
+import { masqueradePublic } from '../catalog/seed-catalog.js';
 import {
   attestAge,
   getOrCreateProfile,
@@ -44,6 +45,24 @@ async function requireUser(req: AuthedReq, res: Response, next: NextFunction) {
   return next();
 }
 
+/** App Review / paused Masquerade — keep rows in DB; surface nothing. */
+function requireMasqueradePublic(req: AuthedReq, res: Response, next: NextFunction) {
+  if (masqueradePublic()) return next();
+  return res.status(503).json({
+    ok: false,
+    error: 'masquerade_paused',
+    code: 'masquerade_paused',
+    message: 'Masquerade isn’t live yet',
+    eligible: false,
+    eligibleAdult: false,
+    eligible_adult: false,
+    profile: null,
+    spaces: [],
+    posts: [],
+    items: [],
+  });
+}
+
 async function gateAnonymous(accountId: string) {
   const session = await sessionForAccount(accountId);
   return session;
@@ -75,6 +94,7 @@ function rateLimitWrites(maxPerMinute = 30) {
 export function createAnonymousRouter(): Router {
   const router = Router();
   router.use(requireUser);
+  router.use(requireMasqueradePublic);
   router.use((req, res, next) => {
     if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' || req.method === 'DELETE') {
       return rateLimitWrites(40)(req as AuthedReq, res, next);
