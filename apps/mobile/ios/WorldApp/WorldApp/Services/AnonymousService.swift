@@ -533,8 +533,14 @@ enum AnonymousService {
             }
             // Prefer unwrapping `{ ok, ...payload }` envelopes.
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                if let code = json["code"] as? String, json["ok"] as? Bool == false {
-                    throw AnonymousError.from(code: code, message: Self.apiMessage(from: json))
+                if let code = json["code"] as? String {
+                    // Paused kill switch returns ok:true + code so clients soft-gate without 503.
+                    if code == "masquerade_paused" || json["paused"] as? Bool == true {
+                        throw AnonymousError.paused
+                    }
+                    if json["ok"] as? Bool == false {
+                        throw AnonymousError.from(code: code, message: Self.apiMessage(from: json))
+                    }
                 }
                 // If top-level matches the type fields, decode whole body.
                 if let decoded = try? JSONDecoder.anonymous.decode(type, from: data) {

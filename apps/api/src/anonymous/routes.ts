@@ -45,17 +45,29 @@ async function requireUser(req: AuthedReq, res: Response, next: NextFunction) {
   return next();
 }
 
-/** App Review / paused Masquerade — keep rows in DB; surface nothing. */
+/**
+ * App Review / paused Masquerade — keep rows in DB; surface nothing.
+ * HTTP 200 so iOS treats this as a soft gate (offline screen), not a 503 error.
+ */
 function requireMasqueradePublic(req: AuthedReq, res: Response, next: NextFunction) {
   if (masqueradePublic()) return next();
-  return res.status(503).json({
-    ok: false,
+  return res.status(200).json({
+    ok: true,
+    paused: true,
     error: 'masquerade_paused',
     code: 'masquerade_paused',
     message: 'Masquerade isn’t live yet',
+    reason: 'Masquerade isn’t live yet',
     eligible: false,
-    eligibleAdult: false,
     eligible_adult: false,
+    eligibleAdult: false,
+    age_attested: false,
+    ageAttested: false,
+    birthdate_missing: false,
+    birthdateMissing: false,
+    suspended: false,
+    paid_enabled: false,
+    paidEnabled: false,
     profile: null,
     spaces: [],
     posts: [],

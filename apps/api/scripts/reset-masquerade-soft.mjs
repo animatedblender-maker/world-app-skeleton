@@ -4,12 +4,14 @@
  *  - set all active/requested space memberships → left
  *  - recompute spaces.member_count
  *  - delete identity_vault.account_anonymous_links (kick everyone out of Masquerade identity)
+ *  - suspend anonymous.profiles (App Review kick — use --unsuspend after Accept)
  *
  * Keeps spaces, posts, comments, personas in DB (hidden while MASQUERADE_PUBLIC=false).
  *
  * Usage (from apps/api):
- *   node scripts/reset-masquerade-soft.mjs           # dry-run counts
- *   node scripts/reset-masquerade-soft.mjs --apply   # write
+ *   node scripts/reset-masquerade-soft.mjs              # dry-run counts
+ *   node scripts/reset-masquerade-soft.mjs --apply      # kick out + suspend
+ *   node scripts/reset-masquerade-soft.mjs --unsuspend  # restore profiles after Accept
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -18,6 +20,7 @@ import pg from 'pg';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const apply = process.argv.includes('--apply');
+const unsuspend = process.argv.includes('--unsuspend');
 
 function loadEnv() {
   const envPath = path.join(__dirname, '..', '.env');
@@ -72,6 +75,18 @@ try {
   console.log('active spaces (kept):', spaces[0]?.n ?? 0);
   console.log('active posts (kept):', posts[0]?.n ?? 0);
 
+  if (unsuspend) {
+    await client.query('begin');
+    const restored = await client.query(`
+      update anonymous.profiles
+      set state = 'active'
+      where state = 'suspended'
+    `);
+    await client.query('commit');
+    console.log('\nUnsuspended profiles:', restored.rowCount);
+    process.exit(0);
+  }
+
   if (!apply) {
     console.log('\nDry-run only. Re-run with --apply to kick everyone out.');
     process.exit(0);
@@ -94,12 +109,18 @@ try {
   const unlinked = await client.query(
     `delete from identity_vault.account_anonymous_links`
   );
+  const suspended = await client.query(`
+    update anonymous.profiles
+    set state = 'suspended'
+    where state = 'active'
+  `);
   await client.query('commit');
 
   console.log('\nApplied:');
   console.log('  memberships → left:', left.rowCount);
   console.log('  spaces member_count refreshed:', counts.rowCount);
   console.log('  account_anonymous_links deleted:', unlinked.rowCount);
+  console.log('  profiles → suspended:', suspended.rowCount);
 } catch (err) {
   try {
     await client.query('rollback');

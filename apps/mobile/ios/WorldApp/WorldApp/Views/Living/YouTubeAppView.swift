@@ -1089,8 +1089,22 @@ struct YouTubeAppView: View {
     }
 
     /// True when Hubs can paint without a network round-trip.
+    /// When seed catalog is hidden, never treat sticky local LongForm as "useful".
     private var hubsShellIsUseful: Bool {
-        !stableDiscoverVideos.isEmpty && hubsForYouPool.count >= 8
+        guard RemoteConfigClient.bool("seed_catalog_public", default: false) else { return false }
+        return !stableDiscoverVideos.isEmpty && hubsForYouPool.count >= 8
+    }
+
+    /// Wipe in-memory + disk Hubs LongForm so Review doesn't keep showing pipeline videos.
+    private func clearHubsCatalogForReview() {
+        allVideos = []
+        stableDiscoverVideos = []
+        hubsForYouPool = []
+        hubsDisplayLimit = 0
+        hubsCaughtUp = true
+        PostsService.shared.clearHubsSessionCatalog()
+        ContentCache.shared.invalidate(.livingVideos)
+        SlugShelfStore.shared.newSession()
     }
 
     /// Cheap media fingerprint for rail dedupe — avoid `homeFeedContentKey` regex on the hop.
@@ -1874,6 +1888,10 @@ struct YouTubeAppView: View {
             isLoading = false
             return
         }
+        // App Review: pipeline LongForm is hidden — never paint sticky local catalog.
+        if !RemoteConfigClient.bool("seed_catalog_public", default: false) {
+            return
+        }
 
         // 1) Session memory (same launch, re-open Hubs tab).
         var source = PostsService.shared.hubsSessionCatalog
@@ -2199,10 +2217,23 @@ struct YouTubeAppView: View {
             }
         }
 
+        // Successful empty shelf (App Review kill switch) — wipe sticky local LongForm.
+        if page.items.isEmpty, !RemoteConfigClient.bool("seed_catalog_public", default: false) {
+            clearHubsCatalogForReview()
+            isLoading = false
+            errorMessage = nil
+            hubsCaughtUp = true
+            #if DEBUG
+            print("[Hubs] empty API — cleared local LongForm catalog")
+            #endif
+            return
+        }
+
         // ── Legacy fallback (once) if shelves empty / API down ───────────────
         if !forceRefresh,
            PostsService.shared.hubsSessionIsWarm(),
-           allVideos.isEmpty {
+           allVideos.isEmpty,
+           RemoteConfigClient.bool("seed_catalog_public", default: false) {
             paintInstantHubsIfPossible()
             if !allVideos.isEmpty {
                 isLoading = false

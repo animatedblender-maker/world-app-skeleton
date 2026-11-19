@@ -1525,6 +1525,11 @@ final class AnonymousStore {
 
     private func applySession(_ remote: AnonymousSession, animated: Bool) {
         var remote = remote
+        // Server pause / App Review — never reattach a cached Masquerade identity.
+        if remote.gateCode == "masquerade_paused" {
+            clearMasqueradeLocalState(goOffline: true, animated: animated)
+            return
+        }
         // Never let a thin session wipe a claimed handle — Me identity must stay stable.
         if remote.profile == nil, let pinned = UserDefaults.standard.string(forKey: pinnedUsernameKey),
            !pinned.isEmpty, let existing = session.profile, existing.username == pinned {
@@ -1595,6 +1600,9 @@ final class AnonymousStore {
             withAnimation(MatteryaMotion.snappy) { phase = .needUsername }
         case .suspended:
             withAnimation(MatteryaMotion.snappy) { phase = .suspended }
+        case .paused:
+            // Kick out of any cached Masquerade session — offline screen, no toast.
+            clearMasqueradeLocalState(goOffline: true, animated: true)
         case .network, .notFound, .server, .decoding:
             // API not deployed / migration missing used to toast “That content isn’t available.”
             // Keep the offline screen only — no red toast for bootstrap failures.
@@ -1610,6 +1618,33 @@ final class AnonymousStore {
             lastError = err.errorDescription
             if phase == .loading {
                 withAnimation(MatteryaMotion.snappy) { phase = .offline }
+            }
+        }
+    }
+
+    /// Wipe device Masquerade identity + feed/spaces cache (server rows stay).
+    private func clearMasqueradeLocalState(goOffline: Bool, animated: Bool) {
+        UserDefaults.standard.removeObject(forKey: cacheKey)
+        UserDefaults.standard.removeObject(forKey: feedCacheKey)
+        UserDefaults.standard.removeObject(forKey: feedCacheSavedAtKey)
+        UserDefaults.standard.removeObject(forKey: pinnedUsernameKey)
+        UserDefaults.standard.removeObject(forKey: lastFeedHeadKey)
+        UserDefaults.standard.removeObject(forKey: ownRecentPostIdsKey)
+        UserDefaults.standard.removeObject(forKey: ownRecentPostsBlobKey)
+        session = .empty
+        feed = []
+        feedCursor = nil
+        feedHasMore = false
+        spaces = []
+        postById = [:]
+        sessionSeenFeedIds = []
+        shouldToastLastError = false
+        lastError = MatteryaCopy.anonymousOfflineBody
+        if goOffline {
+            if animated {
+                withAnimation(MatteryaMotion.snappy) { phase = .offline }
+            } else {
+                phase = .offline
             }
         }
     }

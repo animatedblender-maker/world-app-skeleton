@@ -165,8 +165,10 @@ final class SlugShelfStore {
 
         guard let remote else {
             // Network failed — keep cache; signal empty page for append.
-            if !append, state.posts.isEmpty {
-                // Local fallback from session catalog (slug-filtered, capped).
+            // Do NOT fall back to session LongForm when the seed catalog is hidden —
+            // that re-painted pipeline Hubs during App Review.
+            let seedPublic = RemoteConfigClient.bool("seed_catalog_public", default: false)
+            if !append, state.posts.isEmpty, seedPublic {
                 let local = localFallback(slug: slug)
                 if !local.isEmpty {
                     state.posts = Array(local.prefix(Self.maxPerShelf))
@@ -190,6 +192,7 @@ final class SlugShelfStore {
             }
             state.posts = merged
         } else {
+            // Successful empty API page must clear the shelf (no sticky LongForm).
             state.posts = Array(remote.items.prefix(Self.maxPerShelf))
         }
         state.nextCursor = remote.nextCursor

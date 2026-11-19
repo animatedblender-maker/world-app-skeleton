@@ -774,6 +774,7 @@ enum AnonymousErrorCode: String, Codable, Sendable {
     case unauthenticated
     case sessionFailed = "session_failed"
     case schemaMissing = "schema_missing"
+    case masqueradePaused = "masquerade_paused"
     case birthdateRequired = "birthdate_required"
     case birthdateMissing = "birthdate_missing"
     case notMember = "not_member"
@@ -795,6 +796,8 @@ enum AnonymousError: Error, LocalizedError, Equatable {
     case network(String?)
     case server(String?)
     case decoding
+    /// Server kill switch — Masquerade paused for App Review / reset.
+    case paused
 
     var errorDescription: String? {
         switch self {
@@ -824,6 +827,8 @@ enum AnonymousError: Error, LocalizedError, Equatable {
             return detail ?? MatteryaCopy.anonymousOfflineTitle
         case .decoding:
             return "Couldn’t read the Masquerade response."
+        case .paused:
+            return MatteryaCopy.anonymousOfflineBody
         }
     }
 
@@ -841,6 +846,8 @@ enum AnonymousError: Error, LocalizedError, Equatable {
         case .rateLimited: return .rateLimited
         case .unauthenticated:
             return .network("Sign in again to open Masquerade.")
+        case .masqueradePaused:
+            return .paused
         case .schemaMissing, .sessionFailed:
             return .server(message ?? "Masquerade session isn’t ready yet. Pull to retry.")
         case .network: return .network(message)

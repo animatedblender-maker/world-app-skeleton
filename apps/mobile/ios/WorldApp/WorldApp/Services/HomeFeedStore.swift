@@ -563,7 +563,7 @@ final class HomeFeedStore {
                     }
                     isBootstrapping = false
                     didPaint = true
-                    hasMore = true
+                    hasMore = thin.nextCursor != nil || head.count >= 8
                     Task { await warmHead(lite: true) }
                 }
             }
@@ -585,7 +585,7 @@ final class HomeFeedStore {
                 ContentCache.shared.setPosts(posts, for: .homeFeed)
                 rememberDisplayedHead()
                 didPaint = true
-                hasMore = true
+                hasMore = sparkPage?.nextCursor != nil || ranked.count >= 8
                 Task { await warmHead(lite: true) }
             }
         }
@@ -1467,20 +1467,35 @@ final class HomeFeedStore {
         }
 
         if appended.isEmpty {
-            // Keep trying forever — never set hasMore false permanently.
-            hasMore = true
             if let next = pageNextCursor, next != cursor {
                 nextCursor = next
             }
             emptyAppendRetriesThisGeneration += 1
             // Pulse sentinel even when windowLimit did not grow.
             endlessLoadEpoch &+= 1
+            let attempt = emptyAppendRetriesThisGeneration
+            // App Review / thin real catalog: stop the bottom spinner after a few empty walks.
+            // Full seed catalog (remote flag on) keeps the endless R2 walk.
+            let seedPublic = RemoteConfigClient.bool("seed_catalog_public", default: false)
+            let thinExhausted =
+                !seedPublic
+                && posts.count > 0
+                && (pageNextCursor == nil || attempt >= 3)
+            if thinExhausted {
+                hasMore = false
+                nextCursor = nil
+                #if DEBUG
+                print("[HomeFeed] loadMore stop thin catalog pool=\(posts.count) attempt=\(attempt)")
+                #endif
+                return
+            }
+            // Keep trying when the seed catalog is public — never set hasMore false permanently.
+            hasMore = true
             // After several empty top-ups, nudge Sparks pager so the next pass walks fresh R2.
             if emptyAppendRetriesThisGeneration % 3 == 0 {
                 PostsService.shared.nudgeHomeFeedSparkPagerForEndless()
             }
-            // Back off a bit so we don't storm /v1/feed — but never stop.
-            let attempt = emptyAppendRetriesThisGeneration
+            // Back off a bit so we don't storm /v1/feed — but never stop (seed-public mode).
             let delayMs: UInt64 = min(8_000, 350 + UInt64(attempt) * 250)
             if attempt <= maxEmptyAppendRetries {
                 let followGen = gen

@@ -724,6 +724,10 @@ final class PostsService {
     /// Suggests **unviewed** first (same discovery rule as Sparks); LRV fill only if starved.
     func homeFeedHubTopUp(excluding: Set<String>, limit: Int, forceRefresh: Bool = false) async -> [CountryPost] {
         guard limit > 0 else { return [] }
+        // App Review: LongForm hub catalog is hidden — don't refill Feed from local/R2 hubs.
+        if !RemoteConfigClient.bool("seed_catalog_public", default: false) {
+            return []
+        }
         var seen = excluding.union(Set(SparkDiscoveryEngine.viewedIDList(limit: 800)))
         var out: [CountryPost] = []
 
@@ -1135,6 +1139,11 @@ final class PostsService {
 
     /// In-process Hubs catalog — survives tab switches without disk/network.
     private(set) var hubsSessionCatalog: [CountryPost] = []
+
+    /// Drop cached LongForm (App Review seed/hubs kill switch / empty API).
+    func clearHubsSessionCatalog() {
+        hubsSessionCatalog = []
+    }
     private var hubsSessionLoadedAt: Date?
 
     /// Large Sparks catalog for the four focus countries (session cache).

@@ -13,6 +13,7 @@ import { freshenMediaUrlString, freshenThumbUrlString } from '../media/r2-playba
 import {
   hubsCatalogPublic,
   seedAuthorSqlFilter,
+  seedCatalogPublic,
   seedHubCatalogSqlFilter,
 } from '../catalog/seed-catalog.js';
 import {
@@ -1582,12 +1583,17 @@ export async function fetchHomeFeedPage(input: {
     // Freeze text cursor — lane paused so old cursors don't resurrect forum rows.
     text: homeCur.text,
   };
-  // Keep paging while any active lane still has a full slice or we filled the page.
-  const hasMore =
+  // Keep paging while the page filled, or lanes still have a full unread slice.
+  // Thin App Review catalogs (seed/hubs hidden) must not advertise hasMore forever —
+  // that left iOS with 2 posts and an endless bottom spinner.
+  const pageFull = liveItems.length >= Math.min(want, 8);
+  const lanesHaveMore =
     sparkRows.length >= perLane ||
     hubRows.length >= perLane ||
-    imageRows.length >= perLane ||
-    liveItems.length >= Math.min(want, 8);
+    imageRows.length >= perLane;
+  const emptyLedgerWalk = liveItems.length === 0 && lanesHaveMore && seedCatalogPublic();
+  const hasMore =
+    pageFull || (liveItems.length > 0 && lanesHaveMore) || emptyLedgerWalk;
 
   const servedIds = new Set(liveItems.map((i) => i.id));
   const servedRaw = servedRows.filter((r) => servedIds.has(r.id));
