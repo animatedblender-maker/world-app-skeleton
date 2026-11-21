@@ -12,8 +12,8 @@ import {
 } from '../core/services/presence-overrides.service';
 import { environment } from '../../envirnoments/envirnoment';
 
-const ADMIN_KEY = 'worldapp-admin-2026';
-const ADMIN_STORAGE = 'worldapp.adminKey.v1';
+const ADMIN_KEY = 'matterya-admin-2026';
+const ADMIN_STORAGE = 'matterya.adminKey.v1';
 const EMPTY_OVERRIDE: PresenceOverride = Object.freeze({ total: null, online: null });
 const DEFAULT_SETTINGS: AdminSettings = {
   insight_window_hours: 24,

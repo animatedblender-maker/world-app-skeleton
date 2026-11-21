@@ -901,7 +901,7 @@ export class AdsPageComponent implements OnInit, OnDestroy {
           (this.createEntitlement?.credits_available ?? 0) > 0;
         if (!canCreate) {
           this.error =
-            'Creating a campaign requires an in-app purchase. Buy a create credit in the Matterya iOS app (Ads), then try again. Owner account animatedblender@gmail.com can create free.';
+            'Pay when you create: open Matterya iOS → Ads and complete the App Store payment for a new campaign. Edits stay free. Owner email animatedblender@gmail.com creates free.';
           return;
         }
         const campaign = await this.ads.createCampaign({

@@ -2310,7 +2310,7 @@ class AppState(private val app: Application) {
     private fun handleInternalDeepLink(url: String): Boolean {
         val uri = android.net.Uri.parse(url)
         val scheme = uri.scheme?.lowercase().orEmpty()
-        if (scheme != "matterya" && scheme != "worldapp") return false
+        if (scheme != "matterya") return false
         val host = uri.host?.lowercase().orEmpty()
         val pathParts = uri.path?.trim('/')?.split('/')?.filter { it.isNotEmpty() }.orEmpty()
         if (host == "tab") {

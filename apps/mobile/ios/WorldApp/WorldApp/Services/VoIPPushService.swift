@@ -15,7 +15,7 @@ struct IncomingCallPushPayload: Sendable {
 final class VoIPPushService: NSObject, PKPushRegistryDelegate {
     nonisolated(unsafe) static let shared = VoIPPushService()
 
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.matterya.worldapp", category: "VoIP")
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.matterya.app", category: "VoIP")
     private var registry: PKPushRegistry?
     private var refreshTask: Task<Void, Never>?
 

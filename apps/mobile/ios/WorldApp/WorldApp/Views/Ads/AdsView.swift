@@ -97,20 +97,20 @@ struct AdsView: View {
     private var billingBanner: some View {
         Group {
             if billing.freeCreate {
-                Text("Owner account — create campaigns free.")
+                Text("Owner — create ads free (no payment).")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Theme.success)
             } else if billing.creditsAvailable > 0 {
-                Text("Create credits ready: \(billing.creditsAvailable). One credit is used per new campaign.")
+                Text("Payment ready: \(billing.creditsAvailable) create credit(s). Tap Create to use one.")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Theme.inkSecondary)
             } else {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Creating a campaign requires an in-app purchase (\(billing.displayPrice) each).")
+                    Text("Pay when you create — \(billing.displayPrice) per new ad campaign (App Store).")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Theme.inkSecondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("Edits to existing campaigns stay free.")
+                    Text("Not a subscription. Editing an existing campaign stays free.")
                         .font(.caption)
                         .foregroundStyle(Theme.inkMuted)
                 }
@@ -284,7 +284,7 @@ struct AdsView: View {
         if billing.freeCreate || billing.creditsAvailable > 0 {
             return "Create"
         }
-        return "Buy & create (\(billing.displayPrice))"
+        return "Pay \(billing.displayPrice) & create"
     }
 
     private var uploadRow: some View {

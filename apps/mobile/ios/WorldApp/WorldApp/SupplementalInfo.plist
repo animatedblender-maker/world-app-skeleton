@@ -6,7 +6,7 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>com.matterya.worldapp</string>
+			<string>com.matterya.app</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>matterya</string>

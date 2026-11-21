@@ -8,7 +8,7 @@ import UIKit
 final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate {
     static let shared = PushNotificationService()
 
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.matterya.worldapp", category: "Push")
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.matterya.app", category: "Push")
     private let alertTokenDefaultsKey = "push.alert.token"
     private let voipTokenDefaultsKey = "push.voip.token"
     private let alertRegisteredDefaultsKey = "push.alert.registeredToken"
@@ -319,7 +319,7 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
                 endpointsAvailable: false,
                 apnsConfigured: capabilities.apnsConfigured,
                 apnsProduction: false,
-                bundleId: "com.matterya.worldapp",
+                bundleId: "com.matterya.app",
                 alertTokenCount: 0,
                 voipTokenCount: 0,
                 environments: [],
@@ -351,7 +351,7 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
                     endpointsAvailable: false,
                     apnsConfigured: capabilities.apnsConfigured,
                     apnsProduction: false,
-                    bundleId: "com.matterya.worldapp",
+                    bundleId: "com.matterya.app",
                     alertTokenCount: 0,
                     voipTokenCount: 0,
                     environments: [],
@@ -373,7 +373,7 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
                 endpointsAvailable: true,
                 apnsConfigured: json["apnsConfigured"] as? Bool ?? capabilities.apnsConfigured,
                 apnsProduction: json["apnsProduction"] as? Bool ?? false,
-                bundleId: json["bundleId"] as? String ?? "com.matterya.worldapp",
+                bundleId: json["bundleId"] as? String ?? "com.matterya.app",
                 alertTokenCount: tokens["alert"] as? Int ?? 0,
                 voipTokenCount: tokens["voip"] as? Int ?? 0,
                 environments: environments,
@@ -543,7 +543,7 @@ final class PushNotificationService: NSObject, UNUserNotificationCenterDelegate 
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.httpBody = try? JSONSerialization.data(withJSONObject: [
             "deviceToken": token,
-            "bundleId": Bundle.main.bundleIdentifier ?? "com.matterya.worldapp",
+            "bundleId": Bundle.main.bundleIdentifier ?? "com.matterya.app",
             "kind": kind,
             "environment": apnsEnvironment,
         ])

@@ -8,7 +8,7 @@ export type PresenceOverride = {
 
 export type PresenceOverridesMap = Record<string, PresenceOverride>;
 
-const STORAGE_KEY = 'worldapp.presenceOverrides.v1';
+const STORAGE_KEY = 'matterya.presenceOverrides.v1';
 
 @Injectable({ providedIn: 'root' })
 export class PresenceOverridesService {

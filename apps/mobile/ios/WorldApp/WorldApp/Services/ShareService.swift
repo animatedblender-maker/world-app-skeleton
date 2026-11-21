@@ -97,7 +97,7 @@ final class ShareService {
     func parseDeepLink(_ url: URL) -> AppDestination? {
         let host = (url.host ?? "").lowercased()
         let scheme = url.scheme?.lowercased() ?? ""
-        let isAppScheme = scheme == "matterya" || scheme == "worldapp"
+        let isAppScheme = scheme == "matterya"
         let isWeb = host == "matterya.com" || host == "www.matterya.com"
 
         guard isAppScheme || isWeb else { return nil }

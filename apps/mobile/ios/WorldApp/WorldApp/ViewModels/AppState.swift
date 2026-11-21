@@ -2864,7 +2864,7 @@ final class AppState {
 
     private func handleInternalDeepLink(_ url: URL) -> Bool {
         let scheme = url.scheme?.lowercased() ?? ""
-        guard scheme == "matterya" || scheme == "worldapp" else { return false }
+        guard scheme == "matterya" else { return false }
 
         let host = (url.host ?? "").lowercased()
         let pathParts = url.path

@@ -94,7 +94,7 @@ function hasPipelineAccessLegacy(req: Request): boolean {
     '';
   const header = String(req.headers['x-cron-secret'] ?? req.query.secret ?? '').trim();
   if (cron && header === cron) return true;
-  const adminKey = process.env.ADMIN_PORTAL_KEY || 'worldapp-admin-2026';
+  const adminKey = process.env.ADMIN_PORTAL_KEY || 'matterya-admin-2026';
   const key = String(req.headers['x-admin-key'] ?? req.query.key ?? '').trim();
   return Boolean(adminKey && key === adminKey);
 }

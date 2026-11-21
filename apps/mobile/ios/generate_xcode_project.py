@@ -425,7 +425,7 @@ for config_id, name, is_target in [
         add("\t\t\t\t\t\"@executable_path/Frameworks\",")
         add("\t\t\t\t);")
         add("\t\t\t\tMARKETING_VERSION = 1.0.1;")
-        add("\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.matterya.worldapp;")
+        add("\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.matterya.app;")
         add("\t\t\t\tPRODUCT_NAME = \"$(TARGET_NAME)\";")
         add("\t\t\t\tSDKROOT = iphoneos;")
         add("\t\t\t\tSWIFT_EMIT_LOC_STRINGS = YES;")

@@ -79,7 +79,7 @@ class ShareService {
         val uri = android.net.Uri.parse(url)
         val scheme = uri.scheme?.lowercase().orEmpty()
         val host = uri.host?.lowercase().orEmpty()
-        val isAppScheme = scheme == "matterya" || scheme == "worldapp"
+        val isAppScheme = scheme == "matterya"
         val isWeb = host == "matterya.com" || host == "www.matterya.com"
         if (!isAppScheme && !isWeb) return null
 

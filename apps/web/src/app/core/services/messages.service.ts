@@ -286,7 +286,7 @@ mutation DeleteConversation($conversationId: ID!) {
 
 @Injectable({ providedIn: 'root' })
 export class MessagesService {
-  private pendingStorageKey = 'worldapp.pendingConversation';
+  private pendingStorageKey = 'matterya.pendingConversation';
   private pendingConversation: Conversation | null = null;
   private pendingConversationSubject = new BehaviorSubject<Conversation | null>(null);
   readonly pendingConversation$ = this.pendingConversationSubject.asObservable();

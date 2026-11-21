@@ -348,7 +348,7 @@ export class PresenceService {
       return;
     }
 
-    this.channel = supabase.channel('worldapp-online', {
+    this.channel = supabase.channel('matterya-online', {
       config: { presence: { key: this.meId } },
     });
 

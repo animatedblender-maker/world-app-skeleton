@@ -115,7 +115,7 @@ export function hasFrame0PageAccess(req: Request): boolean {
     '';
   const header = String(req.headers['x-cron-secret'] ?? req.query.secret ?? '').trim();
   if (cron && header === cron) return true;
-  const adminKey = process.env.ADMIN_PORTAL_KEY || 'worldapp-admin-2026';
+  const adminKey = process.env.ADMIN_PORTAL_KEY || 'matterya-admin-2026';
   const key = String(req.headers['x-admin-key'] ?? req.query.key ?? '').trim();
   if (adminKey && key === adminKey) return true;
   return false;

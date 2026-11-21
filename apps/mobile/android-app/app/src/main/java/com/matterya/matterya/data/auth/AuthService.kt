@@ -300,7 +300,7 @@ class AuthService private constructor(private val appContext: Context) {
 
     companion object {
         private const val TAG = "AuthService"
-        private val SESSION_KEY = stringPreferencesKey("worldapp.auth.session")
+        private val SESSION_KEY = stringPreferencesKey("matterya.auth.session")
         private val JSON = "application/json; charset=utf-8".toMediaType()
 
         @Volatile private var _instance: AuthService? = null

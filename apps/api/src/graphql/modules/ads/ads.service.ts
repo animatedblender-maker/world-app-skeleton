@@ -97,9 +97,9 @@ export type ServeVideoAdInput = {
   post_id?: string | null;
 };
 
-/** StoreKit consumable — one purchase unlocks one new campaign create. */
+/** StoreKit consumable — pay once per new campaign create (not a subscription). */
 export const AD_CAMPAIGN_CREATE_PRODUCT_ID =
-  'com.matterya.worldapp.ads.campaign_create';
+  'com.matterya.app.ads.campaign_create';
 
 const DEFAULT_ADS_FREE_CREATE_EMAILS = ['animatedblender@gmail.com'];
 
@@ -203,7 +203,7 @@ export class AdsService {
           throw new Error('Purchase product mismatch.');
         }
         const bundle = String(payload.bundleId ?? '').trim();
-        if (bundle && bundle !== 'com.matterya.worldapp') {
+        if (bundle && bundle !== 'com.matterya.app') {
           throw new Error('Purchase bundle mismatch.');
         }
         const claimedTx = String(payload.transactionId ?? '').trim();
@@ -375,7 +375,7 @@ export class AdsService {
       const entitlement = await this.getCreateEntitlement(userId, email);
       if (entitlement.credits_available < 1) {
         const err = new Error(
-          'Purchase required to create an ad campaign. Buy one create in Matterya Ads, then try again.'
+          'Payment required to create an ad. Complete the App Store purchase when creating, then try again.'
         );
         (err as any).code = 'ADS_PURCHASE_REQUIRED';
         throw err;
@@ -419,7 +419,7 @@ export class AdsService {
           campaignId,
         ]);
         const err = new Error(
-          'Purchase required to create an ad campaign. Buy one create in Matterya Ads, then try again.'
+          'Payment required to create an ad. Complete the App Store purchase when creating, then try again.'
         );
         (err as any).code = 'ADS_PURCHASE_REQUIRED';
         throw err;

@@ -31,7 +31,7 @@ export class LocationService {
             url.searchParams.set('format', 'jsonv2');
             url.searchParams.set('lat', String(lat));
             url.searchParams.set('lon', String(lng));
-            const ua = process.env.NOMINATIM_UA ?? 'world-app/1.0 (server-side)';
+            const ua = process.env.NOMINATIM_UA ?? 'matterya/1.0 (server-side)';
             const controller = new AbortController();
             const timeoutMs = Number(process.env.NOMINATIM_TIMEOUT_MS ?? 4000);
             const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -126,7 +126,7 @@ export class LocationService {
                 const res = await fetch(path, {
                     headers: {
                         Accept: 'application/json',
-                        'User-Agent': 'world-app/1.0 (server-side)',
+                        'User-Agent': 'matterya/1.0 (server-side)',
                     },
                     signal: controller.signal,
                 });

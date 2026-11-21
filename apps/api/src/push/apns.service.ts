@@ -13,7 +13,7 @@ type ApnsRow = {
 const APNS_TEAM_ID = process.env.APNS_TEAM_ID ?? '';
 const APNS_KEY_ID = process.env.APNS_KEY_ID ?? '';
 const APNS_PRIVATE_KEY = (process.env.APNS_PRIVATE_KEY ?? '').replace(/\\n/g, '\n');
-const APNS_BUNDLE_ID = process.env.APNS_BUNDLE_ID ?? 'com.matterya.worldapp';
+const APNS_BUNDLE_ID = process.env.APNS_BUNDLE_ID ?? 'com.matterya.app';
 const APNS_PRODUCTION = String(process.env.APNS_PRODUCTION ?? 'false').toLowerCase() === 'true';
 
 const APNS_ENABLED = Boolean(APNS_TEAM_ID && APNS_KEY_ID && APNS_PRIVATE_KEY);

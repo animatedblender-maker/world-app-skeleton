@@ -1,15 +1,15 @@
 import Foundation
 import StoreKit
 
-/// Per-create IAP for Matterya Ads.
+/// Pay-at-create IAP for Matterya Ads (consumable — not a subscription / paid tier).
 /// Free create: `animatedblender@gmail.com` only (server also enforces).
-/// Everyone else buys `com.matterya.worldapp.ads.campaign_create` once per new campaign.
+/// Everyone else pays once via StoreKit when they tap Create.
 @MainActor
 @Observable
 final class AdCampaignBilling {
     static let shared = AdCampaignBilling()
 
-    static let productID = "com.matterya.worldapp.ads.campaign_create"
+    static let productID = "com.matterya.app.ads.campaign_create"
     private static let freeEmails: Set<String> = ["animatedblender@gmail.com"]
 
     private(set) var product: Product?

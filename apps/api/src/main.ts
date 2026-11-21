@@ -199,7 +199,7 @@ const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY;
 const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET;
 const LIVEKIT_URL = process.env.LIVEKIT_URL;
 const INSIGHTS_CRON_SECRET = process.env.INSIGHTS_CRON_SECRET || '';
-const ADMIN_PORTAL_KEY = process.env.ADMIN_PORTAL_KEY || 'worldapp-admin-2026';
+const ADMIN_PORTAL_KEY = process.env.ADMIN_PORTAL_KEY || 'matterya-admin-2026';
 
 if (!SUPABASE_URL) {
   console.warn('⚠️ SUPABASE_URL not set. JWT verification will fail until you set it.');

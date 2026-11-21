@@ -62,7 +62,7 @@ export function hasReportsAccess(req: Request): boolean {
   const cookies = parseCookies(req);
   if (verifyToken(cookies[COOKIE_NAME])) return true;
   // Still allow admin portal key / query for automation.
-  const adminKey = process.env.ADMIN_PORTAL_KEY || 'worldapp-admin-2026';
+  const adminKey = process.env.ADMIN_PORTAL_KEY || 'matterya-admin-2026';
   const key = String(req.headers['x-admin-key'] ?? req.query.key ?? '').trim();
   if (adminKey && key === adminKey) return true;
   return false;

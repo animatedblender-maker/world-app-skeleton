@@ -36,7 +36,8 @@ enum AuthError: LocalizedError {
 final class AuthService {
     static let shared = AuthService()
 
-    private let sessionKey = "worldapp.auth.session"
+    private let sessionKey = "matterya.auth.session"
+    private let legacySessionKey = "worldapp.auth.session"
     private(set) var session: AuthSession?
     /// True while `refreshAccessToken` runs on this MainActor stack.
     private var isRefreshingToken = false
@@ -334,6 +335,7 @@ final class AuthService {
     func logout() {
         session = nil
         UserDefaults.standard.removeObject(forKey: sessionKey)
+        UserDefaults.standard.removeObject(forKey: legacySessionKey)
         ReviewThinCatalog.clear()
     }
 
@@ -402,11 +404,23 @@ final class AuthService {
     private func saveSession(_ session: AuthSession) {
         if let data = try? JSONEncoder().encode(session) {
             UserDefaults.standard.set(data, forKey: sessionKey)
+            UserDefaults.standard.removeObject(forKey: legacySessionKey)
         }
     }
 
     private func loadSession() -> AuthSession? {
-        guard let data = UserDefaults.standard.data(forKey: sessionKey) else { return nil }
-        return try? JSONDecoder().decode(AuthSession.self, from: data)
+        if let data = UserDefaults.standard.data(forKey: sessionKey),
+           let session = try? JSONDecoder().decode(AuthSession.self, from: data)
+        {
+            return session
+        }
+        // One-time migrate from pre-Matterya key so sign-in survives the rename.
+        guard let legacy = UserDefaults.standard.data(forKey: legacySessionKey),
+              let session = try? JSONDecoder().decode(AuthSession.self, from: legacy)
+        else {
+            return nil
+        }
+        saveSession(session)
+        return session
     }
 }
