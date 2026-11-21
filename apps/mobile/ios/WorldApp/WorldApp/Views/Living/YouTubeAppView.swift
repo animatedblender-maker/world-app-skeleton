@@ -1103,6 +1103,7 @@ struct YouTubeAppView: View {
         hubsForYouPool = []
         hubsDisplayLimit = 0
         hubsCaughtUp = true
+        sparksStrip = []
         PostsService.shared.clearHubsSessionCatalog()
         ContentCache.shared.invalidate(.livingVideos)
         SlugShelfStore.shared.newSession()
@@ -1619,6 +1620,10 @@ struct YouTubeAppView: View {
 
     /// Sparks rail: pure shuffle every call — no sticky discovery rank until algorithm lands.
     private func reshuffleSparksStrip() async {
+        if ReviewThinCatalog.isActive {
+            sparksStrip = []
+            return
+        }
         var seen = Set<String>()
         var pool: [CountryPost] = []
 

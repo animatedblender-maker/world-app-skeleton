@@ -378,6 +378,14 @@ struct FeedView: View {
 
     /// Zero-network paint so Hubs / Sparks rails appear with the first frame.
     private func paintStripsFromCache() {
+        // App Review: never paint Sparks for you / Hubs rails from sticky local catalogs.
+        if ReviewThinCatalog.isActive {
+            feedReels = []
+            continueWatching = []
+            newOnPlay = []
+            return
+        }
+
         let living = ContentCache.shared.posts(for: .livingVideos) ?? []
         let catalog = PostsService.shared.sparksCatalogSnapshot()
         let home = ContentCache.shared.posts(for: .homeFeed) ?? store.posts
