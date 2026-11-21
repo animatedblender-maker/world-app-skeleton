@@ -1635,7 +1635,12 @@ final class AnonymousStore {
         feed = []
         feedCursor = nil
         feedHasMore = false
-        spaces = []
+        spacesByFilter = [:]
+        spacesCursor = [:]
+        spacesLoading = [:]
+        spacePosts = []
+        spacePostsCursor = nil
+        spacePostsHasMore = true
         postById = [:]
         sessionSeenFeedIds = []
         shouldToastLastError = false
