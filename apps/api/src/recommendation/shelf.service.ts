@@ -12,6 +12,7 @@ import { pool } from '../db.js';
 import { freshenMediaUrlString, freshenThumbUrlString } from '../media/r2-playback.js';
 import {
   hubsEmptyForViewer,
+  isAppReviewViewer,
   seedAuthorSqlFilter,
   seedHubCatalogSqlFilter,
   viewerSeesThinCatalog,
@@ -1379,6 +1380,20 @@ export async function fetchHomeFeedPage(input: {
     String(input.session ?? '').trim() || idem || viewerId || 'anon'
   );
 
+  // App Review tester: empty Home Feed (everyone else keeps full catalog).
+  if (isAppReviewViewer(viewerEmail)) {
+    return {
+      surface: 'home_for_you',
+      items: [],
+      nextCursor: null,
+      count: 0,
+      batchId: null,
+      deliveryPolicy: 'cursor',
+      requestId: newMindRequestId(),
+      modelVersion: MIND_POLICY_VERSION,
+    };
+  }
+
   // Authenticated replay of an in-flight/timeout batch.
   if (viewerId && idem) {
     const prior = await loadCommittedBatch(viewerId, 'home_for_you', idem);
@@ -1689,6 +1704,19 @@ export async function fetchSparksPage(input: {
   /** Already-watched / already-in-pager IDs — keep Sparks endless with fresh clips. */
   excludeIds?: string[] | null;
 }): Promise<SurfacePage> {
+  // App Review tester: empty Sparks too (same thin Review surface as Feed/Hubs).
+  if (isAppReviewViewer(input.viewerEmail)) {
+    return {
+      surface: 'sparks',
+      items: [],
+      nextCursor: null,
+      count: 0,
+      batchId: null,
+      deliveryPolicy: 'cursor',
+      requestId: newMindRequestId(),
+      modelVersion: MIND_POLICY_VERSION,
+    };
+  }
   // Pre-KNN: larger pages + feed_at so the full R2 spark library is reachable newest-first.
   const want = Math.min(Math.max(Number(input.limit) || 24, 1), 48);
   const focus = input.slug ? normalizeParentSlug(input.slug) : null;
