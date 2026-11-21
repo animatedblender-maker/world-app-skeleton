@@ -463,11 +463,13 @@ final class HomeFeedStore {
         }
 
         // App Review account — empty Home before any ContentCache / Sparks / GraphQL refill.
+        // Normal accounts must never stay stuck in a prior Review empty lock.
         ReviewThinCatalog.refreshFromSession()
         if ReviewThinCatalog.isActive {
             lockCatalogForcedEmpty()
             return
         }
+        catalogForcedEmpty = false
 
         if forceReplace {
             // Snapshot on-screen head before wipe so Reddit image cards (no video
@@ -542,10 +544,8 @@ final class HomeFeedStore {
             nextCursor = thin.nextCursor
             var livePool = thin.items
             // items=0 + nextCursor = delivery-ledger exhausted window — walk before GraphQL.
-            // reviewThin / intentional empty: do not expand or refill.
-            let intentionalEmpty =
-                thin.reviewThin || (thin.items.isEmpty && thin.nextCursor == nil)
-            if intentionalEmpty {
+            // ONLY lock empty for the App Review tester — never for a normal empty page.
+            if thin.reviewThin, ReviewThinCatalog.isReviewAccount {
                 lockCatalogForcedEmpty()
             } else if livePool.isEmpty, thin.nextCursor != nil {
                 let expanded = await expandFreshHead(initial: [], startingCursor: thin.nextCursor)
@@ -586,15 +586,13 @@ final class HomeFeedStore {
                     hasMore = thin.nextCursor != nil || head.count >= 8
                     Task { await warmHead(lite: true) }
                 }
-            } else if forceReplace || !paintedBefore {
-                // Empty after expand with no reviewThin flag — still wipe sticky cache.
-                lockCatalogForcedEmpty()
             }
+            // Normal accounts: empty thin head falls through to Sparks / GraphQL top-ups below.
         }
         if posts.isEmpty, !catalogForcedEmpty {
             // Surface Sparks only — never GraphQL discover stampede on cold open (-1001 storm).
             let sparkPage = await SurfacePageClient.fetchSparks(limit: 40)
-            if sparkPage?.reviewThin == true {
+            if sparkPage?.reviewThin == true, ReviewThinCatalog.isReviewAccount {
                 lockCatalogForcedEmpty()
             } else {
                 let liveRaw = sparkPage?.items ?? []
@@ -661,7 +659,12 @@ final class HomeFeedStore {
     }
 
     /// Wipe Home to intentional empty and stop every refill path.
+    /// Only for the App Review tester — never call for a normal empty page.
     private func lockCatalogForcedEmpty() {
+        guard ReviewThinCatalog.isReviewAccount else {
+            catalogForcedEmpty = false
+            return
+        }
         catalogForcedEmpty = true
         applyPosts([], replace: true, sessionId: feedSessionId, alreadyRanked: true)
         ContentCache.shared.invalidate(.homeFeed)
@@ -912,6 +915,7 @@ final class HomeFeedStore {
             lockCatalogForcedEmpty()
             return
         }
+        catalogForcedEmpty = false
 
         if forceRefresh {
             isRefreshing = true
@@ -951,9 +955,7 @@ final class HomeFeedStore {
         let fromThin: Bool
         if let thin = await SurfacePageClient.fetchHomeFeed(limit: 28, cursor: nil, session: feedSessionId) {
             nextCursor = thin.nextCursor
-            let intentionalEmpty =
-                thin.reviewThin || (thin.items.isEmpty && thin.nextCursor == nil)
-            if intentionalEmpty {
+            if thin.reviewThin, ReviewThinCatalog.isReviewAccount {
                 lockCatalogForcedEmpty()
                 live = []
                 fromThin = true
@@ -976,9 +978,7 @@ final class HomeFeedStore {
                     #endif
                 } else {
                     let sparks = await SurfacePageClient.fetchSparks(limit: 40)
-                    if sparks?.reviewThin == true
-                        || ((sparks?.items.isEmpty ?? true) && sparks?.nextCursor == nil && thin.reviewThin)
-                    {
+                    if sparks?.reviewThin == true, ReviewThinCatalog.isReviewAccount {
                         lockCatalogForcedEmpty()
                         live = []
                         fromThin = true
@@ -994,7 +994,7 @@ final class HomeFeedStore {
             }
         } else {
             let sparks = await SurfacePageClient.fetchSparks(limit: 40)
-            if sparks?.reviewThin == true {
+            if sparks?.reviewThin == true, ReviewThinCatalog.isReviewAccount {
                 lockCatalogForcedEmpty()
                 live = []
                 fromThin = false
@@ -1375,9 +1375,7 @@ final class HomeFeedStore {
         SparkDiscoveryEngine.beginNewBrowseSession()
         let thin = await SurfacePageClient.fetchHomeFeed(limit: 48, cursor: nil)
         guard gen == generation else { return }
-        if let thin,
-           thin.reviewThin || (thin.items.isEmpty && thin.nextCursor == nil)
-        {
+        if let thin, thin.reviewThin, ReviewThinCatalog.isReviewAccount {
             lockCatalogForcedEmpty()
             #if DEBUG
             print("[HomeFeed] hardRefresh catalogForcedEmpty")
@@ -1484,7 +1482,7 @@ final class HomeFeedStore {
                 thinFeedFailStreak = 0
                 thinFeedCoolUntil = nil
                 pendingFeedIdempotencyKey = nil
-                if thin.reviewThin || (thin.items.isEmpty && thin.nextCursor == nil && posts.isEmpty) {
+                if thin.reviewThin, ReviewThinCatalog.isReviewAccount {
                     lockCatalogForcedEmpty()
                     return
                 }
@@ -1496,11 +1494,8 @@ final class HomeFeedStore {
                 } else if let next = thin.nextCursor, next != cursor {
                     pageNextCursor = next
                     nextCursor = next
-                } else if thin.reviewThin {
-                    lockCatalogForcedEmpty()
-                    return
                 } else {
-                    // Thin exhausted — Sparks/Hubs keep the feed endless.
+                    // Thin exhausted — Sparks/Hubs keep the feed endless for normal accounts.
                     pageNextCursor = nil
                     nextCursor = nil
                 }

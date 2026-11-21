@@ -5,11 +5,12 @@ import Foundation
 /// When active, Home / Sparks / Hubs must stay empty: no ContentCache paint,
 /// no GraphQL discover, no Sparks discovery catalog, no hub/spark top-ups.
 /// `seed_catalog_public` stays true globally for everyone else.
+///
+/// **Safety:** only the known Review account is ever locked. A sticky
+/// `reviewThin` flag must never empty a normal user's feed after an empty
+/// page, account switch, or parse glitch.
 @MainActor
 enum ReviewThinCatalog {
-    /// Sticky once any surface returns `reviewThin`, or the signed-in account matches.
-    private(set) static var isLocked = false
-
     private static let reviewEmails: Set<String> = [
         "iostester@matterya.com",
     ]
@@ -35,35 +36,32 @@ enum ReviewThinCatalog {
         return false
     }
 
-    /// Active lock: known Review account and/or server `reviewThin` seen this session.
-    static var isActive: Bool {
-        isLocked || isReviewAccount
-    }
+    /// Active only for the Review tester account — never sticky for normal users.
+    static var isActive: Bool { isReviewAccount }
 
-    /// Call when `/v1/feed`, `/v1/sparks`, or hubs return `reviewThin: true`.
+    /// Server returned `reviewThin` — wipe caches only when this session is Review.
     static func noteServerReviewThin() {
-        guard !isLocked else { return }
-        isLocked = true
+        guard isReviewAccount else { return }
         wipeLocalCatalogCaches()
         #if DEBUG
-        print("[ReviewThin] locked from server reviewThin")
+        print("[ReviewThin] wipe caches from server reviewThin")
         #endif
     }
 
     /// Call on auth settle / feed bootstrap so Review never paints sticky cache first.
+    /// Clears any prior wipe side-effects when a normal account is signed in.
     static func refreshFromSession() {
         if isReviewAccount {
-            isLocked = true
             wipeLocalCatalogCaches()
             #if DEBUG
-            print("[ReviewThin] locked from review account session")
+            print("[ReviewThin] active for review account session")
             #endif
         }
     }
 
-    /// Clear after logout so a normal account is not stuck empty.
+    /// Clear after logout (kept for call-site symmetry).
     static func clear() {
-        isLocked = false
+        // isActive is derived from the session; nothing sticky to clear.
     }
 
     private static func wipeLocalCatalogCaches() {

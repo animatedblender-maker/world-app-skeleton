@@ -359,6 +359,24 @@ export async function createPost(opts: {
   const client = await pool.connect();
   try {
     await client.query('begin');
+    // Keep member_count honest — every poster must be an active member (seed imports used to skip this).
+    await client.query(
+      `
+      insert into anonymous.space_memberships (space_id, anon_profile_id, state, joined_at)
+      values ($1::uuid, $2::uuid, 'active', now())
+      on conflict (space_id, anon_profile_id) do update
+        set state = case
+              when anonymous.space_memberships.state = 'banned' then 'banned'
+              else 'active'
+            end,
+            left_at = case
+              when anonymous.space_memberships.state = 'banned' then anonymous.space_memberships.left_at
+              else null
+            end,
+            joined_at = coalesce(anonymous.space_memberships.joined_at, now())
+      `,
+      [space.id, opts.profile.id]
+    );
     const { rows } = await client.query<any>(
       `
       insert into anonymous.posts (
@@ -379,7 +397,17 @@ export async function createPost(opts: {
       ]
     );
     await client.query(
-      `update anonymous.spaces set post_count = post_count + 1, updated_at = now() where id = $1::uuid`,
+      `
+      update anonymous.spaces s
+      set
+        post_count = post_count + 1,
+        member_count = (
+          select count(*)::int from anonymous.space_memberships m
+          where m.space_id = s.id and m.state = 'active'
+        ),
+        updated_at = now()
+      where s.id = $1::uuid
+      `,
       [space.id]
     );
     await client.query('commit');
