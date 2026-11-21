@@ -2217,14 +2217,18 @@ struct YouTubeAppView: View {
             }
         }
 
-        // Successful empty shelf (App Review kill switch) — wipe sticky local LongForm.
-        if page.items.isEmpty, !RemoteConfigClient.bool("seed_catalog_public", default: false) {
-            clearHubsCatalogForReview()
+        // Successful empty for-you (App Review thin viewer) — wipe sticky local LongForm.
+        // Sparse slug shelves may be empty without nuking the whole Hubs tab.
+        if page.items.isEmpty {
+            let isForYou = homeFilter.hubSlug == nil || key == "for-you"
+            if isForYou {
+                clearHubsCatalogForReview()
+            }
             isLoading = false
             errorMessage = nil
             hubsCaughtUp = true
             #if DEBUG
-            print("[Hubs] empty API — cleared local LongForm catalog")
+            print("[Hubs] empty API key=\(key) cleared=\(isForYou)")
             #endif
             return
         }
@@ -2232,8 +2236,7 @@ struct YouTubeAppView: View {
         // ── Legacy fallback (once) if shelves empty / API down ───────────────
         if !forceRefresh,
            PostsService.shared.hubsSessionIsWarm(),
-           allVideos.isEmpty,
-           RemoteConfigClient.bool("seed_catalog_public", default: false) {
+           allVideos.isEmpty {
             paintInstantHubsIfPossible()
             if !allVideos.isEmpty {
                 isLoading = false
