@@ -99,7 +99,7 @@ export type ServeVideoAdInput = {
 
 /** StoreKit consumable — pay once per new campaign create (not a subscription). */
 export const AD_CAMPAIGN_CREATE_PRODUCT_ID =
-  'com.matterya.app.ads.campaign_create';
+  'com.matterya.worldapp.ads.campaign_create';
 
 const DEFAULT_ADS_FREE_CREATE_EMAILS = ['animatedblender@gmail.com'];
 
@@ -203,7 +203,7 @@ export class AdsService {
           throw new Error('Purchase product mismatch.');
         }
         const bundle = String(payload.bundleId ?? '').trim();
-        if (bundle && bundle !== 'com.matterya.app') {
+        if (bundle && bundle !== 'com.matterya.worldapp') {
           throw new Error('Purchase bundle mismatch.');
         }
         const claimedTx = String(payload.transactionId ?? '').trim();

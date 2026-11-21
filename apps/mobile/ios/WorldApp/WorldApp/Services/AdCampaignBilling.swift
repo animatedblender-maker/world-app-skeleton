@@ -9,7 +9,7 @@ import StoreKit
 final class AdCampaignBilling {
     static let shared = AdCampaignBilling()
 
-    static let productID = "com.matterya.app.ads.campaign_create"
+    static let productID = "com.matterya.worldapp.ads.campaign_create"
     private static let freeEmails: Set<String> = ["animatedblender@gmail.com"]
 
     private(set) var product: Product?
