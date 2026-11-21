@@ -48,8 +48,9 @@ const DEFAULT_FLAGS: RemoteFlags = {
   mind_trained_ranker_enabled: false,
   mind_hybrid_search_enabled: true,
   mind_session_features_enabled: true,
-  seed_catalog_public: false,
-  masquerade_public: false,
+  /** Default on — thin catalog is viewer-scoped to App Review emails. */
+  seed_catalog_public: true,
+  masquerade_public: true,
 };
 
 /** Bump when flag defaults change so clients refresh. */

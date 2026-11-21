@@ -1,15 +1,16 @@
 /**
- * Public seed / pipeline catalog kill switch (App Review).
+ * Seed / pipeline catalog visibility.
  *
- * SEED_CATALOG_PUBLIC=false (default) →
- *   - hide seed/harness authors
- *   - hide LongForm / hub-catalog pipeline videos (even when owned by real team accounts)
- * Rows stay in DB. After Accept: SEED_CATALOG_PUBLIC=true on Render — no app update.
+ * Default: catalog is PUBLIC for everyone (seeds, LongForm Hubs, Masquerade).
  *
- * MASQUERADE_PUBLIC=false (default) →
- *   - /v1/anonymous returns soft-offline (no spaces, no posts)
- *   - features.anonymous=false
- * After Accept: MASQUERADE_PUBLIC=true on Render.
+ * App Review thin mode is **viewer-scoped** — only `iostester@matterya.com`
+ * (plus optional `APP_REVIEW_EMAILS`) sees:
+ *   - few real posts (seed authors + LongForm hub catalog hidden)
+ *   - empty Hubs shelves
+ *   - Masquerade age re-confirm + empty spaces/posts
+ *
+ * Emergency global kill (hide for everyone): SEED_CATALOG_PUBLIC=false
+ * Emergency Masquerade pause (everyone): MASQUERADE_PUBLIC=false
  */
 
 function envOn(key: string): boolean {
@@ -19,22 +20,68 @@ function envOn(key: string): boolean {
   return v === '1' || v === 'true' || v === 'yes' || v === 'on';
 }
 
-export function seedCatalogPublic(): boolean {
-  return envOn('SEED_CATALOG_PUBLIC');
+function envExplicitlySet(key: string): boolean {
+  const v = process.env[key];
+  return v != null && String(v).trim() !== '';
 }
 
-/** Masquerade public surfaces. Default off for App Review. */
-export function masqueradePublic(): boolean {
-  return envOn('MASQUERADE_PUBLIC');
+const DEFAULT_APP_REVIEW_EMAILS = ['iostester@matterya.com'];
+
+/** Emails that get the thin App Review experience. */
+export function appReviewEmails(): Set<string> {
+  const extra = String(process.env.APP_REVIEW_EMAILS ?? '')
+    .split(/[,;\s]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return new Set([...DEFAULT_APP_REVIEW_EMAILS, ...extra]);
+}
+
+export function isAppReviewViewer(email?: string | null): boolean {
+  const e = String(email ?? '')
+    .trim()
+    .toLowerCase();
+  if (!e) return false;
+  return appReviewEmails().has(e);
 }
 
 /**
- * SQL AND-fragment when seeds are hidden.
- * Expects `profiles` already joined as `profileAlias` on posts.author_id.
- * Returns empty string when catalog is public.
+ * Global seed catalog. Default **true** (public).
+ * Set SEED_CATALOG_PUBLIC=false only for an emergency everyone-hide.
  */
-export function seedAuthorSqlFilter(profileAlias = 'pr'): string {
-  if (seedCatalogPublic()) return '';
+export function seedCatalogPublic(): boolean {
+  if (!envExplicitlySet('SEED_CATALOG_PUBLIC')) return true;
+  return envOn('SEED_CATALOG_PUBLIC');
+}
+
+/**
+ * Global Masquerade. Default **true** (public).
+ * Set MASQUERADE_PUBLIC=false only for an emergency everyone-pause.
+ */
+export function masqueradePublic(): boolean {
+  if (!envExplicitlySet('MASQUERADE_PUBLIC')) return true;
+  return envOn('MASQUERADE_PUBLIC');
+}
+
+/** This viewer should see the thin Review catalog (seeds/hubs hidden). */
+export function viewerSeesThinCatalog(email?: string | null): boolean {
+  if (!seedCatalogPublic()) return true;
+  return isAppReviewViewer(email);
+}
+
+/** Hubs LongForm empty for this viewer (fast path). */
+export function hubsEmptyForViewer(email?: string | null): boolean {
+  return viewerSeesThinCatalog(email);
+}
+
+/**
+ * SQL AND-fragment when thin catalog applies for this viewer.
+ * Expects `profiles` already joined as `profileAlias` on posts.author_id.
+ */
+export function seedAuthorSqlFilter(
+  profileAlias = 'pr',
+  viewerEmail?: string | null
+): string {
+  if (!viewerSeesThinCatalog(viewerEmail)) return '';
   const a = profileAlias.replace(/[^a-zA-Z0-9_]/g, '') || 'pr';
   return `
     and ${a}.user_id is not null
@@ -49,12 +96,13 @@ export function seedAuthorSqlFilter(profileAlias = 'pr'): string {
 }
 
 /**
- * Hide pipeline Hubs LongForm catalog (R2 LongForm paths + __hub_* body stamps).
- * Team accounts often own these packs — author filter alone is not enough.
- * postAlias defaults to `p`.
+ * Hide pipeline Hubs LongForm catalog for thin-catalog viewers.
  */
-export function seedHubCatalogSqlFilter(postAlias = 'p'): string {
-  if (seedCatalogPublic()) return '';
+export function seedHubCatalogSqlFilter(
+  postAlias = 'p',
+  viewerEmail?: string | null
+): string {
+  if (!viewerSeesThinCatalog(viewerEmail)) return '';
   const p = postAlias.replace(/[^a-zA-Z0-9_]/g, '') || 'p';
   return `
     and coalesce(${p}.media_path, '') not like '%/LongForm/%'
@@ -64,7 +112,7 @@ export function seedHubCatalogSqlFilter(postAlias = 'p'): string {
   `;
 }
 
-/** True when Hubs public catalog should be empty (fast path — skip 7s scans). */
+/** @deprecated use hubsEmptyForViewer — kept for call-site compatibility during migrate */
 export function hubsCatalogPublic(): boolean {
   return seedCatalogPublic();
 }

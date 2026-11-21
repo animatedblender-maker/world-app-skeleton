@@ -464,13 +464,13 @@ app.get('/health', (_req: Request, res: Response) =>
       hubsSlugShelves: true,
       performanceMetrics: true,
       remoteConfig: true,
-      /** false during App Review — flip MASQUERADE_PUBLIC=true after accept. */
+      /** Default on. Emergency pause: MASQUERADE_PUBLIC=false. Review thin is viewer-scoped. */
       anonymous: masqueradePublic(),
       anonymousPaid: process.env.ANONYMOUS_PAID_ENABLED === 'true',
       videoTranscripts: !!process.env.GROQ_API_KEY?.trim(),
       mindAdminPage: true,
       mindPolicyVersion: MIND_POLICY_VERSION,
-      /** false during App Review — flip SEED_CATALOG_PUBLIC=true after accept (no app update). */
+      /** Default on. Thin catalog only for APP_REVIEW_EMAILS (iostester@matterya.com). */
       seedCatalogPublic: seedCatalogPublic(),
       masqueradePublic: masqueradePublic(),
     },
@@ -1477,6 +1477,7 @@ app.get('/v1/hubs/for-you', async (req: Request, res: Response) => {
       cursor,
       session,
       viewerUserId: user?.id ?? null,
+      viewerEmail: user?.email ?? null,
       idempotencyKey,
     });
     return res.json({ ok: true, ...page });
@@ -1491,12 +1492,17 @@ app.get('/v1/hubs/for-you', async (req: Request, res: Response) => {
 
 app.get('/v1/hubs/shelves/:slug', async (req: Request, res: Response) => {
   try {
-    await getUserFromRequest(req).catch(() => null);
+    const user = await getUserFromRequest(req).catch(() => null);
     const slug = String(req.params.slug || '').trim();
     if (!slug) return res.status(400).json({ error: 'slug_required' });
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 80);
     const cursor = req.query.cursor ? String(req.query.cursor) : null;
-    const page = await fetchShelfPage({ slug, limit, cursor });
+    const page = await fetchShelfPage({
+      slug,
+      limit,
+      cursor,
+      viewerEmail: user?.email ?? null,
+    });
     return res.json({ ok: true, ...page });
   } catch (err: any) {
     console.error('[hubs/shelves]', err?.message ?? err);
@@ -1617,6 +1623,7 @@ app.get('/v1/feed', async (req: Request, res: Response) => {
       limit,
       cursor,
       viewerUserId: user?.id ?? null,
+      viewerEmail: user?.email ?? null,
       idempotencyKey,
       session,
     });
@@ -1648,6 +1655,7 @@ app.get('/v1/sparks', async (req: Request, res: Response) => {
       cursor,
       slug,
       viewerUserId: user?.id ?? null,
+      viewerEmail: user?.email ?? null,
       excludeIds,
     });
     return res.json({ ok: true, ...page });

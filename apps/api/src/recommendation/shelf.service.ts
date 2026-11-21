@@ -11,10 +11,10 @@
 import { pool } from '../db.js';
 import { freshenMediaUrlString, freshenThumbUrlString } from '../media/r2-playback.js';
 import {
-  hubsCatalogPublic,
+  hubsEmptyForViewer,
   seedAuthorSqlFilter,
-  seedCatalogPublic,
   seedHubCatalogSqlFilter,
+  viewerSeesThinCatalog,
 } from '../catalog/seed-catalog.js';
 import {
   adultContentSqlFilter,
@@ -459,6 +459,7 @@ async function queryVideoPage(opts: {
   cursor?: string | null;
   /** When hub_slug column exists, push filter into SQL. */
   sqlSlug?: string | null;
+  viewerEmail?: string | null;
 }): Promise<RawPostRow[]> {
   // Cap high enough for For-you over-fetch (want*10) while classify fills sparse chips.
   const limit = Math.min(Math.max(opts.limit || 40, 1), 200);
@@ -467,6 +468,7 @@ async function queryVideoPage(opts: {
 
   const slugSelect = hasCol ? 'p.hub_slug' : 'null::text as hub_slug';
   const params: unknown[] = [];
+  const email = opts.viewerEmail ?? null;
   // Hubs shelves = long-form video. Keep reel/spark out (Sparks have their own surface).
   // Index-friendly created_at walk — same fix as home feed (greatest() scanned multi-seconds).
   let where = `
@@ -476,8 +478,8 @@ async function queryVideoPage(opts: {
     and length(trim(p.media_url)) > 8
     and coalesce(p.body, '') not ilike '%__story__%'
     and coalesce(p.body, '') not ilike '%__spark__%'
-    ${seedAuthorSqlFilter('pr')}
-    ${seedHubCatalogSqlFilter('p')}
+    ${seedAuthorSqlFilter('pr', email)}
+    ${seedHubCatalogSqlFilter('p', email)}
   `;
 
   if (hasCol && opts.sqlSlug) {
@@ -555,10 +557,11 @@ export async function fetchShelfPage(input: {
   slug: string;
   limit?: number;
   cursor?: string | null;
+  viewerEmail?: string | null;
 }): Promise<ShelfPage> {
   const slug = normalizeParentSlug(input.slug);
-  // App Review: LongForm hub catalog is pipeline seed — return empty fast (no 7s scan).
-  if (!hubsCatalogPublic()) {
+  // App Review tester only: empty Hubs (everyone else gets full LongForm catalog).
+  if (hubsEmptyForViewer(input.viewerEmail)) {
     return { slug, items: [], nextCursor: null, count: 0 };
   }
   const want = Math.min(Math.max(Number(input.limit) || 36, 1), 80);
@@ -581,6 +584,7 @@ export async function fetchShelfPage(input: {
       limit: batchSize,
       cursor,
       sqlSlug: useSqlSlug ? slug : null,
+      viewerEmail: input.viewerEmail,
     });
     if (rows.length === 0) {
       if (useSqlSlug && !didClassifyFallback && items.length < want && !input.cursor) {
@@ -649,6 +653,7 @@ export async function fetchForYouPage(input: {
   cursor?: string | null;
   session?: string | null;
   viewerUserId?: string | null;
+  viewerEmail?: string | null;
   idempotencyKey?: string | null;
 }): Promise<ForYouPage> {
   const want = Math.min(Math.max(Number(input.limit) || 36, 1), 80);
@@ -659,8 +664,8 @@ export async function fetchForYouPage(input: {
   const idem =
     String(input.idempotencyKey ?? '').trim().slice(0, 128) || null;
 
-  // App Review: hide entire Hubs LongForm catalog — empty + instant (fixes 7s timeout lag).
-  if (!hubsCatalogPublic()) {
+  // App Review tester only: empty Hubs for-you.
+  if (hubsEmptyForViewer(input.viewerEmail)) {
     return {
       surface: 'hubs_for_you',
       items: [],
@@ -711,6 +716,7 @@ export async function fetchForYouPage(input: {
   const batch = await queryVideoPage({
     limit: Math.min(want * (viewerId ? 14 : 10), 220),
     cursor: input.cursor,
+    viewerEmail: input.viewerEmail,
   });
 
   const buckets = new Map<string, RawPostRow[]>();
@@ -1170,19 +1176,21 @@ async function fetchHomeLaneRows(opts: {
   cursor: HomeLaneCursor;
   slugSelect: string;
   under18: boolean;
+  viewerEmail?: string | null;
 }): Promise<RawPostRow[]> {
-  // App Review: no pipeline LongForm on Home hub lane.
-  if (opts.kind === 'hub' && !hubsCatalogPublic()) return [];
+  // App Review tester: no pipeline LongForm on Home hub lane.
+  if (opts.kind === 'hub' && hubsEmptyForViewer(opts.viewerEmail)) return [];
   const want = Math.min(Math.max(opts.limit, 1), 32);
   const params: unknown[] = [];
   const adult = adultContentSqlFilter(opts.under18, 'p');
+  const email = opts.viewerEmail ?? null;
   let where = `
     p.visibility = 'public'
     and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
     and coalesce(p.body, '') not ilike '%__story__%'
     ${adult}
-    ${seedAuthorSqlFilter('pr')}
-    ${opts.kind === 'hub' ? '' : seedHubCatalogSqlFilter('p')}
+    ${seedAuthorSqlFilter('pr', email)}
+    ${opts.kind === 'hub' ? '' : seedHubCatalogSqlFilter('p', email)}
   `;
 
   if (opts.kind === 'spark') {
@@ -1356,6 +1364,7 @@ export async function fetchHomeFeedPage(input: {
   limit?: number;
   cursor?: string | null;
   viewerUserId?: string | null;
+  viewerEmail?: string | null;
   /** Architecture §5 — retry same key returns the committed batch. */
   idempotencyKey?: string | null;
   /** Client session — rotates first-page mix so each open isn't identical. */
@@ -1363,6 +1372,7 @@ export async function fetchHomeFeedPage(input: {
 }): Promise<SurfacePage> {
   const want = Math.min(Math.max(Number(input.limit) || 24, 1), 64);
   const viewerId = input.viewerUserId ? String(input.viewerUserId).trim() : '';
+  const viewerEmail = input.viewerEmail ?? null;
   const idem =
     String(input.idempotencyKey ?? '').trim().slice(0, 128) || null;
   const sessionSeed = hashSessionSeed(
@@ -1423,6 +1433,7 @@ export async function fetchHomeFeedPage(input: {
           cursor: homeCur.spark,
           slugSelect,
           under18,
+          viewerEmail,
         }),
         fetchHomeLaneRows({
           kind: 'hub',
@@ -1430,6 +1441,7 @@ export async function fetchHomeFeedPage(input: {
           cursor: homeCur.hub,
           slugSelect,
           under18,
+          viewerEmail,
         }),
         fetchHomeLaneRows({
           kind: 'image',
@@ -1437,6 +1449,7 @@ export async function fetchHomeFeedPage(input: {
           cursor: homeCur.image,
           slugSelect,
           under18,
+          viewerEmail,
         }),
       ]),
       new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 7000)),
@@ -1591,7 +1604,9 @@ export async function fetchHomeFeedPage(input: {
     sparkRows.length >= perLane ||
     hubRows.length >= perLane ||
     imageRows.length >= perLane;
-  const emptyLedgerWalk = liveItems.length === 0 && lanesHaveMore && seedCatalogPublic();
+  // Review thin catalog: never empty-walk forever (spinner). Full catalog: allow ledger walks.
+  const emptyLedgerWalk =
+    liveItems.length === 0 && lanesHaveMore && !viewerSeesThinCatalog(viewerEmail);
   const hasMore =
     pageFull || (liveItems.length > 0 && lanesHaveMore) || emptyLedgerWalk;
 
@@ -1670,6 +1685,7 @@ export async function fetchSparksPage(input: {
   cursor?: string | null;
   slug?: string | null;
   viewerUserId?: string | null;
+  viewerEmail?: string | null;
   /** Already-watched / already-in-pager IDs — keep Sparks endless with fresh clips. */
   excludeIds?: string[] | null;
 }): Promise<SurfacePage> {
@@ -1697,7 +1713,7 @@ export async function fetchSparksPage(input: {
     and coalesce(p.media_path, '') not like '%/LongForm/%'
     and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
     ${adultContentSqlFilter(under18, 'p')}
-    ${seedAuthorSqlFilter('pr')}
+    ${seedAuthorSqlFilter('pr', input.viewerEmail)}
     and (
       lower(coalesce(p.media_type, '')) in ('reel', 'spark')
       or lower(coalesce(p.body, '')) like '%__spark__|%'

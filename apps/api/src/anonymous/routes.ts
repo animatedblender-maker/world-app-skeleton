@@ -1,7 +1,10 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { pool } from '../db.js';
 import { getUserFromRequest, type AuthedUser } from '../auth/request-user.js';
-import { masqueradePublic } from '../catalog/seed-catalog.js';
+import {
+  isAppReviewViewer,
+  masqueradePublic,
+} from '../catalog/seed-catalog.js';
 import {
   attestAge,
   getOrCreateProfile,
@@ -136,6 +139,7 @@ export function createAnonymousRouter(): Router {
         birthdate_missing: birthdateMissing,
         birthdateMissing,
         suspended,
+        review_thin: isAppReviewViewer(req.user?.email),
         paid_enabled: session.paid_enabled,
         paidEnabled: session.paid_enabled,
       });
@@ -356,6 +360,16 @@ export function createAnonymousRouter(): Router {
     try {
       const session = await requireReady(req, res);
       if (!session) return;
+      // App Review tester: empty Spaces catalog (rows stay in DB for everyone else).
+      if (isAppReviewViewer(req.user?.email)) {
+        return res.json({
+          ok: true,
+          spaces: [],
+          items: [],
+          next_cursor: null,
+          nextCursor: null,
+        });
+      }
       const filter = String(req.query.filter ?? 'popular');
       const cursor = req.query.cursor ? String(req.query.cursor) : null;
       const limit = Number(req.query.limit ?? 20);
@@ -483,6 +497,9 @@ export function createAnonymousRouter(): Router {
     try {
       const session = await requireReady(req, res);
       if (!session) return;
+      if (isAppReviewViewer(req.user?.email)) {
+        return res.json({ ok: true, posts: [], next_cursor: null, nextCursor: null });
+      }
       const result = await listSpacePosts({
         profile: session.profile!,
         spaceId: String(req.params.id),
@@ -737,6 +754,15 @@ export function createAnonymousRouter(): Router {
     try {
       const session = await requireReady(req, res);
       if (!session) return;
+      if (isAppReviewViewer(req.user?.email)) {
+        return res.json({
+          ok: true,
+          posts: [],
+          items: [],
+          next_cursor: null,
+          nextCursor: null,
+        });
+      }
       const result = await getFeed({
         profile: session.profile!,
         sort: String(req.query.sort ?? 'for_you'),
