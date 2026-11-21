@@ -26,6 +26,8 @@ function envExplicitlySet(key: string): boolean {
 }
 
 const DEFAULT_APP_REVIEW_EMAILS = ['iostester@matterya.com'];
+/** Known App Review account user_id (iostester@matterya.com) — JWT email can be missing. */
+const DEFAULT_APP_REVIEW_USER_IDS = ['7a5d21ee-9f6f-4246-9728-8bb7a6ddb830'];
 
 /** Emails that get the thin App Review experience. */
 export function appReviewEmails(): Set<string> {
@@ -36,12 +38,27 @@ export function appReviewEmails(): Set<string> {
   return new Set([...DEFAULT_APP_REVIEW_EMAILS, ...extra]);
 }
 
-export function isAppReviewViewer(email?: string | null): boolean {
+export function appReviewUserIds(): Set<string> {
+  const extra = String(process.env.APP_REVIEW_USER_IDS ?? '')
+    .split(/[,;\s]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return new Set([...DEFAULT_APP_REVIEW_USER_IDS, ...extra]);
+}
+
+export function isAppReviewViewer(
+  email?: string | null,
+  userId?: string | null
+): boolean {
   const e = String(email ?? '')
     .trim()
     .toLowerCase();
-  if (!e) return false;
-  return appReviewEmails().has(e);
+  if (e && appReviewEmails().has(e)) return true;
+  const id = String(userId ?? '')
+    .trim()
+    .toLowerCase();
+  if (id && appReviewUserIds().has(id)) return true;
+  return false;
 }
 
 /**
@@ -63,14 +80,20 @@ export function masqueradePublic(): boolean {
 }
 
 /** This viewer should see the thin Review catalog (seeds/hubs hidden). */
-export function viewerSeesThinCatalog(email?: string | null): boolean {
+export function viewerSeesThinCatalog(
+  email?: string | null,
+  userId?: string | null
+): boolean {
   if (!seedCatalogPublic()) return true;
-  return isAppReviewViewer(email);
+  return isAppReviewViewer(email, userId);
 }
 
 /** Hubs LongForm empty for this viewer (fast path). */
-export function hubsEmptyForViewer(email?: string | null): boolean {
-  return viewerSeesThinCatalog(email);
+export function hubsEmptyForViewer(
+  email?: string | null,
+  userId?: string | null
+): boolean {
+  return viewerSeesThinCatalog(email, userId);
 }
 
 /**
@@ -79,9 +102,10 @@ export function hubsEmptyForViewer(email?: string | null): boolean {
  */
 export function seedAuthorSqlFilter(
   profileAlias = 'pr',
-  viewerEmail?: string | null
+  viewerEmail?: string | null,
+  viewerUserId?: string | null
 ): string {
-  if (!viewerSeesThinCatalog(viewerEmail)) return '';
+  if (!viewerSeesThinCatalog(viewerEmail, viewerUserId)) return '';
   const a = profileAlias.replace(/[^a-zA-Z0-9_]/g, '') || 'pr';
   return `
     and ${a}.user_id is not null
@@ -100,9 +124,10 @@ export function seedAuthorSqlFilter(
  */
 export function seedHubCatalogSqlFilter(
   postAlias = 'p',
-  viewerEmail?: string | null
+  viewerEmail?: string | null,
+  viewerUserId?: string | null
 ): string {
-  if (!viewerSeesThinCatalog(viewerEmail)) return '';
+  if (!viewerSeesThinCatalog(viewerEmail, viewerUserId)) return '';
   const p = postAlias.replace(/[^a-zA-Z0-9_]/g, '') || 'p';
   return `
     and coalesce(${p}.media_path, '') not like '%/LongForm/%'

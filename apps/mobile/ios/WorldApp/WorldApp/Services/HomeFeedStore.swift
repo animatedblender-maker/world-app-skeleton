@@ -566,6 +566,14 @@ final class HomeFeedStore {
                     hasMore = thin.nextCursor != nil || head.count >= 8
                     Task { await warmHead(lite: true) }
                 }
+            } else if forceReplace || !paintedBefore {
+                // Intentional empty catalog (App Review thin viewer) — wipe sticky cache.
+                applyPosts([], replace: true, sessionId: feedSessionId, alreadyRanked: true)
+                ContentCache.shared.invalidate(.homeFeed)
+                nextCursor = nil
+                hasMore = false
+                isBootstrapping = false
+                didPaint = true
             }
         }
         if posts.isEmpty {

@@ -139,7 +139,7 @@ export function createAnonymousRouter(): Router {
         birthdate_missing: birthdateMissing,
         birthdateMissing,
         suspended,
-        review_thin: isAppReviewViewer(req.user?.email),
+        review_thin: isAppReviewViewer(req.user?.email, req.user?.id),
         paid_enabled: session.paid_enabled,
         paidEnabled: session.paid_enabled,
       });
@@ -361,7 +361,7 @@ export function createAnonymousRouter(): Router {
       const session = await requireReady(req, res);
       if (!session) return;
       // App Review tester: empty Spaces catalog (rows stay in DB for everyone else).
-      if (isAppReviewViewer(req.user?.email)) {
+      if (isAppReviewViewer(req.user?.email, req.user?.id)) {
         return res.json({
           ok: true,
           spaces: [],
@@ -497,7 +497,7 @@ export function createAnonymousRouter(): Router {
     try {
       const session = await requireReady(req, res);
       if (!session) return;
-      if (isAppReviewViewer(req.user?.email)) {
+      if (isAppReviewViewer(req.user?.email, req.user?.id)) {
         return res.json({ ok: true, posts: [], next_cursor: null, nextCursor: null });
       }
       const result = await listSpacePosts({
@@ -754,7 +754,7 @@ export function createAnonymousRouter(): Router {
     try {
       const session = await requireReady(req, res);
       if (!session) return;
-      if (isAppReviewViewer(req.user?.email)) {
+      if (isAppReviewViewer(req.user?.email, req.user?.id)) {
         return res.json({
           ok: true,
           posts: [],

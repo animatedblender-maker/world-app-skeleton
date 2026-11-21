@@ -478,8 +478,15 @@ final class AnonymousStore {
     func completeWelcomeLetter() {
         if let id = session.profile?.id, !id.isEmpty {
             UserDefaults.standard.set(true, forKey: welcomeLetterSeenKey(for: id))
+        } else {
+            // Profile id missing — still mark legacy so applySession cannot bounce back.
+            UserDefaults.standard.set(true, forKey: welcomeLetterSeenKeyLegacy)
         }
-        // Always offer recommended Spaces after the letter for this profile.
+        // If Spaces onboarding already done, never re-open the picker / welcome loop.
+        if hasCompletedSpacesOnboarding {
+            withAnimation(MatteryaMotion.snappy) { phase = .ready }
+            return
+        }
         withAnimation(MatteryaMotion.snappy) { phase = .pickSpaces }
         Task {
             await loadSpaces(filter: .forYou, force: true)
@@ -488,6 +495,10 @@ final class AnonymousStore {
             // If For you is thin for a brand-new profile, popular/free still fill the picker.
             if spacesOnboardingCandidates.isEmpty {
                 await loadSpaces(filter: .newest, force: true)
+            }
+            // App Review / empty catalog: skip the empty picker instead of looping welcome.
+            if spacesOnboardingCandidates.isEmpty, phase == .pickSpaces {
+                completeSpacesOnboarding()
             }
         }
     }
@@ -514,10 +525,12 @@ final class AnonymousStore {
     func completeSpacesOnboarding() {
         if let id = session.profile?.id, !id.isEmpty {
             UserDefaults.standard.set(true, forKey: spacesOnboardingSeenKey(for: id))
+            // Belt-and-suspenders: finishing Spaces means welcome was already seen.
+            UserDefaults.standard.set(true, forKey: welcomeLetterSeenKey(for: id))
+        } else {
+            UserDefaults.standard.set(true, forKey: spacesOnboardingSeenKeyLegacy)
+            UserDefaults.standard.set(true, forKey: welcomeLetterSeenKeyLegacy)
         }
-        // Stop reading legacy globals so a later re-claim cannot skip again.
-        UserDefaults.standard.removeObject(forKey: welcomeLetterSeenKeyLegacy)
-        UserDefaults.standard.removeObject(forKey: spacesOnboardingSeenKeyLegacy)
         withAnimation(MatteryaMotion.snappy) { phase = .ready }
         Task {
             await loadFeed(force: true)
@@ -1550,7 +1563,7 @@ final class AnonymousStore {
             suggestedUsername = remote.profile?.username ?? suggestedUsername
         }
 
-        let next: AnonymousPhase
+        var next: AnonymousPhase
         if remote.suspended {
             next = .suspended
         } else if remote.birthdateMissing || !remote.eligibleAdult {
@@ -1564,6 +1577,15 @@ final class AnonymousStore {
         } else if !hasCompletedSpacesOnboarding(for: remote.profile?.id) {
             next = .pickSpaces
         } else {
+            next = .ready
+        }
+
+        // Never regress past a step the user already finished this session
+        // (late /session refresh used to bounce pickSpaces → welcomeLetter once).
+        if next == .welcomeLetter, phase == .pickSpaces || phase == .ready {
+            next = hasCompletedSpacesOnboarding(for: remote.profile?.id) ? .ready : .pickSpaces
+        } else if next == .pickSpaces, phase == .ready,
+                  hasCompletedSpacesOnboarding(for: remote.profile?.id) {
             next = .ready
         }
 

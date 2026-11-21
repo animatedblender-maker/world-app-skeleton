@@ -1502,6 +1502,7 @@ app.get('/v1/hubs/shelves/:slug', async (req: Request, res: Response) => {
       limit,
       cursor,
       viewerEmail: user?.email ?? null,
+      viewerUserId: user?.id ?? null,
     });
     return res.json({ ok: true, ...page });
   } catch (err: any) {

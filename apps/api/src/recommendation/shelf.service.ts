@@ -559,10 +559,11 @@ export async function fetchShelfPage(input: {
   limit?: number;
   cursor?: string | null;
   viewerEmail?: string | null;
+  viewerUserId?: string | null;
 }): Promise<ShelfPage> {
   const slug = normalizeParentSlug(input.slug);
   // App Review tester only: empty Hubs (everyone else gets full LongForm catalog).
-  if (hubsEmptyForViewer(input.viewerEmail)) {
+  if (hubsEmptyForViewer(input.viewerEmail, input.viewerUserId)) {
     return { slug, items: [], nextCursor: null, count: 0 };
   }
   const want = Math.min(Math.max(Number(input.limit) || 36, 1), 80);
@@ -666,7 +667,7 @@ export async function fetchForYouPage(input: {
     String(input.idempotencyKey ?? '').trim().slice(0, 128) || null;
 
   // App Review tester only: empty Hubs for-you.
-  if (hubsEmptyForViewer(input.viewerEmail)) {
+  if (hubsEmptyForViewer(input.viewerEmail, viewerId || null)) {
     return {
       surface: 'hubs_for_you',
       items: [],
@@ -1178,9 +1179,11 @@ async function fetchHomeLaneRows(opts: {
   slugSelect: string;
   under18: boolean;
   viewerEmail?: string | null;
+  viewerUserId?: string | null;
 }): Promise<RawPostRow[]> {
   // App Review tester: no pipeline LongForm on Home hub lane.
-  if (opts.kind === 'hub' && hubsEmptyForViewer(opts.viewerEmail)) return [];
+  if (opts.kind === 'hub' && hubsEmptyForViewer(opts.viewerEmail, opts.viewerUserId))
+    return [];
   const want = Math.min(Math.max(opts.limit, 1), 32);
   const params: unknown[] = [];
   const adult = adultContentSqlFilter(opts.under18, 'p');
@@ -1381,7 +1384,7 @@ export async function fetchHomeFeedPage(input: {
   );
 
   // App Review tester: empty Home Feed (everyone else keeps full catalog).
-  if (isAppReviewViewer(viewerEmail)) {
+  if (isAppReviewViewer(viewerEmail, viewerId || null)) {
     return {
       surface: 'home_for_you',
       items: [],
@@ -1449,6 +1452,7 @@ export async function fetchHomeFeedPage(input: {
           slugSelect,
           under18,
           viewerEmail,
+          viewerUserId: viewerId || null,
         }),
         fetchHomeLaneRows({
           kind: 'hub',
@@ -1457,6 +1461,7 @@ export async function fetchHomeFeedPage(input: {
           slugSelect,
           under18,
           viewerEmail,
+          viewerUserId: viewerId || null,
         }),
         fetchHomeLaneRows({
           kind: 'image',
@@ -1465,6 +1470,7 @@ export async function fetchHomeFeedPage(input: {
           slugSelect,
           under18,
           viewerEmail,
+          viewerUserId: viewerId || null,
         }),
       ]),
       new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 7000)),
@@ -1621,7 +1627,9 @@ export async function fetchHomeFeedPage(input: {
     imageRows.length >= perLane;
   // Review thin catalog: never empty-walk forever (spinner). Full catalog: allow ledger walks.
   const emptyLedgerWalk =
-    liveItems.length === 0 && lanesHaveMore && !viewerSeesThinCatalog(viewerEmail);
+    liveItems.length === 0 &&
+    lanesHaveMore &&
+    !viewerSeesThinCatalog(viewerEmail, viewerId || null);
   const hasMore =
     pageFull || (liveItems.length > 0 && lanesHaveMore) || emptyLedgerWalk;
 
@@ -1705,7 +1713,7 @@ export async function fetchSparksPage(input: {
   excludeIds?: string[] | null;
 }): Promise<SurfacePage> {
   // App Review tester: empty Sparks too (same thin Review surface as Feed/Hubs).
-  if (isAppReviewViewer(input.viewerEmail)) {
+  if (isAppReviewViewer(input.viewerEmail, input.viewerUserId)) {
     return {
       surface: 'sparks',
       items: [],
