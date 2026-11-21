@@ -55,6 +55,9 @@ final class HomeFeedStore {
     private let homeSurface: RecommendationSurface = .homeForYou
 
     private var nextCursor: String?
+    /// App Review thin catalog — server returned intentional empty; never refill from
+    /// ContentCache, Sparks/Hubs top-ups, or seed_catalog_public endless walk.
+    private var catalogForcedEmpty = false
     /// Bumps cancel obsolete network merges / load-more.
     private var generation = 0
     private var pendingLoadMoreTask: Task<Void, Never>?
@@ -471,6 +474,7 @@ final class HomeFeedStore {
             lastVisibleIndex = 0
             feedSessionId = UUID().uuidString
             recyclePass = 0
+            catalogForcedEmpty = false
             windowLimit = firstWindow
             PostsService.shared.resetHomeFeedSparkPager()
             // Keep disk cache for instant paint — overwrite after thin succeeds.
@@ -484,7 +488,8 @@ final class HomeFeedStore {
         }
 
         // 1) Instant disk paint — never wait on GraphQL / Frame0 / strip discover.
-        if posts.isEmpty || forceReplace {
+        // Skip when a prior Review thin lock is still set (avoids flash-then-wipe).
+        if !catalogForcedEmpty, posts.isEmpty || forceReplace {
             if let cached = ContentCache.shared.posts(for: .homeFeed) {
                 let pool = Self.liveOnlyPosts(
                     BlockService.shared.filterPosts(cached.excludingMoments().forHomeFeed())
@@ -530,7 +535,12 @@ final class HomeFeedStore {
             nextCursor = thin.nextCursor
             var livePool = thin.items
             // items=0 + nextCursor = delivery-ledger exhausted window — walk before GraphQL.
-            if livePool.isEmpty, thin.nextCursor != nil {
+            // reviewThin / intentional empty: do not expand or refill.
+            let intentionalEmpty =
+                thin.reviewThin || (thin.items.isEmpty && thin.nextCursor == nil)
+            if intentionalEmpty {
+                lockCatalogForcedEmpty()
+            } else if livePool.isEmpty, thin.nextCursor != nil {
                 let expanded = await expandFreshHead(initial: [], startingCursor: thin.nextCursor)
                 livePool = expanded.items
                 if let cur = expanded.cursor { nextCursor = cur }
@@ -539,7 +549,10 @@ final class HomeFeedStore {
                 livePool = expanded.items
                 if let cur = expanded.cursor { nextCursor = cur }
             }
-            if !livePool.isEmpty {
+            if catalogForcedEmpty {
+                // already locked empty above
+            } else if !livePool.isEmpty {
+                catalogForcedEmpty = false
                 var rankedFast = Self.liveOnlyPosts(livePool)
                 if rankedFast.isEmpty { rankedFast = livePool }
                 // Always session-rank on a fresh open so the head isn't identical every launch.
@@ -567,40 +580,43 @@ final class HomeFeedStore {
                     Task { await warmHead(lite: true) }
                 }
             } else if forceReplace || !paintedBefore {
-                // Intentional empty catalog (App Review thin viewer) — wipe sticky cache.
-                applyPosts([], replace: true, sessionId: feedSessionId, alreadyRanked: true)
-                ContentCache.shared.invalidate(.homeFeed)
-                nextCursor = nil
-                hasMore = false
-                isBootstrapping = false
-                didPaint = true
+                // Empty after expand with no reviewThin flag — still wipe sticky cache.
+                lockCatalogForcedEmpty()
             }
         }
-        if posts.isEmpty {
+        if posts.isEmpty, !catalogForcedEmpty {
             // Surface Sparks only — never GraphQL discover stampede on cold open (-1001 storm).
             let sparkPage = await SurfacePageClient.fetchSparks(limit: 40)
-            let liveRaw = sparkPage?.items ?? []
-            if let cur = sparkPage?.nextCursor { nextCursor = cur }
-            guard gen == generation else {
-                isRefreshing = false
-                return
-            }
-            let ranked = Self.weaveWrittenAmongMedia(
-                demoteRecentHead(rankForSessionSync(Self.liveOnlyPosts(liveRaw)))
-            )
-            if !ranked.isEmpty {
-                applyPosts(Array(ranked.prefix(36)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
-                ContentCache.shared.setPosts(posts, for: .homeFeed)
-                rememberDisplayedHead()
-                didPaint = true
-                hasMore = sparkPage?.nextCursor != nil || ranked.count >= 8
-                Task { await warmHead(lite: true) }
+            if sparkPage?.reviewThin == true {
+                lockCatalogForcedEmpty()
+            } else {
+                let liveRaw = sparkPage?.items ?? []
+                if let cur = sparkPage?.nextCursor { nextCursor = cur }
+                guard gen == generation else {
+                    isRefreshing = false
+                    return
+                }
+                let ranked = Self.weaveWrittenAmongMedia(
+                    demoteRecentHead(rankForSessionSync(Self.liveOnlyPosts(liveRaw)))
+                )
+                if !ranked.isEmpty {
+                    applyPosts(Array(ranked.prefix(36)), replace: true, sessionId: feedSessionId, alreadyRanked: true)
+                    ContentCache.shared.setPosts(posts, for: .homeFeed)
+                    rememberDisplayedHead()
+                    didPaint = true
+                    hasMore = sparkPage?.nextCursor != nil || ranked.count >= 8
+                    Task { await warmHead(lite: true) }
+                }
             }
         }
 
         isBootstrapping = false
         isRefreshing = false
         recyclePass = 0
+
+        if catalogForcedEmpty {
+            return
+        }
 
         // 3) Heavy work AFTER first paint + autoplay unlock — never AV under splash.
         Task(priority: .utility) { [weak self] in
@@ -611,7 +627,7 @@ final class HomeFeedStore {
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
             guard FeedVideoFocus.shared.allowsFeedAVWarm else { return }
-            guard gen == self.generation else { return }
+            guard gen == self.generation, !self.catalogForcedEmpty else { return }
             await self.warmHead(lite: false)
             let exclude = Set(self.posts.map(\.id))
             async let sparkTop = PostsService.shared.homeFeedSparkTopUp(
@@ -626,7 +642,7 @@ final class HomeFeedStore {
             )
             // No text top-up on the hot path — Home stays Sparks/Hubs-smooth; rare text comes from thin feed.
             let extra = (await sparkTop) + (await hubTop)
-            guard gen == self.generation else { return }
+            guard gen == self.generation, !self.catalogForcedEmpty else { return }
             if !extra.isEmpty {
                 await self.softMergePreservingHead(extra)
             }
@@ -637,14 +653,33 @@ final class HomeFeedStore {
         }
     }
 
+    /// Wipe Home to intentional empty and stop every refill path.
+    private func lockCatalogForcedEmpty() {
+        catalogForcedEmpty = true
+        applyPosts([], replace: true, sessionId: feedSessionId, alreadyRanked: true)
+        ContentCache.shared.invalidate(.homeFeed)
+        nextCursor = nil
+        hasMore = false
+        isBootstrapping = false
+        didPaint = true
+        isRefreshing = false
+        #if DEBUG
+        print("[HomeFeed] catalogForcedEmpty locked — skip cache/sparks/hub top-ups")
+        #endif
+    }
+
     /// Keep a deep post pool so scroll rarely hits "loading more".
     func ensureBufferedPool() async {
+        if catalogForcedEmpty {
+            hasMore = false
+            return
+        }
         var guardPasses = 0
         var stagnant = 0
         var lastCount = posts.count
         // Endless Home: keep walking until the buffer is deep or generation changes.
         // Ultra-light: fewer force-network passes so open/scroll stay free of top-up storms.
-        while posts.count < minBufferedPool, hasMore, guardPasses < 6 {
+        while posts.count < minBufferedPool, hasMore, !catalogForcedEmpty, guardPasses < 6 {
             guardPasses += 1
             let gen = generation
             // Force network — don't only expand the local window.
@@ -875,7 +910,11 @@ final class HomeFeedStore {
         await refreshSessionRankingContext()
 
         // 1) Instant paint from cache (sign-in / relaunch must not wait on network).
-        if posts.isEmpty, let cached = ContentCache.shared.posts(for: .homeFeed), !cached.isEmpty {
+        if !catalogForcedEmpty,
+           posts.isEmpty,
+           let cached = ContentCache.shared.posts(for: .homeFeed),
+           !cached.isEmpty
+        {
             let clean = Self.liveOnlyPosts(cached)
             if clean.isEmpty {
                 ContentCache.shared.invalidate(.homeFeed)
@@ -899,34 +938,65 @@ final class HomeFeedStore {
         let fromThin: Bool
         if let thin = await SurfacePageClient.fetchHomeFeed(limit: 28, cursor: nil, session: feedSessionId) {
             nextCursor = thin.nextCursor
-            var pool = thin.items
-            if pool.isEmpty, let cur = thin.nextCursor {
-                let expanded = await expandFreshHead(initial: [], startingCursor: cur)
-                pool = expanded.items
-                if let c = expanded.cursor { nextCursor = c }
-            }
-            if !pool.isEmpty {
-                live = Self.liveOnlyPosts(pool)
+            let intentionalEmpty =
+                thin.reviewThin || (thin.items.isEmpty && thin.nextCursor == nil)
+            if intentionalEmpty {
+                lockCatalogForcedEmpty()
+                live = []
                 fromThin = true
                 #if DEBUG
-                print("[HomeFeed] thin /v1/feed firstPaint=\(live.count)")
+                print("[HomeFeed] thin /v1/feed reviewThin empty — lock catalogForcedEmpty")
                 #endif
             } else {
-                let sparks = await SurfacePageClient.fetchSparks(limit: 40)
-                live = Self.liveOnlyPosts(sparks?.items ?? [])
-                if let c = sparks?.nextCursor { nextCursor = c }
-                fromThin = false
-                #if DEBUG
-                print("[HomeFeed] sparks surface fallback firstPaint=\(live.count)")
-                #endif
+                var pool = thin.items
+                if pool.isEmpty, let cur = thin.nextCursor {
+                    let expanded = await expandFreshHead(initial: [], startingCursor: cur)
+                    pool = expanded.items
+                    if let c = expanded.cursor { nextCursor = c }
+                }
+                if !pool.isEmpty {
+                    catalogForcedEmpty = false
+                    live = Self.liveOnlyPosts(pool)
+                    fromThin = true
+                    #if DEBUG
+                    print("[HomeFeed] thin /v1/feed firstPaint=\(live.count)")
+                    #endif
+                } else {
+                    let sparks = await SurfacePageClient.fetchSparks(limit: 40)
+                    if sparks?.reviewThin == true
+                        || ((sparks?.items.isEmpty ?? true) && sparks?.nextCursor == nil && thin.reviewThin)
+                    {
+                        lockCatalogForcedEmpty()
+                        live = []
+                        fromThin = true
+                    } else {
+                        live = Self.liveOnlyPosts(sparks?.items ?? [])
+                        if let c = sparks?.nextCursor { nextCursor = c }
+                        fromThin = false
+                        #if DEBUG
+                        print("[HomeFeed] sparks surface fallback firstPaint=\(live.count)")
+                        #endif
+                    }
+                }
             }
         } else {
             let sparks = await SurfacePageClient.fetchSparks(limit: 40)
-            live = Self.liveOnlyPosts(sparks?.items ?? [])
-            if let c = sparks?.nextCursor { nextCursor = c }
-            fromThin = false
+            if sparks?.reviewThin == true {
+                lockCatalogForcedEmpty()
+                live = []
+                fromThin = false
+            } else {
+                live = Self.liveOnlyPosts(sparks?.items ?? [])
+                if let c = sparks?.nextCursor { nextCursor = c }
+                fromThin = false
+            }
         }
         guard gen == generation else { return }
+
+        if catalogForcedEmpty {
+            isBootstrapping = false
+            return
+        }
 
         // If cache already painted (or user started watching), soft-merge only.
         if didPaint && !posts.isEmpty {
@@ -1283,6 +1353,7 @@ final class HomeFeedStore {
         thinFeedCoolUntil = nil
         hasMore = true
         recyclePass = 0
+        catalogForcedEmpty = false
         PostsService.shared.resetHomeFeedSparkPager()
         await refreshSessionRankingContext()
 
@@ -1291,6 +1362,15 @@ final class HomeFeedStore {
         SparkDiscoveryEngine.beginNewBrowseSession()
         let thin = await SurfacePageClient.fetchHomeFeed(limit: 48, cursor: nil)
         guard gen == generation else { return }
+        if let thin,
+           thin.reviewThin || (thin.items.isEmpty && thin.nextCursor == nil)
+        {
+            lockCatalogForcedEmpty()
+            #if DEBUG
+            print("[HomeFeed] hardRefresh catalogForcedEmpty")
+            #endif
+            return
+        }
         var liveRaw = thin?.items ?? []
         if let thin { nextCursor = thin.nextCursor }
         if liveRaw.isEmpty {
@@ -1309,6 +1389,7 @@ final class HomeFeedStore {
         }
         Task(priority: .userInitiated) { [weak self] in
             guard let self else { return }
+            guard !self.catalogForcedEmpty else { return }
             let exclude = Set(self.posts.map(\.id))
             async let sparkTop = PostsService.shared.homeFeedSparkTopUp(
                 excluding: exclude, limit: 28, forceRefresh: false
@@ -1317,7 +1398,7 @@ final class HomeFeedStore {
                 excluding: exclude, limit: 10, forceRefresh: false
             )
             let extra = (await sparkTop) + (await hubTop)
-            guard gen == self.generation, !extra.isEmpty else {
+            guard gen == self.generation, !self.catalogForcedEmpty, !extra.isEmpty else {
                 await self.ensureBufferedPool()
                 return
             }
@@ -1330,6 +1411,11 @@ final class HomeFeedStore {
     }
 
     private func loadMore(generation gen: Int, forceNetwork: Bool = false) async {
+        if catalogForcedEmpty {
+            hasMore = false
+            nextCursor = nil
+            return
+        }
         // Prefer expanding the local window through the already-loaded pool.
         if !forceNetwork, windowLimit < posts.count {
             var t = Transaction()
@@ -1385,6 +1471,10 @@ final class HomeFeedStore {
                 thinFeedFailStreak = 0
                 thinFeedCoolUntil = nil
                 pendingFeedIdempotencyKey = nil
+                if thin.reviewThin || (thin.items.isEmpty && thin.nextCursor == nil && posts.isEmpty) {
+                    lockCatalogForcedEmpty()
+                    return
+                }
                 if !thin.items.isEmpty {
                     pageItems = thin.items
                     pageNextCursor = thin.nextCursor
@@ -1393,6 +1483,9 @@ final class HomeFeedStore {
                 } else if let next = thin.nextCursor, next != cursor {
                     pageNextCursor = next
                     nextCursor = next
+                } else if thin.reviewThin {
+                    lockCatalogForcedEmpty()
+                    return
                 } else {
                     // Thin exhausted — Sparks/Hubs keep the feed endless.
                     pageNextCursor = nil
@@ -1435,7 +1528,8 @@ final class HomeFeedStore {
         }
 
         // Empty / failed thin → Sparks + Hubs top-up only (video-smooth). Rare text stays on thin feed.
-        if appended.isEmpty {
+        // App Review thin lock: never refill from Sparks/Hubs (seed_catalog_public stays true globally).
+        if appended.isEmpty, !catalogForcedEmpty {
             recyclePass += 1
             let exclude = seen
             let hubLimit = max(2, pageSize / 3)
@@ -1475,6 +1569,11 @@ final class HomeFeedStore {
         }
 
         if appended.isEmpty {
+            if catalogForcedEmpty {
+                hasMore = false
+                nextCursor = nil
+                return
+            }
             if let next = pageNextCursor, next != cursor {
                 nextCursor = next
             }
@@ -1486,7 +1585,7 @@ final class HomeFeedStore {
             // Full seed catalog (remote flag on) keeps the endless R2 walk.
             let seedPublic = RemoteConfigClient.bool("seed_catalog_public", default: false)
             let thinExhausted =
-                !seedPublic
+                (!seedPublic || catalogForcedEmpty)
                 && posts.count > 0
                 && (pageNextCursor == nil || attempt >= 3)
             if thinExhausted {

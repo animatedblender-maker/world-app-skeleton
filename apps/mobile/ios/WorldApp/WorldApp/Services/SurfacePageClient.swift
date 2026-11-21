@@ -7,6 +7,8 @@ enum SurfacePageClient {
         var items: [CountryPost]
         var nextCursor: String?
         var surface: String
+        /// Server App Review thin catalog — do not refill from local cache/top-ups.
+        var reviewThin: Bool = false
     }
 
     // MARK: - Surfaces
@@ -87,11 +89,12 @@ enum SurfacePageClient {
         maxPages: Int = 8,
         excluding: Set<String> = [],
         skipViewed: Bool = true
-    ) async -> (items: [CountryPost], nextCursor: String?) {
+    ) async -> (items: [CountryPost], nextCursor: String?, reviewThin: Bool) {
         var out: [CountryPost] = []
         var seen = excluding
         var cursor = startingCursor
         var pages = 0
+        var reviewThin = false
         let pageSize = min(max(want, 24), 48)
         // Small server exclude — client still filters viewed locally after each page.
         var serverExclude = Array(excluding.prefix(48))
@@ -107,6 +110,10 @@ enum SurfacePageClient {
                 cursor: cursor,
                 excludeIds: serverExclude
             ) else { break }
+            if page.reviewThin {
+                reviewThin = true
+                return ([], nil, true)
+            }
             if page.items.isEmpty {
                 cursor = page.nextCursor
                 // Empty page with a next cursor → keep walking (exclude filtered the head).
@@ -124,7 +131,7 @@ enum SurfacePageClient {
             cursor = page.nextCursor
             if page.nextCursor == nil { break }
         }
-        return (out, cursor)
+        return (out, cursor, reviewThin)
     }
 
     // MARK: - HTTP
@@ -168,10 +175,14 @@ enum SurfacePageClient {
             #if DEBUG
             print("[Surface] \(path) items=\(posts.count) next=\(json["nextCursor"] != nil)")
             #endif
+            let reviewThin =
+                (json["reviewThin"] as? Bool) == true
+                || (json["review_thin"] as? Bool) == true
             return Page(
                 items: posts,
                 nextCursor: json["nextCursor"] as? String,
-                surface: (json["surface"] as? String) ?? path
+                surface: (json["surface"] as? String) ?? path,
+                reviewThin: reviewThin
             )
         } catch {
             #if DEBUG

@@ -148,6 +148,8 @@ export type ForYouPage = {
   requestId?: string;
   modelVersion?: string;
   candidateMix?: CandidateMix[];
+  /** App Review thin viewer — client must not refill from local cache/top-ups. */
+  reviewThin?: boolean;
 };
 
 type RawPostRow = {
@@ -679,6 +681,7 @@ export async function fetchForYouPage(input: {
       deliveryPolicy: 'cursor',
       requestId: newMindRequestId(),
       modelVersion: MIND_POLICY_VERSION,
+      reviewThin: true,
     };
   }
 
@@ -859,6 +862,8 @@ export type SurfacePage = {
   requestId?: string;
   modelVersion?: string;
   candidateMix?: CandidateMix[];
+  /** App Review thin viewer — client must not refill from local cache/top-ups. */
+  reviewThin?: boolean;
 };
 
 function tallyCandidateMix(
@@ -1394,6 +1399,7 @@ export async function fetchHomeFeedPage(input: {
       deliveryPolicy: 'cursor',
       requestId: newMindRequestId(),
       modelVersion: MIND_POLICY_VERSION,
+      reviewThin: true,
     };
   }
 
@@ -1723,6 +1729,7 @@ export async function fetchSparksPage(input: {
       deliveryPolicy: 'cursor',
       requestId: newMindRequestId(),
       modelVersion: MIND_POLICY_VERSION,
+      reviewThin: true,
     };
   }
   // Pre-KNN: larger pages + feed_at so the full R2 spark library is reachable newest-first.
