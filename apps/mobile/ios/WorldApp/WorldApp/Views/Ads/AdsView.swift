@@ -11,6 +11,7 @@ struct AdsView: View {
     @State private var now = Date()
     @State private var busyCampaignIDs: Set<String> = []
     @State private var deletingCampaignID: String?
+    @State private var billing = AdCampaignBilling.shared
 
     @State private var editingCampaignID: String?
     @State private var editingCreativeID: String?
@@ -56,8 +57,12 @@ struct AdsView: View {
         .toolbarBackground(Theme.canvas, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.light, for: .navigationBar)
-        .refreshable { await loadCampaigns() }
+        .refreshable {
+            await billing.refresh()
+            await loadCampaigns()
+        }
         .task {
+            await billing.refresh()
             await loadCampaigns()
             try? await Task.sleep(nanoseconds: 900_000_000)
             await loadCampaigns(silent: true)
@@ -84,8 +89,34 @@ struct AdsView: View {
                 .font(.subheadline)
                 .foregroundStyle(Theme.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+            billingBanner
         }
         .adsCard()
+    }
+
+    private var billingBanner: some View {
+        Group {
+            if billing.freeCreate {
+                Text("Owner account — create campaigns free.")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.success)
+            } else if billing.creditsAvailable > 0 {
+                Text("Create credits ready: \(billing.creditsAvailable). One credit is used per new campaign.")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.inkSecondary)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Creating a campaign requires an in-app purchase (\(billing.displayPrice) each).")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.inkSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Edits to existing campaigns stay free.")
+                        .font(.caption)
+                        .foregroundStyle(Theme.inkMuted)
+                }
+            }
+        }
+        .padding(.top, 4)
     }
 
     // MARK: - Field Guide
@@ -227,15 +258,33 @@ struct AdsView: View {
             Button {
                 Task { await saveCampaign() }
             } label: {
-                Text(saving ? "Saving…" : editingCampaignID == nil ? "Create" : "Save changes")
+                Text(createButtonTitle)
             }
             .buttonStyle(PrimaryButtonStyle())
-            .disabled(saving || campaignName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || creativeMediaURL.isEmpty)
+            .disabled(
+                saving
+                    || billing.isBusy
+                    || campaignName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || creativeMediaURL.isEmpty
+            )
         }
         .adsCard()
         .onChange(of: selectedVideo) { _, item in
             Task { await uploadCreative(item) }
         }
+    }
+
+    private var createButtonTitle: String {
+        if saving || billing.isBusy {
+            return editingCampaignID == nil ? "Working…" : "Saving…"
+        }
+        if editingCampaignID != nil {
+            return "Save changes"
+        }
+        if billing.freeCreate || billing.creditsAvailable > 0 {
+            return "Create"
+        }
+        return "Buy & create (\(billing.displayPrice))"
     }
 
     private var uploadRow: some View {
@@ -540,9 +589,12 @@ struct AdsView: View {
                 }
                 successMessage = "Campaign updated."
             } else {
+                // Free for animatedblender@gmail.com; everyone else buys one create credit first.
+                try await billing.ensureCreateAllowance()
                 let campaign = try await AdsService.shared.createCampaign(input: input)
                 _ = try await AdsService.shared.createCreative(campaignID: campaign.id, input: creativeInput)
                 successMessage = "Campaign created."
+                await billing.refresh()
             }
             resetForm()
             await loadCampaigns(silent: true)

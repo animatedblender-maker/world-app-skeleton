@@ -267,6 +267,13 @@ export const typeDefs = `#graphql
     updated_at: String!
   }
 
+  """Whether this account can create a campaign for free, or needs a consumable IAP credit."""
+  type AdCreateEntitlement {
+    free_create: Boolean!
+    credits_available: Int!
+    product_id: String!
+  }
+
   type AdCreative {
     id: ID!
     campaign_id: ID!
@@ -644,6 +651,7 @@ export const typeDefs = `#graphql
     # Ads
     myAdAdvertiser: AdAdvertiser!
     myAdCampaigns: [AdCampaign!]!
+    adCreateEntitlement: AdCreateEntitlement!
     adCampaignById(id: ID!): AdCampaign
     serveVideoAd(
       placement: String!
@@ -743,6 +751,13 @@ export const typeDefs = `#graphql
     updateAdCampaign(campaign_id: ID!, input: AdCampaignInput!): AdCampaign!
     deleteAdCampaign(campaign_id: ID!): Boolean!
     createAdCreative(campaign_id: ID!, input: AdCreativeInput!): AdCreative!
+    """Redeem a StoreKit consumable purchase into one unused campaign-create credit."""
+    redeemAdCampaignPurchase(
+      product_id: String!
+      transaction_id: String!
+      original_transaction_id: String
+      jws: String
+    ): AdCreateEntitlement!
     logAdImpression(impression_token: String!): AdEventResult!
     logAdClick(impression_token: String!): AdEventResult!
 

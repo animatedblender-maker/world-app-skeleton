@@ -104,7 +104,15 @@ import { MediaService } from '../core/services/media.service';
                 Cancel
               </button>
               <button type="submit" [disabled]="saving || !newCampaign.name || !newCreative.media_url">
-                {{ saving ? 'Saving...' : editingCampaignId ? 'Save changes' : 'Create' }}
+                {{
+                  saving
+                    ? 'Saving...'
+                    : editingCampaignId
+                      ? 'Save changes'
+                      : createEntitlement?.free_create || (createEntitlement?.credits_available ?? 0) > 0
+                        ? 'Create'
+                        : 'Purchase required'
+                }}
               </button>
             </div>
           </div>
@@ -772,6 +780,12 @@ export class AdsPageComponent implements OnInit, OnDestroy {
     duration_seconds: 8,
   };
 
+  createEntitlement: {
+    free_create: boolean;
+    credits_available: number;
+    product_id: string;
+  } | null = null;
+
   constructor(
     private ads: AdsService,
     private router: Router,
@@ -782,6 +796,7 @@ export class AdsPageComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.enablePageScroll();
     void this.loadCampaigns();
+    void this.loadCreateEntitlement();
     if (typeof window !== 'undefined') {
       this.clockTimer = window.setInterval(() => {
         this.nowMs = Date.now();
@@ -791,6 +806,15 @@ export class AdsPageComponent implements OnInit, OnDestroy {
       this.initialRefreshTimer = window.setTimeout(() => {
         void this.loadCampaigns({ silent: true });
       }, 900);
+    }
+  }
+
+  async loadCreateEntitlement(): Promise<void> {
+    try {
+      this.createEntitlement = await this.ads.createEntitlement();
+      this.cdr.detectChanges();
+    } catch {
+      this.createEntitlement = null;
     }
   }
 
@@ -871,6 +895,15 @@ export class AdsPageComponent implements OnInit, OnDestroy {
         }
         this.success = 'Campaign updated.';
       } else {
+        await this.loadCreateEntitlement();
+        const canCreate =
+          !!this.createEntitlement?.free_create ||
+          (this.createEntitlement?.credits_available ?? 0) > 0;
+        if (!canCreate) {
+          this.error =
+            'Creating a campaign requires an in-app purchase. Buy a create credit in the Matterya iOS app (Ads), then try again. Owner account animatedblender@gmail.com can create free.';
+          return;
+        }
         const campaign = await this.ads.createCampaign({
           name: this.newCampaign.name,
           placement: this.newCampaign.placement,
@@ -891,6 +924,7 @@ export class AdsPageComponent implements OnInit, OnDestroy {
           duration_seconds: this.newCreative.duration_seconds,
         });
         this.success = 'Campaign created.';
+        void this.loadCreateEntitlement();
       }
       this.resetForm();
       void this.loadCampaigns({ silent: true });

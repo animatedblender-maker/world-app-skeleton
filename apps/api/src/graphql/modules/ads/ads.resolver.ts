@@ -38,6 +38,10 @@ export const adsResolvers = {
       const user = requireAuth(ctx);
       return await svc().myCampaigns(user.id);
     },
+    adCreateEntitlement: async (_: any, __: any, ctx: Context) => {
+      const user = requireAuth(ctx);
+      return await svc().getCreateEntitlement(user.id, user.email);
+    },
     adCampaignById: async (_: any, args: { id: string }, ctx: Context) => {
       const user = requireAuth(ctx);
       if (!args?.id) throw new Error('id is required.');
@@ -54,7 +58,34 @@ export const adsResolvers = {
   Mutation: {
     createAdCampaign: async (_: any, args: { input: AdCampaignInput }, ctx: Context) => {
       const user = requireAuth(ctx);
-      return await svc().createCampaign(user.id, args.input);
+      try {
+        return await svc().createCampaign(user.id, args.input, { email: user.email });
+      } catch (error: any) {
+        throw new GraphQLError(error?.message ?? 'Failed to create ad campaign.', {
+          extensions: {
+            code: error?.code === 'ADS_PURCHASE_REQUIRED' ? 'ADS_PURCHASE_REQUIRED' : 'BAD_USER_INPUT',
+          },
+        });
+      }
+    },
+    redeemAdCampaignPurchase: async (
+      _: any,
+      args: {
+        product_id: string;
+        transaction_id: string;
+        original_transaction_id?: string | null;
+        jws?: string | null;
+      },
+      ctx: Context
+    ) => {
+      const user = requireAuth(ctx);
+      try {
+        return await svc().redeemCreatePurchase(user.id, args);
+      } catch (error: any) {
+        throw new GraphQLError(error?.message ?? 'Failed to redeem Ads purchase.', {
+          extensions: { code: 'BAD_USER_INPUT' },
+        });
+      }
     },
     updateAdCampaign: async (
       _: any,

@@ -53,7 +53,29 @@ export type AdServeDebugModel = {
 };
 
 @Injectable({ providedIn: 'root' })
+export type AdCreateEntitlementModel = {
+  free_create: boolean;
+  credits_available: number;
+  product_id: string;
+};
+
 export class AdsService {
+  async createEntitlement(): Promise<AdCreateEntitlementModel> {
+    const query = `
+      query AdCreateEntitlement {
+        adCreateEntitlement {
+          free_create
+          credits_available
+          product_id
+        }
+      }
+    `;
+    const { adCreateEntitlement } = await this.gql.request<{
+      adCreateEntitlement: AdCreateEntitlementModel;
+    }>(query);
+    return adCreateEntitlement;
+  }
+
   constructor(private gql: GqlService) {}
 
   async myCampaigns(): Promise<AdCampaignModel[]> {
