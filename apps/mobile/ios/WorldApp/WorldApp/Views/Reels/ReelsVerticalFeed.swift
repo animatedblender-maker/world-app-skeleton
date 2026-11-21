@@ -1930,6 +1930,12 @@ struct ReelsScrollViewer: View {
         let tail = Array(posts.suffix(8))
         let bulk = SparksQueueBudget.bulkBatchSize
 
+        if ReviewThinCatalog.isActive {
+            hasMorePages = false
+            feedCursor = nil
+            return
+        }
+
         // Newest-first /v1/sparks page — keep pages small on scroll so load-more
         // never freezes the pager (deep preload still comes from SparkWarmPool).
         let surface = await SurfacePageClient.fetchSparksPages(
@@ -1939,6 +1945,12 @@ struct ReelsScrollViewer: View {
             excluding: existingIDs,
             skipViewed: true
         )
+        if surface.reviewThin {
+            ReviewThinCatalog.noteServerReviewThin()
+            hasMorePages = false
+            feedCursor = nil
+            return
+        }
         if !surface.items.isEmpty {
             applyExpandedFeed(ReelsRankingEngine.sessionFreshOrder(surface.items))
             feedCursor = surface.nextCursor ?? feedCursor

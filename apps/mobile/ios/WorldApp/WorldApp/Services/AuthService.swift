@@ -334,6 +334,7 @@ final class AuthService {
     func logout() {
         session = nil
         UserDefaults.standard.removeObject(forKey: sessionKey)
+        ReviewThinCatalog.clear()
     }
 
     private func applyAuthResponse(_ response: [String: Any]) throws {

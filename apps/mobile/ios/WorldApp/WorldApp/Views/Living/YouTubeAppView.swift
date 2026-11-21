@@ -1091,6 +1091,7 @@ struct YouTubeAppView: View {
     /// True when Hubs can paint without a network round-trip.
     /// When seed catalog is hidden, never treat sticky local LongForm as "useful".
     private var hubsShellIsUseful: Bool {
+        if ReviewThinCatalog.isActive { return false }
         guard RemoteConfigClient.bool("seed_catalog_public", default: false) else { return false }
         return !stableDiscoverVideos.isEmpty && hubsForYouPool.count >= 8
     }
@@ -1889,7 +1890,9 @@ struct YouTubeAppView: View {
             return
         }
         // App Review: pipeline LongForm is hidden — never paint sticky local catalog.
-        if !RemoteConfigClient.bool("seed_catalog_public", default: false) {
+        if ReviewThinCatalog.isActive
+            || !RemoteConfigClient.bool("seed_catalog_public", default: false)
+        {
             return
         }
 
@@ -2139,6 +2142,14 @@ struct YouTubeAppView: View {
     }
 
     private func runLoadVideos(forceRefresh: Bool, mode: HubsLoadMode) async {
+        ReviewThinCatalog.refreshFromSession()
+        if ReviewThinCatalog.isActive {
+            clearHubsCatalogForReview()
+            isLoading = false
+            errorMessage = nil
+            hubsCaughtUp = true
+            return
+        }
         // Never blank an already-painted catalog with a full-screen spinner.
         if allVideos.isEmpty { isLoading = true }
         errorMessage = nil

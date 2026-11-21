@@ -462,11 +462,21 @@ struct FeedView: View {
     private func refreshFeedReels(network: Bool) async {
         // Top Sparks strip only — keep this LIGHT. Never call beginFreshSparksSession
         // (deep multi-page catalog) for a 12-tile rail; that froze the feed top.
+        if ReviewThinCatalog.isActive {
+            feedReels = []
+            return
+        }
         let snapshot = PostsService.shared.sparksCatalogSnapshot()
         let pool: [CountryPost]
         if network {
             // Thin /v1/sparks only — GraphQL discoverSparks stampeded -1001 on cold open.
-            let remote = await SurfacePageClient.fetchSparks(limit: 16)?.items ?? []
+            let page = await SurfacePageClient.fetchSparks(limit: 16)
+            if page?.reviewThin == true {
+                ReviewThinCatalog.noteServerReviewThin()
+                feedReels = []
+                return
+            }
+            let remote = page?.items ?? []
             pool = remote + snapshot
         } else if snapshot.count > 1 {
             var shuffled = snapshot

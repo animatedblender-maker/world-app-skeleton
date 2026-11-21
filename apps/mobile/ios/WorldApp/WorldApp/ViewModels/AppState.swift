@@ -243,6 +243,8 @@ final class AppState {
         // NEVER request mic/camera/location/push before we know who the user is.
         reelPresentationSavedIDs = loadReelPresentationSavedIDs()
         YouTubeCatalogService.shared.bindToUser(auth.currentUser?.id)
+        // App Review tester: lock empty Home/Sparks/Hubs before any cache paint.
+        ReviewThinCatalog.refreshFromSession()
         restoreCachedProfile()
         markSessionReady()
 

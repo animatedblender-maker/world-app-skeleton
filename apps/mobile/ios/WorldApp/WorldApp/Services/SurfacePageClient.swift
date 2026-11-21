@@ -178,6 +178,11 @@ enum SurfacePageClient {
             let reviewThin =
                 (json["reviewThin"] as? Bool) == true
                 || (json["review_thin"] as? Bool) == true
+            if reviewThin {
+                Task { @MainActor in
+                    ReviewThinCatalog.noteServerReviewThin()
+                }
+            }
             return Page(
                 items: posts,
                 nextCursor: json["nextCursor"] as? String,

@@ -148,6 +148,7 @@ final class PostsService {
     /// **Smooth first paint** after sign-in / cold open.
     /// Pulls **following** heavily + recent shares, then session-ranks (unviewed follows first).
     func fetchFirstPaintHomePosts(limit: Int = 40) async -> [CountryPost] {
+        if ReviewThinCatalog.isActive { return [] }
         await prepareFeedContext()
         let pageLimit = min(max(limit, 24), 80)
         async let recentTask = fetchRecentFeedPosts(limit: pageLimit, preferSparkShares: true)
@@ -363,6 +364,10 @@ final class PostsService {
     /// - `deep: true`: large R2 channel + country sample for the Sparks player.
     /// Always re-ranks on return so order is never frozen for 20 minutes.
     func loadSparksDiscoveryCatalog(forceRefresh: Bool = false, deep: Bool = false) async -> [CountryPost] {
+        if ReviewThinCatalog.isActive {
+            clearDiscoveryCatalogForReviewThin()
+            return []
+        }
         let minWarm = deep ? 120 : 40
         let cacheTTL: TimeInterval = deep ? 8 * 60 : 3 * 60
         let cacheOK = !forceRefresh
@@ -585,6 +590,7 @@ final class PostsService {
 
     /// Random sample from API `discoverSparks` — full library, not just recent head.
     func fetchDiscoverSparks(limit: Int = 48, excluding: [String] = []) async -> [CountryPost] {
+        if ReviewThinCatalog.isActive { return [] }
         struct Response: Decodable { let discoverSparks: [GraphQLPost] }
         let query = """
         query($limit: Int, $exclude_ids: [ID!]) {
@@ -724,6 +730,7 @@ final class PostsService {
     /// Suggests **unviewed** first (same discovery rule as Sparks); LRV fill only if starved.
     func homeFeedHubTopUp(excluding: Set<String>, limit: Int, forceRefresh: Bool = false) async -> [CountryPost] {
         guard limit > 0 else { return [] }
+        if ReviewThinCatalog.isActive { return [] }
         // App Review: LongForm hub catalog is hidden — don't refill Feed from local/R2 hubs.
         // seed_catalog_public stays true globally; Review empty is enforced by HomeFeedStore.catalogForcedEmpty
         // (which skips calling this) plus empty /v1/hubs for the Review JWT.
@@ -770,6 +777,7 @@ final class PostsService {
     /// unviewed inventory for this request is exhausted (endless Home never dies).
     func homeFeedSparkTopUp(excluding: Set<String>, limit: Int, forceRefresh: Bool = false) async -> [CountryPost] {
         guard limit > 0 else { return [] }
+        if ReviewThinCatalog.isActive { return [] }
         if forceRefresh {
             resetHomeFeedSparkPager()
         }
@@ -1157,6 +1165,18 @@ final class PostsService {
     /// Avoids re-fetching thousands of rows every swipe while still rotating novelty.
     private var sparksSessionCatalog: [CountryPost] = []
     private var sparksSessionLoadedAt: Date?
+
+    /// App Review thin lock — wipe Sparks/Hubs discovery so GraphQL cannot refill Home/Sparks.
+    func clearDiscoveryCatalogForReviewThin() {
+        sparksSessionCatalog = []
+        sparksSessionLoadedAt = nil
+        hubsSessionCatalog = []
+        hubsSessionLoadedAt = nil
+        homeFeedSparkOrder = []
+        homeFeedSparkOffset = 0
+        homeSparksSurfaceCursor = nil
+        resetHomeFeedSparkPager()
+    }
 
     func rememberHubsSessionCatalog(_ posts: [CountryPost]) {
         guard !posts.isEmpty else { return }
@@ -2628,6 +2648,7 @@ final class PostsService {
 
         // Hide when server deleted OR local-only seed.
         // Also hide optimistically when we know the current user authored it (server lag / race).
+        // App Review account: always local-hide so seeded cards cannot bounce back after Delete.
         let isMine: Bool = {
             guard let known else { return false }
             let me = AuthService.shared.currentUser?.id
@@ -2635,7 +2656,7 @@ final class PostsService {
             guard let me, !me.isEmpty else { return false }
             return known.authorID == me
         }()
-        let shouldHide = localOnly || serverDeleted || isMine
+        let shouldHide = localOnly || serverDeleted || isMine || ReviewThinCatalog.isActive
         guard shouldHide else { return false }
 
         if let known {

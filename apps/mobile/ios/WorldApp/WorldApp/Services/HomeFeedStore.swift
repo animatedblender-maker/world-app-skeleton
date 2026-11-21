@@ -462,6 +462,13 @@ final class HomeFeedStore {
             return
         }
 
+        // App Review account — empty Home before any ContentCache / Sparks / GraphQL refill.
+        ReviewThinCatalog.refreshFromSession()
+        if ReviewThinCatalog.isActive {
+            lockCatalogForcedEmpty()
+            return
+        }
+
         if forceReplace {
             // Snapshot on-screen head before wipe so Reddit image cards (no video
             // onViewed) are hard-excluded from the reshuffled pool.
@@ -899,6 +906,12 @@ final class HomeFeedStore {
         let gen = generation
         emptyAppendRetriesThisGeneration = 0
         errorMessage = nil
+
+        ReviewThinCatalog.refreshFromSession()
+        if ReviewThinCatalog.isActive {
+            lockCatalogForcedEmpty()
+            return
+        }
 
         if forceRefresh {
             isRefreshing = true
