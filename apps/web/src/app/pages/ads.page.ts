@@ -28,59 +28,6 @@ import { MediaService } from '../core/services/media.service';
           </div>
         </div>
 
-        <section class="manual">
-          <div class="manual-head">
-            <h2>Field guide</h2>
-            <p>Quick manual for what each campaign field does in the current MVP.</p>
-          </div>
-          <div class="manual-grid">
-            <article class="manual-item">
-              <strong>Name</strong>
-              <span>The internal campaign name you use to identify the ad.</span>
-            </article>
-            <article class="manual-item">
-              <strong>Placement</strong>
-              <span><b>Video</b> serves before normal videos. <b>Reel</b> serves before reels.</span>
-            </article>
-            <article class="manual-item">
-              <strong>Status</strong>
-              <span><b>Draft</b> does not serve, <b>Active</b> can serve, <b>Paused</b> stops delivery.</span>
-            </article>
-            <article class="manual-item">
-              <strong>Target countries</strong>
-              <span>Comma-separated ISO codes like <b>US, DE, FR</b>. Empty means global.</span>
-            </article>
-            <article class="manual-item">
-              <strong>Total budget</strong>
-              <span>Entered in euros. Stored internally in cents for billing-safe math later.</span>
-            </article>
-            <article class="manual-item">
-              <strong>Daily budget</strong>
-              <span>Entered in euros. Used now for simple pacing so one campaign does not dominate requests.</span>
-            </article>
-            <article class="manual-item">
-              <strong>Start / End</strong>
-              <span>Optional schedule window for when the campaign is eligible to run.</span>
-            </article>
-            <article class="manual-item">
-              <strong>Creative upload</strong>
-              <span>Upload a video file here. Matterya hosts it and uses that file automatically.</span>
-            </article>
-            <article class="manual-item">
-              <strong>Creative title / Ad copy</strong>
-              <span>Optional text displayed on top of the pre-roll player.</span>
-            </article>
-            <article class="manual-item">
-              <strong>CTA label / Click URL</strong>
-              <span>If a click URL exists, the ad shows a button and click analytics are logged.</span>
-            </article>
-            <article class="manual-item">
-              <strong>Duration</strong>
-              <span>The ad length in seconds. Skip becomes available after a short delay.</span>
-            </article>
-          </div>
-        </section>
-
         <form class="composer" (ngSubmit)="createCampaign()" #campaignForm="ngForm">
           <div class="composer-head">
             <div>
@@ -378,7 +325,6 @@ import { MediaService } from '../core/services/media.service';
         color: #102132;
       }
       .hero,
-      .manual,
       .composer,
       .list,
       .campaign-card {
@@ -409,37 +355,9 @@ import { MediaService } from '../core/services/media.service';
         color: #607086;
         line-height: 1.5;
       }
-      .manual,
       .composer,
       .list {
         padding: 20px;
-      }
-      .manual-head p {
-        margin-top: 6px;
-        color: #607086;
-      }
-      .manual-grid {
-        margin-top: 16px;
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 12px;
-      }
-      .manual-item {
-        border-radius: 18px;
-        background: #f7f9fc;
-        padding: 14px 16px;
-        display: grid;
-        gap: 6px;
-      }
-      .manual-item strong {
-        font-size: 13px;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-      }
-      .manual-item span {
-        color: #607086;
-        font-size: 13px;
-        line-height: 1.45;
       }
       .composer-head,
       .list-head,
@@ -713,7 +631,6 @@ import { MediaService } from '../core/services/media.service';
         color: #66768a;
       }
       @media (max-width: 720px) {
-        .manual-grid,
         .grid {
           grid-template-columns: 1fr;
         }

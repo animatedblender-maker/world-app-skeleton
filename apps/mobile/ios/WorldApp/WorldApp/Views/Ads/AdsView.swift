@@ -43,7 +43,6 @@ struct AdsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 heroSection
-                fieldGuideSection
                 composerSection
                 campaignsSection
             }
@@ -117,52 +116,6 @@ struct AdsView: View {
             }
         }
         .padding(.top, 4)
-    }
-
-    // MARK: - Field Guide
-
-    private var fieldGuideSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Field guide")
-                    .font(.headline)
-                    .foregroundStyle(Theme.ink)
-                Text("Quick manual for what each campaign field does in the current MVP.")
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.inkSecondary)
-            }
-
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                fieldGuideItem("Name", "The internal campaign name you use to identify the ad.")
-                fieldGuideItem("Placement", "Video serves before normal videos. \(MatteryaCopy.spark) serves before \(MatteryaCopy.sparks.lowercased()).")
-                fieldGuideItem("Status", "Draft does not serve, Active can serve, Paused stops delivery.")
-                fieldGuideItem("Target countries", "Comma-separated ISO codes like US, DE, FR. Empty means global.")
-                fieldGuideItem("Total budget", "Entered in euros. Stored internally in cents for billing-safe math later.")
-                fieldGuideItem("Daily budget", "Entered in euros. Used now for simple pacing so one campaign does not dominate requests.")
-                fieldGuideItem("Start / End", "Optional schedule window for when the campaign is eligible to run.")
-                fieldGuideItem("Creative upload", "Upload a video file here. Matterya hosts it and uses that file automatically.")
-                fieldGuideItem("Creative title / Ad copy", "Optional text displayed on top of the pre-roll player.")
-                fieldGuideItem("CTA label / Click URL", "If a click URL exists, the ad shows a button and click analytics are logged.")
-                fieldGuideItem("Duration", "The ad length in seconds. Skip becomes available after a short delay.")
-            }
-        }
-        .adsCard()
-    }
-
-    private func fieldGuideItem(_ title: String, _ detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(Theme.ink)
-                .textCase(.uppercase)
-            Text(detail)
-                .font(.caption)
-                .foregroundStyle(Theme.inkSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(Theme.canvasMuted, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
     }
 
     // MARK: - Composer

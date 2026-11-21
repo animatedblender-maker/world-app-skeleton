@@ -812,7 +812,15 @@ export async function fetchForYouPage(input: {
         servedRows = rankedRows.slice(0, want);
       }
     } else {
-      servedRows = [];
+      // Entire woven window already delivered — Hubs is a browse catalog, so
+      // recycle instead of returning empty (that wiped Matterya Hubs for every
+      // signed-in non-Review account after one full pass).
+      servedRows = woven.slice(0, want);
+      deliveryPolicy = 'cursor';
+      console.warn(
+        '[hubs/for-you] delivery ledger exhausted — recycling woven window',
+        { viewerId, woven: woven.length }
+      );
     }
   }
 

@@ -2233,20 +2233,25 @@ struct YouTubeAppView: View {
             }
         }
 
-        // Successful empty for-you (App Review thin viewer) — wipe sticky local LongForm.
-        // Sparse slug shelves may be empty without nuking the whole Hubs tab.
+        // Empty for-you: wipe sticky LongForm only for the App Review account.
+        // Normal accounts must never clear Hubs on a transient/ledger-empty page —
+        // that left Matterya Hubs blank for every signed-in non-iostester user.
         if page.items.isEmpty {
             let isForYou = homeFilter.hubSlug == nil || key == "for-you"
-            if isForYou {
+            if isForYou, ReviewThinCatalog.isReviewAccount {
                 clearHubsCatalogForReview()
+                isLoading = false
+                errorMessage = nil
+                hubsCaughtUp = true
+                #if DEBUG
+                print("[Hubs] empty API key=\(key) review wipe")
+                #endif
+                return
             }
-            isLoading = false
-            errorMessage = nil
-            hubsCaughtUp = true
             #if DEBUG
-            print("[Hubs] empty API key=\(key) cleared=\(isForYou)")
+            print("[Hubs] empty API key=\(key) — keep paint / try legacy")
             #endif
-            return
+            // Fall through to legacy catalog / session paint for normal accounts.
         }
 
         // ── Legacy fallback (once) if shelves empty / API down ───────────────
