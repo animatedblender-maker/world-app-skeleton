@@ -280,6 +280,8 @@ export class AppComponent {
       pathname.startsWith('/travel') ||
       pathname.startsWith('/notifications') ||
       pathname.startsWith('/auth') ||
+      pathname.startsWith('/reset-password') ||
+      pathname.startsWith('/confirm-email') ||
       pathname.startsWith('/onboarding') ||
       pathname.startsWith('/welcome') ||
       pathname.startsWith('/admin') ||

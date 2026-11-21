@@ -13,75 +13,171 @@ import {
   standalone: true,
   imports: [CommonModule, FormsModule],
   template: `
-  <div class="wrap">
-    <div class="card">
-      <div class="title">Reset your password</div>
+  <div class="auth-bg">
+    <div class="auth-card">
+      <div class="brand-title">Matterya</div>
+      <div class="page-title">Reset your password</div>
       <div class="sub" *ngIf="token">Enter a new password for your Matterya account.</div>
       <div class="sub" *ngIf="!token">
         This page needs a valid reset link from your Matterya email (no-reply@matterya.com).
       </div>
 
       <ng-container *ngIf="token">
-        <div class="field">
-          <label>New password</label>
-          <input [(ngModel)]="password" type="password" minlength="8" placeholder="••••••••" />
-          <div class="policy">{{ passwordHint }}</div>
-        </div>
+        <form class="form" (ngSubmit)="save()">
+          <label class="field">
+            <span>New password</span>
+            <input
+              [(ngModel)]="password"
+              name="password"
+              type="password"
+              autocomplete="new-password"
+              minlength="8"
+              placeholder="••••••••"
+              required
+            />
+            <span class="field-hint">{{ passwordHint }}</span>
+          </label>
 
-        <div class="field">
-          <label>Confirm new password</label>
-          <input [(ngModel)]="password2" type="password" minlength="8" placeholder="••••••••" />
-        </div>
+          <label class="field">
+            <span>Confirm new password</span>
+            <input
+              [(ngModel)]="password2"
+              name="password2"
+              type="password"
+              autocomplete="new-password"
+              minlength="8"
+              placeholder="••••••••"
+              required
+            />
+          </label>
 
-        <div class="row">
-          <button class="btn" (click)="save()" [disabled]="busy">
-            {{ busy ? 'Saving…' : 'Save' }}
+          <div class="error" *ngIf="msg && !savedOk">{{ msg }}</div>
+          <div class="hint ok" *ngIf="msg && savedOk">{{ msg }}</div>
+
+          <button class="cta" type="submit" [disabled]="busy">
+            {{ busy ? 'Saving…' : 'Save password' }}
           </button>
-          <div class="msg" *ngIf="msg">{{ msg }}</div>
-        </div>
+        </form>
       </ng-container>
 
-      <div class="msg" *ngIf="!token && msg">{{ msg }}</div>
+      <div class="error" *ngIf="!token && msg">{{ msg }}</div>
+
+      <div class="switch-row">
+        <button type="button" class="link" (click)="goLogin()">Back to log in</button>
+      </div>
     </div>
   </div>
   `,
   styles: [`
     :host { display:block; height:100vh; }
-    .wrap{
-      height:100vh; display:grid; place-items:center;
-      background: radial-gradient(1200px 800px at 50% 30%, rgba(0,255,209,0.10), transparent 60%),
-                  rgba(6,8,14,0.95);
-      color: rgba(255,255,255,0.92);
+    .auth-bg{
+      min-height:100vh;
+      display:grid;
+      place-items:center;
+      padding: 32px 16px;
+      background: var(--m-paper, #f8f6f2);
+      color: var(--m-ink, #2c2825);
     }
-    .card{
-      width:min(560px,92vw);
-      border-radius:24px;
-      padding:18px;
-      background: rgba(10,12,20,0.60);
-      border: 1px solid rgba(0,255,209,0.20);
-      box-shadow: 0 30px 90px rgba(0,0,0,0.45);
-      backdrop-filter: blur(12px);
+    .auth-card{
+      width:min(420px, 92vw);
+      display:grid;
+      gap: 16px;
     }
-    .title{ font-weight:900; letter-spacing:0.08em; }
-    .sub{ margin-top:6px; opacity:.7; font-size:13px; }
-    .field{ margin-top:14px; display:grid; gap:8px; }
-    label{ font-size:12px; opacity:.7; letter-spacing:0.12em; }
-    input{
-      padding:12px; border-radius:16px;
-      border:1px solid rgba(255,255,255,0.12);
-      background: rgba(0,0,0,0.28);
-      color: rgba(255,255,255,0.92);
+    .brand-title{
+      text-align:center;
+      font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+      font-size: 42px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: var(--m-ink, #2c2825);
+      margin-bottom: 4px;
+    }
+    .page-title{
+      text-align:center;
+      font-size: 18px;
+      font-weight: 650;
+      color: var(--m-ink, #2c2825);
+    }
+    .sub{
+      text-align:center;
+      color: var(--m-ink-muted, #948b82);
+      font-size: 14px;
+      line-height: 1.45;
+      margin-bottom: 4px;
+    }
+    .form{ display:grid; gap:14px; margin-top: 6px; }
+    .field{ display:grid; gap:7px; }
+    .field span{
+      font-size:12px;
+      font-weight: 600;
+      color: var(--m-ink-muted, #948b82);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .field input{
+      border: 0.5px solid var(--m-border, #ddd8d1);
+      border-radius: 10px;
+      padding: 12px 14px;
+      background: var(--m-surface, #fefdfb);
+      color: var(--m-ink, #2c2825);
       outline:none;
+      font-size: 16px;
     }
-    .row{ margin-top:16px; display:flex; gap:12px; align-items:center; }
-    .btn{
-      border:0; border-radius:16px; padding:12px 14px; cursor:pointer;
-      background: linear-gradient(90deg, rgba(0,255,209,0.85), rgba(140,0,255,0.75));
-      color: rgba(6,8,14,0.96); font-weight:900; letter-spacing:0.12em;
+    .field input:focus{
+      border-color: var(--m-accent, #2c2825);
+      box-shadow: 0 0 0 3px rgba(44, 40, 37, 0.12);
     }
-    .btn:disabled{ opacity:.6; cursor:not-allowed; }
-    .msg{ font-size:13px; opacity:.85; }
-    .policy{ font-size:12px; opacity:.7; line-height:1.4; }
+    .field-hint{
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: none;
+      letter-spacing: 0;
+      color: var(--m-ink-muted, #948b82);
+      line-height: 1.35;
+    }
+    .cta{
+      border:0;
+      border-radius: var(--m-control-radius, 8px);
+      padding: 14px 16px;
+      cursor:pointer;
+      background: var(--m-ink, #2c2825);
+      color: var(--m-paper, #f8f6f2);
+      font-weight: 650;
+      font-size: 15px;
+    }
+    .cta:disabled{ opacity:0.55; cursor:not-allowed; }
+    .error{
+      color: var(--m-danger, #ea000b);
+      background: rgba(234, 0, 11, 0.06);
+      border: 0.5px solid rgba(234, 0, 11, 0.18);
+      padding:10px 12px;
+      border-radius:10px;
+      font-size:13px;
+    }
+    .hint{ color: var(--m-ink-muted, #948b82); font-size:13px; line-height:1.4; }
+    .hint.ok{
+      color: var(--m-ink, #2c2825);
+      background: rgba(44, 40, 37, 0.06);
+      border: 0.5px solid var(--m-border, #ddd8d1);
+      padding:10px 12px;
+      border-radius:10px;
+    }
+    .switch-row{
+      display:flex;
+      justify-content:center;
+      margin-top: 8px;
+    }
+    .link{
+      border:0;
+      background:transparent;
+      color: var(--m-ink, #2c2825);
+      font-weight: 650;
+      font-size: 14px;
+      cursor:pointer;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      padding: 4px 0;
+    }
   `],
 })
 export class ResetPasswordPageComponent implements OnInit {
@@ -89,6 +185,7 @@ export class ResetPasswordPageComponent implements OnInit {
   password2 = '';
   busy = false;
   msg = '';
+  savedOk = false;
   token = '';
   readonly passwordHint = PASSWORD_REQUIREMENTS_HINT;
 
@@ -106,8 +203,13 @@ export class ResetPasswordPageComponent implements OnInit {
     }
   }
 
+  goLogin(): void {
+    void this.router.navigateByUrl('/auth');
+  }
+
   async save(): Promise<void> {
     this.msg = '';
+    this.savedOk = false;
     this.busy = true;
 
     try {
@@ -120,7 +222,8 @@ export class ResetPasswordPageComponent implements OnInit {
       if (!this.token) throw new Error('Missing password reset link.');
 
       await this.auth.resetPasswordWithToken(this.token, p1);
-      this.msg = 'Password updated. You can login now.';
+      this.savedOk = true;
+      this.msg = 'Password updated. You can log in now.';
       await this.router.navigateByUrl('/auth');
     } catch (e: any) {
       this.msg = e?.message ?? String(e);
