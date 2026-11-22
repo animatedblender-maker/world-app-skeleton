@@ -148,7 +148,7 @@ private struct ReelCard: View {
                         VideoPlayerView(
                             url: url,
                             posterURL: poster,
-                            placement: "reel",
+                            placement: nil,
                             countryCode: country.iso,
                             contentCountryCode: post.countryCode ?? country.iso,
                             postID: post.id,

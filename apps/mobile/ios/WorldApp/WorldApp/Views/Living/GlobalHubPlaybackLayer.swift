@@ -42,6 +42,8 @@ struct GlobalHubPlaybackLayer: View {
     @State private var forceMiniLayout = false
     /// Ignore pause blips for a beat after morph (layout settle used to clear hubPlaybackPlaying).
     @State private var ignorePauseUntil: Date = .distantPast
+    /// Skippable pre-roll before Hubs long-form starts (per post id).
+    @State private var hubAdFinishedPostID: String?
 
     private var expanded: Bool { appState.hubPlaybackExpanded }
     private var landscapeFullscreen: Bool { appState.hubPlaybackLandscapeFullscreen }
@@ -436,9 +438,14 @@ struct GlobalHubPlaybackLayer: View {
                 let morphing = forceMiniLayout || isPullingMinimize
                     || appState.hubPlaybackPullProgress > 0.02
                 let fitFilm = !settledMini
+                let needsHubPreroll =
+                    showExpandedStage
+                    && !SubscriptionService.shared.isPremium
+                    && hubAdFinishedPostID != post.id
+                    && resumeAt < 1.5
                 // Settled mini + mid-morph: AV layer alone. Poster decode/layout mid-shrink
                 // was hitching the morph for a second or two.
-                if !settledMini, !morphing {
+                if !settledMini, !morphing, !needsHubPreroll {
                     if let poster {
                         // Light underlay only — heavy 720 decode under continuous film hitch open.
                         CachedAsyncImage(
@@ -462,17 +469,17 @@ struct GlobalHubPlaybackLayer: View {
                 MatteryaHubPlayerView(
                     url: url,
                     posterURL: poster,
-                    isActive: appState.hubPlaybackPlaying,
+                    isActive: appState.hubPlaybackPlaying && !needsHubPreroll,
                     startTime: resumeAt,
                     postID: post.id,
-                    showsControls: showControls,
+                    showsControls: showControls && !needsHubPreroll,
                     loops: false,
                     // Always fit on the continuous player — flipping fit↔fill after minimize
                     // paused AV and lagged the morph. Mini letterboxes slightly; worth it.
                     fillsFrame: false,
                     isMuted: mutedBinding,
                     playbackRate: rateBinding,
-                    allowsFullscreen: showControls,
+                    allowsFullscreen: showControls && !needsHubPreroll,
                     isLandscapeFullscreen: landscapeFullscreen,
                     // Survive Sparks open/close — resume mid-clip without black remount.
                     protectAsContinuousHubs: true,
@@ -553,8 +560,33 @@ struct GlobalHubPlaybackLayer: View {
                         appState.noteHubPlaybackVideoSize(size)
                     }
                 )
+
+                if needsHubPreroll {
+                    AdPrerollView(
+                        placement: "video",
+                        countryCode: post.countryCode,
+                        contentCountryCode: post.countryCode,
+                        postID: post.id,
+                        onComplete: {
+                            hubAdFinishedPostID = post.id
+                            if !appState.hubPlaybackPlaying {
+                                appState.hubPlaybackPlaying = true
+                            }
+                            NotificationCenter.default.post(
+                                name: .matteryaResumePlaybackAfterInterrupt,
+                                object: nil
+                            )
+                        }
+                    )
+                    .transition(.opacity)
+                    .zIndex(20)
+                }
             }
             .id("hub-continuous-\(post.id)")
+            .onChange(of: post.id) { _, _ in
+                // New Hubs video → allow a fresh skippable pre-roll at start.
+                hubAdFinishedPostID = nil
+            }
         } else {
             YouTubeVideoThumbnail(
                 post: post,

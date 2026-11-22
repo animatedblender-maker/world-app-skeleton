@@ -588,11 +588,11 @@ struct YouTubeWatchView: View {
                     VideoPlayerView(
                         url: url,
                         posterURL: currentPost.posterImageURL,
-                        placement: nil,
+                        placement: "video",
                         countryCode: currentPost.countryCode,
                         contentCountryCode: currentPost.countryCode,
                         postID: currentPost.id,
-                        adsEnabled: false,
+                        adsEnabled: true,
                         isActive: true,
                         loops: false,
                         muted: false,

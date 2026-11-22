@@ -2417,6 +2417,75 @@ struct AdSlot: Sendable {
     let creative: AdCreative
 }
 
+extension CountryPost {
+    /// Standalone Sparks / feed sponsored card (not an overlay on organic content).
+    var isSponsoredAd: Bool {
+        externalRefType == "ad" || id.hasPrefix("adslot:")
+    }
+
+    static func sponsoredAd(from slot: AdSlot) -> CountryPost {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let title = slot.creative.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = (slot.creative.body ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return CountryPost(
+            id: "adslot:\(slot.impressionToken)",
+            title: (title?.isEmpty == false) ? title : slot.campaign.name,
+            body: body,
+            mediaType: "video",
+            mediaURL: slot.creative.mediaURL,
+            thumbURL: nil,
+            mediaCaption: nil,
+            sharedPostID: nil,
+            sharedPost: nil,
+            visibility: .public,
+            likeCount: 0,
+            commentCount: 0,
+            viewCount: 0,
+            likedByMe: false,
+            savedByMe: false,
+            createdAt: now,
+            updatedAt: now,
+            authorID: "sponsored",
+            countryName: nil,
+            countryCode: slot.campaign.targetCountryCodes.first,
+            cityName: nil,
+            author: PostAuthor(
+                userID: "sponsored",
+                displayName: "Sponsored",
+                username: "sponsored",
+                avatarURL: nil,
+                countryName: nil,
+                countryCode: nil,
+                lastReadAt: nil,
+                isVerified: false
+            ),
+            linkURL: slot.creative.clickURL,
+            linkTitle: slot.creative.ctaLabel ?? "Learn more",
+            externalRefType: "ad",
+            externalRefID: slot.impressionToken,
+            isAdult: false
+        )
+    }
+}
+
+/// Session registry for standalone Sparks ad cards (CTA / skip / impression).
+@MainActor
+enum SparkAdRegistry {
+    private static var slots: [String: AdSlot] = [:]
+
+    static func remember(_ slot: AdSlot, forPostID id: String) {
+        slots[id] = slot
+    }
+
+    static func slot(forPostID id: String) -> AdSlot? {
+        slots[id]
+    }
+
+    static func clear(_ id: String) {
+        slots.removeValue(forKey: id)
+    }
+}
+
 struct FollowCounts: Sendable {
     let followers: Int
     let following: Int

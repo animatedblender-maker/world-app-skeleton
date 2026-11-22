@@ -501,24 +501,29 @@ struct ReelsPagerCard: View {
                 .clipped()
                 .contentShape(Rectangle())
                 .onTapGesture(count: 2) {
+                    guard !post.isSponsoredAd else { return }
                     pendingSingleTap?.cancel()
                     keepPlayingThroughUIAction()
                     triggerLike(fromButton: false)
                 }
                 .onTapGesture(count: 1) {
+                    guard !post.isSponsoredAd else { return }
                     handleSingleTapPause()
                 }
 
             // Lock dock to *physical screen* width — SwiftUI’s proposed width can be
             // wider than the phone on some fullscreen packs; that spilled L/R.
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
-                sparkDock
-                    .frame(width: Self.dockWidth)
-                    .clipped()
-                Spacer(minLength: 0)
+            // Sponsored cards own their CTA chrome — hide organic Like/Chat dock.
+            if !post.isSponsoredAd {
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    sparkDock
+                        .frame(width: Self.dockWidth)
+                        .clipped()
+                    Spacer(minLength: 0)
+                }
+                .padding(.bottom, max(10, bottomInset - 4))
             }
-            .padding(.bottom, max(10, bottomInset - 4))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
@@ -611,6 +616,10 @@ struct ReelsPagerCard: View {
         ZStack {
             Color.black
 
+            if post.isSponsoredAd {
+                SparkAdStandaloneCard(post: post, isActive: isActive)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
             // NEVER show Frame 0 / poster during feed handoff — that blinks t=0 then jumps mid-clip.
             if !isFeedHandoffContinue {
                 if let poster = sparkPosterURL {
@@ -665,13 +674,15 @@ struct ReelsPagerCard: View {
                             isPausedByUser: isPaused
                         )
                     } else {
+                        // Ads are standalone Sparks cards — never overlay pre-roll on organic clips.
                         VideoPlayerView(
                             url: url,
                             posterURL: isFeedHandoffContinue ? nil : sparkPosterURL,
-                            placement: "reel",
+                            placement: nil,
                             countryCode: post.countryCode,
                             contentCountryCode: post.countryCode,
                             postID: post.id,
+                            adsEnabled: false,
                             isActive: isActive,
                             loops: true,
                             muted: false,
@@ -709,6 +720,7 @@ struct ReelsPagerCard: View {
                         .foregroundStyle(Theme.paper.opacity(0.4))
                 }
                 .allowsHitTesting(false)
+            }
             }
 
             // Light vignette only — video stays immersive; dock floats over film.
@@ -1488,6 +1500,10 @@ struct ReelsScrollViewer: View {
     @State private var hasMorePages = true
     @State private var recyclePass = 0
     @State private var commentsPostID: String?
+    /// Organic Sparks since last standalone ad (random gap keeps density light).
+    @State private var organicSinceAd = 0
+    @State private var nextAdAfterOrganic = Int.random(in: 85...140)
+    @State private var isInsertingAd = false
 
     // Budget constants live on SparksQueueBudget (nonisolated) so default args compile under Swift 6.
 
@@ -1615,6 +1631,7 @@ struct ReelsScrollViewer: View {
                 CommentsWarmCache.shared.warm(posts[activeIndex].id)
                 // Never reorder on index change — swipe back must show the same clips.
                 await ensureBulkQueueAhead()
+                await considerStandaloneAdInsert(at: activeIndex)
             }
         }
         .task {
@@ -2051,16 +2068,99 @@ struct ReelsScrollViewer: View {
             return
         }
 
-        // True exhaustion of unviewed inventory — never recycle watched Sparks.
-        // Keep paging if the surface cursor still advances; otherwise stop.
+        // Unviewed inventory dry — keep the player endless by soft-recycling
+        // far-behind / catalog clips (user expects endless Sparks scroll).
         if let next = page.nextCursor, next != feedCursor {
             feedCursor = next
             hasMorePages = true
             return
         }
-        hasMorePages = surface.nextCursor != nil
+        let recycled = ReelsRankingEngine.nextBatch(
+            from: catalog,
+            excluding: existingIDs,
+            limit: bulk,
+            viewerCountry: appState.currentProfile?.countryCode,
+            followingIDs: appState.followingIDs,
+            tail: tail,
+            allowRecycle: true
+        )
+        if !recycled.isEmpty {
+            rotateInRecycled(ReelsRankingEngine.sessionFreshOrder(recycled))
+            hasMorePages = true
+            recyclePass += 1
+            #if DEBUG
+            print("[Sparks] soft-recycle for endless scroll n=\(recycled.count) pass=\(recyclePass)")
+            #endif
+            return
+        }
+        rotateQueueForEndless()
+        hasMorePages = true
         #if DEBUG
-        print("[Sparks] unviewed inventory dry — stop recycle (hasMore=\(hasMorePages))")
+        print("[Sparks] rotateQueueForEndless — keep scrolling")
+        #endif
+    }
+
+    /// Insert a sponsored video as its own Sparks page (random light density).
+    private func considerStandaloneAdInsert(at index: Int) async {
+        guard !SubscriptionService.shared.isPremium else { return }
+        guard !isInsertingAd, posts.indices.contains(index) else { return }
+        let current = posts[index]
+        if current.isSponsoredAd {
+            organicSinceAd = 0
+            return
+        }
+        organicSinceAd += 1
+        guard organicSinceAd >= nextAdAfterOrganic else { return }
+        // Avoid stacking ads near each other in the upcoming window.
+        let upcoming = posts.suffix(from: index).prefix(18)
+        if upcoming.contains(where: \.isSponsoredAd) {
+            organicSinceAd = max(0, nextAdAfterOrganic - 25)
+            return
+        }
+
+        isInsertingAd = true
+        defer { isInsertingAd = false }
+
+        let country = appState.currentProfile?.countryCode
+        var slot: AdSlot?
+        do {
+            slot = try await AdsService.shared.serveVideoAd(
+                placement: "reel",
+                countryCode: country,
+                contentCountryCode: country,
+                postID: nil
+            )
+            if slot == nil {
+                slot = try await AdsService.shared.serveVideoAd(
+                    placement: "video",
+                    countryCode: country,
+                    contentCountryCode: country,
+                    postID: nil
+                )
+            }
+        } catch {
+            organicSinceAd = max(0, nextAdAfterOrganic - 40)
+            return
+        }
+        guard let slot else {
+            // No eligible campaign — try again later without feeling spammy.
+            nextAdAfterOrganic = Int.random(in: 100...160)
+            organicSinceAd = 0
+            return
+        }
+
+        let adPost = CountryPost.sponsoredAd(from: slot)
+        SparkAdRegistry.remember(slot, forPostID: adPost.id)
+        let insertAt = min(index + 1, posts.count)
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            posts.insert(adPost, at: insertAt)
+        }
+        organicSinceAd = 0
+        nextAdAfterOrganic = Int.random(in: 85...140)
+        #if DEBUG
+        print("[Sparks] inserted standalone ad at \(insertAt) nextGap=\(nextAdAfterOrganic)")
         #endif
     }
 

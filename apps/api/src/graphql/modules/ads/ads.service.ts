@@ -599,7 +599,10 @@ export class AdsService {
       join public.ad_creatives cr on cr.campaign_id = c.id
       left join campaign_stats stats on stats.campaign_id = c.id
       where c.status = 'active'
-        and c.placement = $1
+        and (
+          c.placement = $1
+          or ($1 = 'reel' and c.placement = 'video')
+        )
         and cr.media_kind = 'video'
         and cr.media_url ~* '^https?://'
         and cr.media_url ~* '\\.(mp4|webm|mov|m4v)(\\?.*)?(#.*)?$'
@@ -609,8 +612,17 @@ export class AdsService {
           c.daily_budget_cents <= 0
           or coalesce(stats.day_serves, 0) < greatest(1, c.daily_budget_cents / 10)
         )
+        and (
+          c.budget_cents <= 0
+          or coalesce(stats.impression_count, 0) < greatest(1, c.budget_cents / 10)
+        )
       order by
         country_rank asc,
+        (case
+          when c.budget_cents > 0
+            then greatest(0, c.budget_cents - coalesce(stats.impression_count, 0) * 10)
+          else c.daily_budget_cents
+        end) desc,
         coalesce(stats.day_serves, 0) asc,
         c.created_at asc,
         cr.created_at asc
@@ -1015,8 +1027,31 @@ export class AdsService {
   }
 
   private normalizeCountryCode(code: string | null): string | null {
-    const value = String(code ?? '').trim().toUpperCase();
-    return value || null;
+    const raw = String(code ?? '').trim().toUpperCase();
+    if (!raw) return null;
+    if (/^[A-Z]{2}$/.test(raw)) return raw;
+    const aliases: Record<string, string> = {
+      GERMANY: 'DE',
+      DEUTSCHLAND: 'DE',
+      'UNITED STATES': 'US',
+      USA: 'US',
+      AMERICA: 'US',
+      EGYPT: 'EG',
+      ALBANIA: 'AL',
+      FRANCE: 'FR',
+      'UNITED KINGDOM': 'GB',
+      UK: 'GB',
+      ENGLAND: 'GB',
+      AUSTRIA: 'AT',
+      SWITZERLAND: 'CH',
+      NETHERLANDS: 'NL',
+      SPAIN: 'ES',
+      ITALY: 'IT',
+      CANADA: 'CA',
+      AUSTRALIA: 'AU',
+      KOSOVO: 'XK',
+    };
+    return aliases[raw] ?? (raw.length <= 3 ? raw : null);
   }
 
   private normalizeCountryCodeArray(values: Array<string | null> | null): string[] {
