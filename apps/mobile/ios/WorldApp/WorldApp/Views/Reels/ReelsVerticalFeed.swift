@@ -1502,8 +1502,10 @@ struct ReelsScrollViewer: View {
     @State private var commentsPostID: String?
     /// Organic Sparks since last standalone ad (random gap keeps density light).
     @State private var organicSinceAd = 0
-    @State private var nextAdAfterOrganic = Int.random(in: 85...140)
+    /// First ad arrives after a short random run; later gaps stay sparse.
+    @State private var nextAdAfterOrganic = Int.random(in: 12...28)
     @State private var isInsertingAd = false
+    @State private var hasInsertedFirstAd = false
 
     // Budget constants live on SparksQueueBudget (nonisolated) so default args compile under Swift 6.
 
@@ -2144,7 +2146,9 @@ struct ReelsScrollViewer: View {
         }
         guard let slot else {
             // No eligible campaign — try again later without feeling spammy.
-            nextAdAfterOrganic = Int.random(in: 100...160)
+            nextAdAfterOrganic = hasInsertedFirstAd
+                ? Int.random(in: 100...160)
+                : Int.random(in: 18...36)
             organicSinceAd = 0
             return
         }
@@ -2158,6 +2162,7 @@ struct ReelsScrollViewer: View {
             posts.insert(adPost, at: insertAt)
         }
         organicSinceAd = 0
+        hasInsertedFirstAd = true
         nextAdAfterOrganic = Int.random(in: 85...140)
         #if DEBUG
         print("[Sparks] inserted standalone ad at \(insertAt) nextGap=\(nextAdAfterOrganic)")

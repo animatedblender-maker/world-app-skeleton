@@ -114,7 +114,8 @@ struct AdPrerollView: View {
         }
 
         do {
-            var slot = try await withTimeout(seconds: 3) {
+            // API cold starts can exceed 3s — short timeout skipped every Hubs pre-roll.
+            var slot = try await withTimeout(seconds: 12) {
                 try await AdsService.shared.serveVideoAd(
                     placement: placement,
                     countryCode: countryCode,
