@@ -112,6 +112,9 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
     private var focusGeneration: UInt = 1
     private var isApplyingScroll = false
     private var lastPostedIDs: [String] = []
+    /// Queue mutations deferred while flinging — apply after settle (butter swipe).
+    private var pendingFlingPosts: [CountryPost]?
+    private var pendingFlingActiveIndex: Int?
     /// One-shot feed→Sparks continue id (cleared after first active configure).
     private var pendingContinueFromFeedPostID: String?
     /// Keep passing continue=true on reconfigure until the user swipes away.
@@ -364,21 +367,31 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         var didPureAppend = false
         if dataChanged {
             let oldIDs = lastPostedIDs
+            let wouldPureAppend = !oldIDs.isEmpty
+                && ids.count > oldIDs.count
+                && Array(ids.prefix(oldIDs.count)) == oldIDs
+            let wouldPurePrepend = !oldIDs.isEmpty
+                && ids.count > oldIDs.count
+                && Array(ids.suffix(oldIDs.count)) == oldIDs
+            // Any collection mutation mid-drag/decelerate freezes the pager — defer.
+            if ScrollBudget.isFlinging
+                || collectionView.isDragging
+                || collectionView.isDecelerating {
+                pendingFlingPosts = posts
+                pendingFlingActiveIndex = activeIndex
+                return
+            }
             self.posts = posts
             lastPostedIDs = ids
             // Pure append (catalog expand) — insert rows without remounting the head.
             // Full reload of the first pages was the “first few sparks glitch”.
-            if !oldIDs.isEmpty,
-               ids.count > oldIDs.count,
-               Array(ids.prefix(oldIDs.count)) == oldIDs {
+            if wouldPureAppend {
                 let paths = (oldIDs.count..<ids.count).map { IndexPath(item: $0, section: 0) }
                 collectionView.performBatchUpdates {
                     collectionView.insertItems(at: paths)
                 }
                 didPureAppend = true
-            } else if !oldIDs.isEmpty,
-                      ids.count > oldIDs.count,
-                      Array(ids.suffix(oldIDs.count)) == oldIDs {
+            } else if wouldPurePrepend {
                 // Pure prepend (load earlier) — insert at front + pin content offset so
                 // the focused spark never jumps (reloadData used to snap to entry/page 0).
                 let insertCount = ids.count - oldIDs.count
@@ -551,6 +564,7 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         // and the next clips never deep-warm (every swipe felt cold).
         ScrollBudget.noteSettled()
         commitPageFromScroll()
+        flushPendingFlingApply()
         SparkWarmPool.shared.preparePlayerWindow(
             posts: posts,
             around: activeIndex,
@@ -568,6 +582,7 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         if !decelerate {
             ScrollBudget.noteSettled()
             commitPageFromScroll()
+            flushPendingFlingApply()
             SparkWarmPool.shared.preparePlayerWindow(
                 posts: posts,
                 around: activeIndex,
@@ -577,6 +592,24 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
                 coordinator?.nearEnd()
             }
         }
+    }
+
+    /// Apply queue expands that were deferred mid-fling.
+    private func flushPendingFlingApply() {
+        guard let pending = pendingFlingPosts else { return }
+        let idx = pendingFlingActiveIndex ?? activeIndex
+        pendingFlingPosts = nil
+        pendingFlingActiveIndex = nil
+        apply(
+            posts: pending,
+            activeIndex: idx,
+            bottomInset: bottomInset,
+            showsOpenPostAction: showsOpenPostAction,
+            viewerCountryCode: viewerCountryCode,
+            isScrollEnabled: collectionView.isScrollEnabled,
+            appState: appState,
+            continueFromFeedPostID: nil
+        )
     }
 
     func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
@@ -723,6 +756,8 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         let h = max(pageSize.height, 1)
         let targetPage = Int(round(targetContentOffset.pointee.y / h))
         // Fast fling: deep-warm landing while decelerating so claim is already ready.
+        // Skip heavy early-commit on multi-page flicks — that silence+refresh mid-decelerate
+        // was a common fling hitch; DidEndDecelerating commits once.
         if abs(velocity.y) > 0.35 || targetPage != activeIndex {
             if posts.indices.contains(targetPage) {
                 SparkWarmPool.shared.preparePlayerWindow(
@@ -731,8 +766,8 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
                     policy: .landing
                 )
             }
-            // Only early-commit when the target is clearly a neighbor (avoid double-jump).
-            if abs(targetPage - activeIndex) == 1 {
+            // Neighbor-only early commit, and only on gentle snaps (not whip flings).
+            if abs(targetPage - activeIndex) == 1, abs(velocity.y) < 1.8 {
                 commitPage(targetPage)
             }
         }

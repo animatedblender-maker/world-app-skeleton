@@ -1625,10 +1625,7 @@ struct ReelsScrollViewer: View {
             // Never mutate `posts` or hit network mid-fling — that hitch is what made
             // Sparks feel heavy while audio kept playing. Settle first, then maintain.
             Task { @MainActor in
-                if ScrollBudget.isFlinging {
-                    try? await Task.sleep(nanoseconds: 420_000_000)
-                    guard !ScrollBudget.isFlinging else { return }
-                }
+                await waitForSparksScrollSettle()
                 guard posts.indices.contains(activeIndex) else { return }
                 CommentsWarmCache.shared.warm(posts[activeIndex].id)
                 // Never reorder on index change — swipe back must show the same clips.
@@ -1691,9 +1688,27 @@ struct ReelsScrollViewer: View {
         }
     }
 
+    /// Wait until the UIKit pager is no longer flinging — mutating `posts` mid-fling
+    /// triggers UICollectionView batch/reload and freezes the swipe.
+    private func waitForSparksScrollSettle(maxSpins: Int = 50) async {
+        var spins = 0
+        while ScrollBudget.isFlinging, spins < maxSpins {
+            try? await Task.sleep(nanoseconds: 40_000_000)
+            spins += 1
+        }
+        // One short beat after the fling flag clears so decelerate layout finishes.
+        if spins > 0 {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
     /// Fire-and-forget catalog bulk; queues a second pass if one is already in flight.
     private func requestLoadMore() {
-        // Instant local top-up on the near-end edge — do not wait for network.
+        // Never touch the posts array while the finger is flinging.
+        if ScrollBudget.isFlinging {
+            loadMoreQueued = true
+            return
+        }
         topUpAheadLocally(want: SparksQueueBudget.minQueueAhead, allowRecycle: true)
         if isExpandingFeed {
             loadMoreQueued = true
@@ -1755,7 +1770,8 @@ struct ReelsScrollViewer: View {
     /// Keep at least `target` clips after the focused index — **local first**, network second.
     /// Waiting on `/v1/sparks` timeouts (12s+) left the player stuck for ~a minute.
     private func ensureBulkQueueAhead(target: Int = SparksQueueBudget.minQueueAhead) async {
-        // Instant memory fill so swipe never hits a wall while API is slow.
+        await waitForSparksScrollSettle()
+        // Memory fill after settle so swipe never hits a wall while API is slow.
         topUpAheadLocally(want: target, allowRecycle: true)
         var remaining = max(0, posts.count - activeIndex - 1)
         if remaining >= target {
@@ -1769,6 +1785,7 @@ struct ReelsScrollViewer: View {
         var guardPasses = 0
         while guardPasses < 3 {
             guardPasses += 1
+            await waitForSparksScrollSettle()
             remaining = max(0, posts.count - activeIndex - 1)
             guard remaining < target else { return }
             let before = posts.count
@@ -1779,6 +1796,7 @@ struct ReelsScrollViewer: View {
                 continue
             }
             // Network dry/timed out — force local recycle again and stop waiting.
+            await waitForSparksScrollSettle()
             topUpAheadLocally(want: target, allowRecycle: true)
             if max(0, posts.count - activeIndex - 1) <= remaining {
                 rotateQueueForEndless()
@@ -1791,6 +1809,10 @@ struct ReelsScrollViewer: View {
     /// Fill the ahead window from in-memory catalog / queue rotation — never awaits network.
     @discardableResult
     private func topUpAheadLocally(want: Int, allowRecycle: Bool) -> Int {
+        // UICollectionView insertItems mid-fling freezes the Sparks pager.
+        if ScrollBudget.isFlinging {
+            return max(0, posts.count - activeIndex - 1)
+        }
         let aheadBefore = max(0, posts.count - activeIndex - 1)
         guard aheadBefore < want else { return aheadBefore }
 
@@ -1951,6 +1973,8 @@ struct ReelsScrollViewer: View {
     /// Append only — **never** mutates `activeIndex` (append cannot change the focused clip).
     /// Sparks: drop watched entirely (do not park at tail for recycle).
     private func applyExpandedFeed(_ feed: [CountryPost], preserveID: String = "") {
+        // insertItems mid-fling freezes the pager — caller should settle first.
+        if ScrollBudget.isFlinging { return }
         var seen = Set(posts.map(\.id))
         var fresh: [CountryPost] = []
         for p in feed where seen.insert(p.id).inserted {
@@ -2006,6 +2030,9 @@ struct ReelsScrollViewer: View {
             feedCursor = nil
             return
         }
+
+        // Settle first — queue mutations during fling hitch the UICollectionView pager.
+        await waitForSparksScrollSettle()
 
         // Local fill FIRST — never leave the pager empty while API times out (~12s+).
         let ahead = topUpAheadLocally(want: SparksQueueBudget.minQueueAhead, allowRecycle: true)
@@ -2150,19 +2177,22 @@ struct ReelsScrollViewer: View {
             return
         }
 
+        await waitForSparksScrollSettle()
+        guard posts.indices.contains(activeIndex) else { return }
+
         let adPost = CountryPost.sponsoredAd(from: slot)
         SparkAdRegistry.remember(slot, forPostID: adPost.id)
-        let insertAt = min(index + 1, posts.count)
+        // Pure append only — mid-list insert forces UICollectionView reloadData (fling hitch).
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
-            posts.insert(adPost, at: insertAt)
+            posts.append(adPost)
         }
         organicSinceAd = 0
         hasInsertedFirstAd = true
         nextAdAfterOrganic = Int.random(in: 85...140)
         #if DEBUG
-        print("[Sparks] inserted standalone ad at \(insertAt) nextGap=\(nextAdAfterOrganic)")
+        print("[Sparks] appended standalone ad at \(posts.count - 1) nextGap=\(nextAdAfterOrganic)")
         #endif
     }
 
@@ -2170,6 +2200,8 @@ struct ReelsScrollViewer: View {
     /// `applyExpandedFeed` cannot append duplicate IDs — without this, endless scroll dies
     /// once the session has absorbed the library.
     private func rotateInRecycled(_ batch: [CountryPost]) {
+        // Reorder → reloadData — never mid-fling.
+        guard !ScrollBudget.isFlinging else { return }
         guard !batch.isEmpty, !posts.isEmpty else { return }
         let liveID = posts.indices.contains(activeIndex) ? posts[activeIndex].id : posts[0].id
         let liveIndex = posts.firstIndex(where: { $0.id == liveID }) ?? activeIndex
@@ -2204,6 +2236,8 @@ struct ReelsScrollViewer: View {
     /// Endless recycle only when the ahead pool is exhausted.
     /// Preserve recent history order so swipe-up / swipe-down stays stable.
     private func rotateQueueForEndless() {
+        // Full reorder → UICollectionView reloadData — never during fling.
+        guard !ScrollBudget.isFlinging else { return }
         guard posts.count >= 8 else { return }
         let liveID = posts.indices.contains(activeIndex) ? posts[activeIndex].id : posts[0].id
         let liveIndex = posts.firstIndex(where: { $0.id == liveID }) ?? activeIndex

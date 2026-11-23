@@ -24,16 +24,18 @@ final class SparkWarmPool {
         static var isConstrained: Bool { physicalGB < 3.6 }
         static var isMid: Bool { physicalGB < 5.6 }
 
-        /// Lighter than light — focus + 1 ahead on every surface (Feed / Sparks / Hubs).
+        /// Feed/Hubs stay focus+1. Sparks path-local ahead=2 on capable phones so
+        /// swipe lands on an already-decoding neighbor (butter fling → snap).
         static var playerAhead: Int { playerAheadSparks }
         static var playerAheadFeed: Int { 1 }
-        static var playerAheadSparks: Int { 1 }
+        static var playerAheadSparks: Int { isConstrained ? 1 : 2 }
         static var playerAheadHubs: Int { 1 }
         static var thumbAhead: Int { 2 }
         static var deepPrerollFeed: Int { 1 }
-        static var deepPrerollSparks: Int { 1 }
+        static var deepPrerollSparks: Int { isConstrained ? 1 : 2 }
         static var deepPrerollHubs: Int { 1 }
-        static var maxSlots: Int { 2 }
+        /// Sparks ahead=2 needs 3 slots on capable devices (focus + 2); constrained stays 2.
+        static var maxSlots: Int { isConstrained ? 2 : 3 }
         static var playerBehind: Int { 0 }
         /// Focus + next must warm in parallel or the entering card waits ~1s for a slot.
         static var maxConcurrentWarms: Int { isConstrained ? 1 : 2 }
