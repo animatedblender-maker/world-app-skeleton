@@ -22,6 +22,8 @@ enum AdDeliveryPolicy {
     /// GraphQL serve timeout for cold pre-roll (seconds).
     static let serveTimeoutSeconds: Double = 8
 
+    /// Premium gate — must hop to MainActor with `SubscriptionService`.
+    @MainActor
     static var adsEnabled: Bool {
         !SubscriptionService.shared.isPremium
     }
