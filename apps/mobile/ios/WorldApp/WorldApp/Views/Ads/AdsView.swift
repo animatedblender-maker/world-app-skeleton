@@ -12,7 +12,6 @@ struct AdsView: View {
     @State private var now = Date()
     @State private var busyCampaignIDs: Set<String> = []
     @State private var deletingCampaignID: String?
-    @State private var billing = AdCampaignBilling.shared
     @State private var wallet: AdsWalletModel?
     @State private var walletBusy = false
 

@@ -1,6 +1,4 @@
 import { pool } from '../../../db.js';
-import { verifyStoreKitTransactionJws } from './ads.apple-jws.js';
-
 /** StoreKit consumable — pay once per new campaign create (not a subscription). */
 export const AD_CAMPAIGN_CREATE_PRODUCT_ID =
   'com.matterya.worldapp.ads.campaign_create';
@@ -75,62 +73,23 @@ export async function getCreateEntitlement(
 }
 
 /**
- * Redeem a StoreKit 2 consumable into one unused create credit.
- * Requires a cryptographically verified JWS (Apple Root CA G3 + leaf signature).
- * Client-supplied product/transaction ids must match the verified payload.
+ * Ads create IAP is retired — Matterya Ads uses Stripe prepaid wallet only.
+ * Kept so old clients get a clear error instead of silent credit minting.
  */
 export async function redeemCreatePurchase(
-  userId: string,
-  input: {
+  _userId: string,
+  _input: {
     product_id: string;
     transaction_id: string;
     original_transaction_id?: string | null;
     jws?: string | null;
   }
 ): Promise<AdCreateEntitlement> {
-  const productId = String(input.product_id ?? '').trim();
-  const transactionId = String(input.transaction_id ?? '').trim();
-  if (productId !== AD_CAMPAIGN_CREATE_PRODUCT_ID) {
-    throw new Error('Unknown Ads product.');
-  }
-  if (!transactionId) {
-    throw new Error('transaction_id is required.');
-  }
-
-  const jws = input.jws != null ? String(input.jws).trim() : '';
-  if (!jws) {
-    throw new Error('Signed App Store transaction (jws) is required.');
-  }
-
-  const verified = await verifyStoreKitTransactionJws(jws);
-  if (verified.productId !== productId) {
-    throw new Error('Purchase product mismatch.');
-  }
-  if (verified.transactionId !== transactionId) {
-    throw new Error('Purchase transaction mismatch.');
-  }
-
-  await pool.query(
-    `
-    insert into public.ad_create_credits (
-      user_id, product_id, transaction_id, original_transaction_id, jws
-    )
-    values ($1::uuid, $2, $3, $4, $5)
-    on conflict (transaction_id) do nothing
-    `,
-    [
-      userId,
-      verified.productId,
-      verified.transactionId,
-      verified.originalTransactionId ||
-        (input.original_transaction_id
-          ? String(input.original_transaction_id).trim()
-          : null),
-      jws,
-    ]
+  const err = new Error(
+    'Ads App Store IAP is disabled. Top up the Matterya Ads wallet with Stripe.'
   );
-
-  return getCreateEntitlement(userId, null);
+  (err as any).code = 'ADS_IAP_DISABLED';
+  throw err;
 }
 
 export async function consumeCreateCredit(
