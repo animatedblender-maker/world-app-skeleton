@@ -20,3 +20,6 @@
 - Keep API contracts in `packages/api-client` (future codegen).
 - Keep platform-specific UI in each app.
 - Postgres is source of truth; Kafka is integration/fan-out, not a second source of truth.
+
+## Ads
+- Sparks standalone pages + Hubs pre-roll. Module map, density policy, and Phase 2 security backlog: [ads.md](./ads.md).

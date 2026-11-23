@@ -1503,7 +1503,8 @@ struct ReelsScrollViewer: View {
     /// Organic Sparks since last standalone ad (random gap keeps density light).
     @State private var organicSinceAd = 0
     /// First ad arrives after a short random run; later gaps stay sparse.
-    @State private var nextAdAfterOrganic = Int.random(in: 12...28)
+    /// Density ranges live in `AdDeliveryPolicy` (Services/AdsModels.swift).
+    @State private var nextAdAfterOrganic = Int.random(in: AdDeliveryPolicy.firstOrganicGap)
     @State private var isInsertingAd = false
     @State private var hasInsertedFirstAd = false
 
@@ -2128,7 +2129,7 @@ struct ReelsScrollViewer: View {
 
     /// Insert a sponsored video as its own Sparks page (random light density).
     private func considerStandaloneAdInsert(at index: Int) async {
-        guard !SubscriptionService.shared.isPremium else { return }
+        guard AdDeliveryPolicy.adsEnabled else { return }
         guard !isInsertingAd, posts.indices.contains(index) else { return }
         let current = posts[index]
         if current.isSponsoredAd {
@@ -2138,7 +2139,7 @@ struct ReelsScrollViewer: View {
         organicSinceAd += 1
         guard organicSinceAd >= nextAdAfterOrganic else { return }
         // Avoid stacking ads near each other in the upcoming window.
-        let upcoming = posts.suffix(from: index).prefix(18)
+        let upcoming = posts.suffix(from: index).prefix(AdDeliveryPolicy.upcomingAdAvoidWindow)
         if upcoming.contains(where: \.isSponsoredAd) {
             organicSinceAd = max(0, nextAdAfterOrganic - 25)
             return
@@ -2171,8 +2172,8 @@ struct ReelsScrollViewer: View {
         guard let slot else {
             // No eligible campaign — try again later without feeling spammy.
             nextAdAfterOrganic = hasInsertedFirstAd
-                ? Int.random(in: 100...160)
-                : Int.random(in: 18...36)
+                ? Int.random(in: AdDeliveryPolicy.emptyServeLaterGap)
+                : Int.random(in: AdDeliveryPolicy.emptyServeFirstGap)
             organicSinceAd = 0
             return
         }
@@ -2190,7 +2191,7 @@ struct ReelsScrollViewer: View {
         }
         organicSinceAd = 0
         hasInsertedFirstAd = true
-        nextAdAfterOrganic = Int.random(in: 85...140)
+        nextAdAfterOrganic = Int.random(in: AdDeliveryPolicy.laterOrganicGap)
         #if DEBUG
         print("[Sparks] appended standalone ad at \(posts.count - 1) nextGap=\(nextAdAfterOrganic)")
         #endif
