@@ -274,6 +274,27 @@ export const typeDefs = `#graphql
     product_id: String!
   }
 
+  """Prepaid Matterya Ads wallet (Stripe). Balance funds delivery at ~€0.10/impression."""
+  type AdsWallet {
+    balance_cents: Int!
+    currency: String!
+    has_payment_method: Boolean!
+    billing_configured: Boolean!
+    cost_per_impression_cents: Int!
+  }
+
+  type AdsCheckoutSession {
+    url: String!
+    kind: String!
+  }
+
+  input AdsWalletCheckoutInput {
+    """setup = save card; topup = add funds"""
+    kind: String!
+    """Required for topup — EUR cents (min 500 = €5)."""
+    amount_cents: Int
+  }
+
   type AdCreative {
     id: ID!
     campaign_id: ID!
@@ -652,6 +673,7 @@ export const typeDefs = `#graphql
     myAdAdvertiser: AdAdvertiser!
     myAdCampaigns: [AdCampaign!]!
     adCreateEntitlement: AdCreateEntitlement!
+    adsWallet: AdsWallet!
     adCampaignById(id: ID!): AdCampaign
     serveVideoAd(
       placement: String!
@@ -758,6 +780,8 @@ export const typeDefs = `#graphql
       original_transaction_id: String
       jws: String
     ): AdCreateEntitlement!
+    """Open Stripe Checkout to save a card (setup) or top up the Ads wallet (topup)."""
+    createAdsWalletCheckout(input: AdsWalletCheckoutInput!): AdsCheckoutSession!
     logAdImpression(impression_token: String!): AdEventResult!
     logAdClick(impression_token: String!): AdEventResult!
 

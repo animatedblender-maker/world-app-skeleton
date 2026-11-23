@@ -176,6 +176,7 @@ export async function serveVideoAd(
       coalesce(stats.click_count, 0)::int as click_count
     from public.ad_campaigns c
     join public.ad_creatives cr on cr.campaign_id = c.id
+    join public.ad_advertisers adv on adv.user_id = c.advertiser_user_id
     left join campaign_stats stats on stats.campaign_id = c.id
     where c.status = 'active'
       and (
@@ -187,6 +188,8 @@ export async function serveVideoAd(
       and cr.media_url ~* '\\.(mp4|webm|mov|m4v)(\\?.*)?(#.*)?$'
       and (c.start_at is null or c.start_at <= now())
       and (c.end_at is null or c.end_at >= now())
+      -- Prepaid wallet must cover at least one impression (€0.10).
+      and coalesce(adv.wallet_balance_cents, 0) >= 10
       and (
         c.daily_budget_cents <= 0
         or coalesce(stats.day_serves, 0) < greatest(1, c.daily_budget_cents / 10)

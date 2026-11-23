@@ -1,6 +1,7 @@
 import AVKit
 import PhotosUI
 import SwiftUI
+import UIKit
 
 struct AdsView: View {
     @State private var campaigns: [AdCampaign] = []
@@ -12,6 +13,8 @@ struct AdsView: View {
     @State private var busyCampaignIDs: Set<String> = []
     @State private var deletingCampaignID: String?
     @State private var billing = AdCampaignBilling.shared
+    @State private var wallet: AdsWalletModel?
+    @State private var walletBusy = false
 
     @State private var editingCampaignID: String?
     @State private var editingCreativeID: String?
@@ -58,16 +61,19 @@ struct AdsView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarColorScheme(.light, for: .navigationBar)
         .refreshable {
-            await billing.refresh()
+            await refreshWallet()
             await loadCampaigns()
         }
         .task {
-            await billing.refresh()
+            await refreshWallet()
             await loadCampaigns()
             try? await Task.sleep(nanoseconds: 900_000_000)
             await loadCampaigns(silent: true)
         }
         .onReceive(clock) { now = $0 }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            Task { await refreshWallet() }
+        }
         // accentBright is matte/off-white — on paper it made nav titles + controls invisible.
         .tint(Theme.ink)
         .preferredColorScheme(.light)
@@ -89,12 +95,69 @@ struct AdsView: View {
                 .font(.subheadline)
                 .foregroundStyle(Theme.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Campaign create is free. Delivery paces against the budget you enter.")
+            Text("Campaign create is free. Delivery spends from your prepaid wallet (~€0.10 per impression).")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Theme.success)
                 .padding(.top, 4)
+            walletCard
         }
         .adsCard()
+    }
+
+    private var walletCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Ads wallet")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(Theme.ink)
+                Spacer()
+                Text(wallet?.formattedBalance ?? "—")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(Theme.ink)
+            }
+            if let wallet {
+                Text(
+                    wallet.billingConfigured
+                    ? (wallet.hasPaymentMethod
+                       ? "Card on file · funds are used as ads deliver."
+                       : "Add a card, then top up to run Active campaigns.")
+                    : "Billing not configured yet (Stripe keys on server)."
+                )
+                .font(.caption)
+                .foregroundStyle(Theme.inkSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 8) {
+                walletButton("Add card", busy: walletBusy) {
+                    await openCheckout(kind: "setup", amountCents: nil)
+                }
+                walletButton("€20", busy: walletBusy) {
+                    await openCheckout(kind: "topup", amountCents: 2000)
+                }
+                walletButton("€50", busy: walletBusy) {
+                    await openCheckout(kind: "topup", amountCents: 5000)
+                }
+                walletButton("€100", busy: walletBusy) {
+                    await openCheckout(kind: "topup", amountCents: 10000)
+                }
+            }
+        }
+        .padding(.top, 8)
+    }
+
+    private func walletButton(_ title: String, busy: Bool, action: @escaping () async -> Void) -> some View {
+        Button {
+            Task { await action() }
+        } label: {
+            Text(title)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(Theme.ink)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(Theme.matte.opacity(0.9), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
     }
 
     // MARK: - Composer
@@ -237,9 +300,10 @@ struct AdsView: View {
                 }
                 Text(
                     String(
-                        format: "Estimates use Matterya’s current delivery rate (≈ €%.2f per impression, ~€%.0f CPM). Actual results vary by targeting, creative, and inventory.",
+                        format: "Estimates use Matterya’s rate (≈ €%.2f / impression, ~€%.0f CPM). Your wallet needs about €%.2f for the total budget. Actual results vary.",
                         snap.costPerImpressionEUR,
-                        snap.effectiveCPM
+                        snap.effectiveCPM,
+                        Double(snap.totalImpressions) * snap.costPerImpressionEUR
                     )
                 )
                 .font(.caption2)
@@ -531,6 +595,33 @@ struct AdsView: View {
     }
 
     // MARK: - Actions
+
+    private func refreshWallet() async {
+        do {
+            wallet = try await AdsService.shared.adsWallet()
+        } catch {
+            #if DEBUG
+            print("[Ads] wallet refresh failed: \(error.localizedDescription)")
+            #endif
+        }
+    }
+
+    private func openCheckout(kind: String, amountCents: Int?) async {
+        walletBusy = true
+        defer { walletBusy = false }
+        do {
+            let url = try await AdsService.shared.createAdsWalletCheckout(
+                kind: kind,
+                amountCents: amountCents
+            )
+            await UIApplication.shared.open(url)
+            successMessage = kind == "setup"
+                ? "Finish adding your card in the browser, then return here."
+                : "Finish payment in the browser, then return here — balance updates in a few seconds."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
 
     private func loadCampaigns(silent: Bool = false) async {
         if !silent { isLoading = true }

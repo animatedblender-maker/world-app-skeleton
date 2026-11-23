@@ -1,5 +1,6 @@
 import { pool } from '../../../db.js';
 import { creditStudioEarnFromAdImpression } from '../../../studio/studio.service.js';
+import { debitImpression } from './ads.wallet.js';
 
 /** Served tokens older than this cannot log view/click (replay window). */
 export const IMPRESSION_TOKEN_TTL_SECONDS = 2 * 60 * 60; // 2 hours
@@ -20,24 +21,42 @@ export async function logImpression(
   const { rows } = await pool.query<{
     id: string;
     post_id: string | null;
-    served_at: Date;
+    campaign_id: string;
+    advertiser_user_id: string;
   }>(
     `
-    update public.ad_impressions
+    update public.ad_impressions i
     set
-      viewed_at = coalesce(viewed_at, now()),
-      viewer_user_id = coalesce(viewer_user_id, $2::uuid)
-    where impression_token = $1
-      and served_at >= now() - ($3::int * interval '1 second')
+      viewed_at = coalesce(i.viewed_at, now()),
+      viewer_user_id = coalesce(i.viewer_user_id, $2::uuid)
+    from public.ad_campaigns c
+    where i.impression_token = $1
+      and i.campaign_id = c.id
+      and i.served_at >= now() - ($3::int * interval '1 second')
     returning
-      id::text as id,
-      post_id::text as post_id,
-      served_at
+      i.id::text as id,
+      i.post_id::text as post_id,
+      i.campaign_id::text as campaign_id,
+      c.advertiser_user_id::text as advertiser_user_id
     `,
     [token, userId, IMPRESSION_TOKEN_TTL_SECONDS]
   );
+  // Debit is idempotent on impression_id — safe on every call.
   const row = rows[0];
   if (!row) return false;
+
+  try {
+    await debitImpression({
+      advertiserUserId: row.advertiser_user_id,
+      campaignId: row.campaign_id,
+      impressionId: row.id,
+    });
+  } catch (err) {
+    console.error('[ads] wallet debit failed (non-fatal)', {
+      impression_id: row.id,
+      error: err,
+    });
+  }
 
   // Credit creator ledger once per impression (idempotent on source_ref).
   try {
@@ -68,21 +87,39 @@ export async function logClick(
     campaign_id: string;
     creative_id: string;
     viewer_user_id: string | null;
+    advertiser_user_id: string;
   }>(
     `
-    update public.ad_impressions
+    update public.ad_impressions i
     set
-      viewed_at = coalesce(viewed_at, now()),
-      clicked_at = coalesce(clicked_at, now()),
-      viewer_user_id = coalesce(viewer_user_id, $2::uuid)
-    where impression_token = $1
-      and served_at >= now() - ($3::int * interval '1 second')
-    returning id, campaign_id, creative_id, viewer_user_id
+      viewed_at = coalesce(i.viewed_at, now()),
+      clicked_at = coalesce(i.clicked_at, now()),
+      viewer_user_id = coalesce(i.viewer_user_id, $2::uuid)
+    from public.ad_campaigns c
+    where i.impression_token = $1
+      and i.campaign_id = c.id
+      and i.served_at >= now() - ($3::int * interval '1 second')
+    returning
+      i.id,
+      i.campaign_id,
+      i.creative_id,
+      i.viewer_user_id,
+      c.advertiser_user_id::text as advertiser_user_id
     `,
     [token, userId, IMPRESSION_TOKEN_TTL_SECONDS]
   );
   const row = rows[0];
   if (!row) return false;
+
+  try {
+    await debitImpression({
+      advertiserUserId: row.advertiser_user_id,
+      campaignId: String(row.campaign_id),
+      impressionId: String(row.id),
+    });
+  } catch (err) {
+    console.error('[ads] wallet debit on click failed (non-fatal)', err);
+  }
 
   // One click row per impression (unique index); ignore duplicates.
   await pool.query(

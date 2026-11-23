@@ -11,10 +11,13 @@ Teammate map for Matterya video ads. Phase 1 organized modules; Phase 2 hardened
 
 Premium (`SubscriptionService.isPremium`) skips ads on both surfaces via `AdDeliveryPolicy.adsEnabled`.
 
-### Budget model (client-set)
-- Advertisers set **total** and **daily** budget in EUR. Campaign **create is free** (no App Store create-IAP).
-- Delivery pacing in `ads.serve.ts` uses **€0.10 per impression** (`budget_cents / 10`). iOS `AdsBudgetEstimate` mirrors that for estimated impressions / views (~85% view rate).
-- Real money collection (Stripe / invoicing) can plug in later; do not resurrect fixed create SKUs for ad spend.
+### Budget + prepaid wallet (client-set spend)
+- Advertisers set **total** and **daily** budget in EUR. Campaign **create is free**.
+- **Prepaid wallet (Stripe Checkout):** Add card (`setup`) + top up (`topup` €20/€50/€100). Module: `ads.wallet.ts`. Webhook: `POST /webhooks/stripe`.
+- Delivery costs **€0.10 / impression** (`ADS_COST_PER_IMPRESSION_CENTS`). Serve requires `wallet_balance_cents >= 10`. First counted view debits the wallet once per impression (ledger idempotent).
+- iOS estimates (`AdsBudgetEstimate`) use the same rate. UI: Ads wallet card on `AdsView`.
+- Env: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, optional `ADS_WALLET_RETURN_URL` (default `https://matterya.com/ads/wallet-return`).
+- Do not resurrect App Store create-IAP for ad spend.
 
 ## iOS module map
 

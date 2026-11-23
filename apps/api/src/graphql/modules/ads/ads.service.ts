@@ -10,6 +10,12 @@ import {
   type AdCreateEntitlement,
 } from './ads.billing.js';
 import {
+  createWalletCheckout,
+  getWallet,
+  type AdsCheckoutSession,
+  type AdsWallet,
+} from './ads.wallet.js';
+import {
   debugServeVideoAd as serveDebugServeVideoAd,
   serveVideoAd as serveServeVideoAd,
   type ServeVideoAdInput,
@@ -99,6 +105,26 @@ export class AdsService {
     jwtEmail?: string | null
   ): Promise<AdCreateEntitlement> {
     return billingGetCreateEntitlement(userId, jwtEmail);
+  }
+
+  async getWallet(userId: string): Promise<AdsWallet> {
+    return getWallet(userId);
+  }
+
+  async createWalletCheckout(
+    userId: string,
+    input: { kind: string; amount_cents?: number | null },
+    email?: string | null
+  ): Promise<AdsCheckoutSession> {
+    const kind = String(input.kind ?? '').trim().toLowerCase();
+    if (kind !== 'setup' && kind !== 'topup') {
+      throw new Error('Checkout kind must be setup or topup.');
+    }
+    return createWalletCheckout(
+      userId,
+      { kind, amount_cents: input.amount_cents },
+      email
+    );
   }
 
   async redeemCreatePurchase(

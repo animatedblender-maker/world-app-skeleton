@@ -34,6 +34,20 @@ enum AdDeliveryPolicy {
     static let estimatedViewRate: Double = 0.85
 }
 
+struct AdsWalletModel: Sendable, Equatable {
+    let balanceCents: Int
+    let currency: String
+    let hasPaymentMethod: Bool
+    let billingConfigured: Bool
+    let costPerImpressionCents: Int
+
+    var balanceEUR: Double { Double(balanceCents) / 100.0 }
+
+    var formattedBalance: String {
+        String(format: "€%.2f", balanceEUR)
+    }
+}
+
 /// Facebook-style reach estimates from advertiser-set budgets.
 enum AdsBudgetEstimate {
     struct Snapshot: Equatable {

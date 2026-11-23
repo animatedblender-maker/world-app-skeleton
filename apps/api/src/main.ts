@@ -273,6 +273,38 @@ function hasAdminAccess(req: Request): boolean {
   return !!ADMIN_PORTAL_KEY && key === ADMIN_PORTAL_KEY;
 }
 
+// Stripe webhooks need the raw body for signature verification — before json().
+app.post(
+  '/webhooks/stripe',
+  express.raw({ type: 'application/json' }),
+  async (req: Request, res: Response) => {
+    try {
+      const { handleStripeWebhook } = await import(
+        './graphql/modules/ads/ads.wallet.js'
+      );
+      const signature = req.headers['stripe-signature'];
+      const raw = Buffer.isBuffer(req.body)
+        ? req.body
+        : Buffer.from(typeof req.body === 'string' ? req.body : '');
+      await handleStripeWebhook(
+        raw,
+        Array.isArray(signature) ? signature[0] : signature
+      );
+      res.json({ received: true });
+    } catch (err: any) {
+      const code = err?.code;
+      const status =
+        code === 'STRIPE_SIGNATURE_INVALID'
+          ? 400
+          : code === 'ADS_BILLING_NOT_CONFIGURED'
+            ? 503
+            : 400;
+      console.error('[stripe.webhook]', err?.message ?? err);
+      res.status(status).send(`Webhook Error: ${err?.message ?? 'failed'}`);
+    }
+  }
+);
+
 app.use(express.json({ limit: '200kb' }));
 app.use(express.urlencoded({ extended: false, limit: '32kb' }));
 app.use(

@@ -83,6 +83,73 @@ final class AdsService {
         return result.myAdCampaigns.map(\.toModel)
     }
 
+    func adsWallet() async throws -> AdsWalletModel {
+        struct Response: Decodable {
+            let adsWallet: Payload
+            struct Payload: Decodable {
+                let balance_cents: Int?
+                let balanceCents: Int?
+                let currency: String?
+                let has_payment_method: Bool?
+                let hasPaymentMethod: Bool?
+                let billing_configured: Bool?
+                let billingConfigured: Bool?
+                let cost_per_impression_cents: Int?
+                let costPerImpressionCents: Int?
+            }
+        }
+        let query = """
+        query {
+          adsWallet {
+            balance_cents
+            currency
+            has_payment_method
+            billing_configured
+            cost_per_impression_cents
+          }
+        }
+        """
+        let result: Response = try await gql.authenticatedRequest(query: query)
+        let p = result.adsWallet
+        return AdsWalletModel(
+            balanceCents: p.balance_cents ?? p.balanceCents ?? 0,
+            currency: p.currency ?? "eur",
+            hasPaymentMethod: p.has_payment_method ?? p.hasPaymentMethod ?? false,
+            billingConfigured: p.billing_configured ?? p.billingConfigured ?? false,
+            costPerImpressionCents: p.cost_per_impression_cents ?? p.costPerImpressionCents ?? 10
+        )
+    }
+
+    func createAdsWalletCheckout(kind: String, amountCents: Int?) async throws -> URL {
+        struct Response: Decodable {
+            let createAdsWalletCheckout: Payload
+            struct Payload: Decodable {
+                let url: String
+                let kind: String?
+            }
+        }
+        let mutation = """
+        mutation($input: AdsWalletCheckoutInput!) {
+          createAdsWalletCheckout(input: $input) {
+            url
+            kind
+          }
+        }
+        """
+        var input: [String: Any] = ["kind": kind]
+        if let amountCents {
+            input["amount_cents"] = amountCents
+        }
+        let result: Response = try await gql.authenticatedRequest(
+            query: mutation,
+            variables: ["input": input]
+        )
+        guard let url = URL(string: result.createAdsWalletCheckout.url) else {
+            throw URLError(.badURL)
+        }
+        return url
+    }
+
     func adCreateEntitlement() async throws -> AdCreateEntitlementModel {
         struct Response: Decodable {
             let adCreateEntitlement: Payload

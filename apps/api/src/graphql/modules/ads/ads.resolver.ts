@@ -42,6 +42,10 @@ export const adsResolvers = {
       const user = requireAuth(ctx);
       return await svc().getCreateEntitlement(user.id, user.email);
     },
+    adsWallet: async (_: any, __: any, ctx: Context) => {
+      const user = requireAuth(ctx);
+      return await svc().getWallet(user.id);
+    },
     adCampaignById: async (_: any, args: { id: string }, ctx: Context) => {
       const user = requireAuth(ctx);
       if (!args?.id) throw new Error('id is required.');
@@ -73,6 +77,25 @@ export const adsResolvers = {
         throw new GraphQLError(error?.message ?? 'Failed to create ad campaign.', {
           extensions: {
             code: error?.code === 'ADS_PURCHASE_REQUIRED' ? 'ADS_PURCHASE_REQUIRED' : 'BAD_USER_INPUT',
+          },
+        });
+      }
+    },
+    createAdsWalletCheckout: async (
+      _: any,
+      args: { input: { kind: string; amount_cents?: number | null } },
+      ctx: Context
+    ) => {
+      const user = requireAuth(ctx);
+      try {
+        return await svc().createWalletCheckout(user.id, args.input, user.email);
+      } catch (error: any) {
+        throw new GraphQLError(error?.message ?? 'Failed to start Ads checkout.', {
+          extensions: {
+            code:
+              error?.code === 'ADS_BILLING_NOT_CONFIGURED'
+                ? 'ADS_BILLING_NOT_CONFIGURED'
+                : 'BAD_USER_INPUT',
           },
         });
       }
