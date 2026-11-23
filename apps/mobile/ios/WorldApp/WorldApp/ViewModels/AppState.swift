@@ -1599,6 +1599,11 @@ final class AppState {
     /// YouTube: animate the film frame out (ease-out), never remount AV.
     func expandHubPlayback() {
         guard hubPlaybackPost != nil else { return }
+        // Prefetch so skippable pre-roll can start from cache (no GraphQL wait).
+        AdsService.shared.prefetchServe(
+            placement: "video",
+            countryCode: hubPlaybackPost?.countryCode
+        )
         rememberHubPlaybackChatReturnIfNeeded()
         hubPlaybackPlaying = true
         // Clear pull so watch chrome is fully visible during expand (no canvas flash).
@@ -2048,6 +2053,11 @@ final class AppState {
         fromFeedPost: CountryPost? = nil,
         seedPosts: [CountryPost] = []
     ) {
+        // Warm Sparks ad inventory so standalone cards insert without a cold GraphQL wait.
+        AdsService.shared.prefetchServe(
+            placement: "reel",
+            countryCode: start.countryCode ?? currentProfile?.countryCode
+        )
         // Mark continue + sync-export live feed player into the warm pool (same runloop).
         var handoffIDs = [start.id]
         if let from = fromFeedPost { handoffIDs.append(from.id) }

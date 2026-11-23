@@ -286,7 +286,23 @@ final class AdsService {
         if let postID { variables["post_id"] = postID }
 
         let result: Response = try await gql.authenticatedRequest(query: query, variables: variables)
-        return result.serveVideoAd?.toModel
+        let slot = result.serveVideoAd?.toModel
+        if let slot {
+            AdServeCache.store(slot, placement: placement)
+        }
+        return slot
+    }
+
+    /// Warm the Hubs/Sparks ad cache so the next pre-roll starts without a GraphQL wait.
+    func prefetchServe(placement: String = "video", countryCode: String? = nil) {
+        Task {
+            _ = try? await serveVideoAd(
+                placement: placement,
+                countryCode: countryCode,
+                contentCountryCode: countryCode,
+                postID: nil
+            )
+        }
     }
 
     func logImpression(impressionToken: String) async throws -> Bool {

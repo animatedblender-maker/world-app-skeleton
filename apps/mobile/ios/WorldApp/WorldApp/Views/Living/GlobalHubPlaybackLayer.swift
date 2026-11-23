@@ -602,6 +602,12 @@ struct GlobalHubPlaybackLayer: View {
         dragOffset = 0
         isPullingMinimize = false
         forceMiniLayout = false
+        // Warm ad cache so pre-roll starts without waiting on GraphQL.
+        AdsService.shared.prefetchServe(
+            placement: "video",
+            countryCode: appState.hubPlaybackPost?.countryCode
+                ?? appState.currentProfile?.countryCode
+        )
         appState.expandHubPlayback()
     }
 

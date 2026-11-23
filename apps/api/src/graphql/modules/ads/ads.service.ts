@@ -1014,10 +1014,19 @@ export class AdsService {
       body: String(input?.body ?? '').trim() || null,
       media_kind: mediaKind,
       media_url: mediaUrl,
-      click_url: String(input?.click_url ?? '').trim() || null,
+      click_url: this.normalizeClickUrl(input?.click_url ?? null),
       cta_label: String(input?.cta_label ?? '').trim() || null,
       duration_seconds: Math.max(3, Math.min(30, Math.floor(Number(input?.duration_seconds ?? 8) || 8))),
     };
+  }
+
+  /** `matterya.com` → `https://matterya.com` so mobile open() works. */
+  private normalizeClickUrl(raw: string | null): string | null {
+    const value = String(raw ?? '').trim();
+    if (!value) return null;
+    if (/^https?:\/\//i.test(value)) return value;
+    if (/^\/\//.test(value)) return `https:${value}`;
+    return `https://${value}`;
   }
 
   private isDirectVideoUrl(url: string): boolean {

@@ -3,6 +3,33 @@ import AVKit
 import SwiftUI
 import UIKit
 
+/// In-memory last-serve cache so Hubs pre-roll can start playing immediately
+/// while a fresh GraphQL serve refreshes in the background.
+@MainActor
+enum AdServeCache {
+    private static var byPlacement: [String: (slot: AdSlot, at: Date)] = [:]
+    private static let maxAge: TimeInterval = 120
+
+    static func peek(placement: String) -> AdSlot? {
+        guard let entry = byPlacement[placement],
+              Date().timeIntervalSince(entry.at) < maxAge
+        else { return nil }
+        return entry.slot
+    }
+
+    static func store(_ slot: AdSlot, placement: String) {
+        byPlacement[placement] = (slot, Date())
+        // Video campaigns also feed Sparks reel requests.
+        if placement == "video" {
+            byPlacement["reel"] = (slot, Date())
+        }
+    }
+
+    static func clear() {
+        byPlacement.removeAll()
+    }
+}
+
 struct AdPrerollView: View {
     let placement: String
     var countryCode: String?
@@ -26,75 +53,72 @@ struct AdPrerollView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if isLoading {
-                ProgressView()
-                    .tint(.white)
-            } else if let adSlot, let player {
-                VideoPlayer(player: player)
-                    .ignoresSafeArea()
-                    .disabled(true)
-
-                LinearGradient(colors: [.black.opacity(0.35), .clear, .black.opacity(0.55)], startPoint: .top, endPoint: .bottom)
+            if let player {
+                AdFillPlayerView(player: player)
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
+            } else if isLoading {
+                ProgressView()
+                    .tint(Theme.matte)
+            }
 
-                VStack {
-                    HStack {
-                        Text("Sponsored")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(.black.opacity(0.55), in: Capsule())
-                        Spacer()
-                        if skipReady {
-                            Button("Skip") { finishAd() }
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(.black.opacity(0.55), in: Capsule())
-                        } else if skipSecondsLeft > 0 {
-                            Text("Skip in \(skipSecondsLeft)s")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.white.opacity(0.9))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(.black.opacity(0.55), in: Capsule())
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
+            // Soft vignette — never a hard black letterbox band over the film.
+            LinearGradient(
+                colors: [.black.opacity(0.28), .clear, .black.opacity(0.5)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
 
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Sponsored")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Theme.ink)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Theme.matte.opacity(0.92), in: Capsule())
                     Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
 
+                Spacer(minLength: 0)
+
+                HStack(alignment: .bottom, spacing: 12) {
                     VStack(alignment: .leading, spacing: 10) {
-                        if let title = adSlot.creative.title, !title.isEmpty {
+                        if let title = adSlot?.creative.title, !title.isEmpty {
                             Text(title)
                                 .font(.headline.weight(.bold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(Theme.matte)
                         }
-                        if let body = adSlot.creative.body, !body.isEmpty {
+                        if let body = adSlot?.creative.body, !body.isEmpty {
                             Text(body)
                                 .font(.subheadline)
-                                .foregroundStyle(.white.opacity(0.92))
+                                .foregroundStyle(Theme.matte.opacity(0.92))
                                 .lineLimit(3)
                         }
-                        if let clickURL = adSlot.creative.clickURL, !clickURL.isEmpty {
-                            Button(adSlot.creative.ctaLabel ?? "Learn more") {
+                        if let clickURL = adSlot?.creative.clickURL, !clickURL.isEmpty {
+                            Button {
                                 openAdLink(clickURL)
+                            } label: {
+                                Text(adSlot?.creative.ctaLabel ?? "Learn more")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(Theme.ink)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 10)
+                                    .background(Theme.matte, in: Capsule())
                             }
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
-                            .background(Theme.facebookBlue, in: RoundedRectangle(cornerRadius: Theme.controlRadius))
+                            .buttonStyle(.plain)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(20)
-                    .padding(.bottom, 28)
+
+                    skipControl
                 }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 28)
             }
         }
         .task { await prepareAd() }
@@ -104,76 +128,121 @@ struct AdPrerollView: View {
         }
     }
 
-    private func prepareAd() async {
-        isLoading = true
-        defer { isLoading = false }
+    @ViewBuilder
+    private var skipControl: some View {
+        if skipReady {
+            Button("Skip") { finishAd() }
+                .font(.caption.weight(.bold))
+                .foregroundStyle(Theme.ink)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Theme.matte.opacity(0.95), in: Capsule())
+                .buttonStyle(.plain)
+        } else if skipSecondsLeft > 0, player != nil {
+            Text("Skip in \(skipSecondsLeft)s")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.ink.opacity(0.85))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Theme.matte.opacity(0.75), in: Capsule())
+        }
+    }
 
+    private func prepareAd() async {
         if SubscriptionService.shared.isPremium {
             onComplete()
             return
         }
 
+        // Instant path: play cached creative while a fresh serve runs.
+        if let cached = AdServeCache.peek(placement: placement),
+           let url = Self.mediaURL(from: cached.creative.mediaURL) {
+            mount(slot: cached, url: url)
+            isLoading = false
+            Task { await refreshServeInBackground() }
+            return
+        }
+
+        isLoading = true
         do {
-            // API cold starts can exceed 3s — short timeout skipped every Hubs pre-roll.
-            var slot = try await withTimeout(seconds: 12) {
-                try await AdsService.shared.serveVideoAd(
-                    placement: placement,
-                    countryCode: countryCode,
-                    contentCountryCode: contentCountryCode,
-                    postID: postID
-                )
-            }
-
-            if slot == nil, placement == "reel" {
-                let attempts: [(String?, String?)] = [
-                    (countryCode, contentCountryCode),
-                    (contentCountryCode, contentCountryCode),
-                    (countryCode, countryCode),
-                ]
-                for attempt in attempts where slot == nil {
-                    slot = try await AdsService.shared.serveVideoAd(
-                        placement: "video",
-                        countryCode: attempt.0,
-                        contentCountryCode: attempt.1,
-                        postID: postID
-                    )
-                }
-            }
-
-            guard let slot, let url = URL(string: slot.creative.mediaURL) else {
+            let slot = try await fetchSlot()
+            guard let slot, let url = Self.mediaURL(from: slot.creative.mediaURL) else {
+                isLoading = false
                 onComplete()
                 return
             }
-
-            adSlot = slot
-            skipAfterSeconds = max(5, slot.skipAfterSeconds)
-            skipSecondsLeft = skipAfterSeconds
-            skipReady = false
-
-            let avPlayer = AVPlayer(url: url)
-            player = avPlayer
-
-            endObserver = NotificationCenter.default.addObserver(
-                forName: .AVPlayerItemDidPlayToEndTime,
-                object: avPlayer.currentItem,
-                queue: .main
-            ) { _ in
-                finishAd()
-            }
-
-            timeObserver = avPlayer.addPeriodicTimeObserver(
-                forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
-                queue: .main
-            ) { _ in
-                if avPlayer.rate > 0 {
-                    markImpression()
-                }
-            }
-
-            avPlayer.play()
+            AdServeCache.store(slot, placement: placement)
+            mount(slot: slot, url: url)
+            isLoading = false
         } catch {
+            isLoading = false
             onComplete()
         }
+    }
+
+    private func refreshServeInBackground() async {
+        do {
+            if let slot = try await fetchSlot() {
+                AdServeCache.store(slot, placement: placement)
+            }
+        } catch {
+            // Keep playing the cached creative.
+        }
+    }
+
+    private func fetchSlot() async throws -> AdSlot? {
+        var slot = try await withTimeout(seconds: 8) {
+            try await AdsService.shared.serveVideoAd(
+                placement: placement,
+                countryCode: countryCode,
+                contentCountryCode: contentCountryCode,
+                postID: postID
+            )
+        }
+        if slot == nil, placement == "reel" {
+            slot = try await AdsService.shared.serveVideoAd(
+                placement: "video",
+                countryCode: countryCode,
+                contentCountryCode: contentCountryCode,
+                postID: postID
+            )
+        }
+        return slot
+    }
+
+    private func mount(slot: AdSlot, url: URL) {
+        cleanupPlayer()
+        adSlot = slot
+        skipAfterSeconds = max(3, min(5, slot.skipAfterSeconds))
+        skipSecondsLeft = skipAfterSeconds
+        skipReady = false
+        impressionLogged = false
+
+        let item = AVPlayerItem(url: url)
+        let avPlayer = AVPlayer(playerItem: item)
+        // Prefer immediate start — preferPreciseDurationAndTiming off by default.
+        avPlayer.automaticallyWaitsToMinimizeStalling = false
+        player = avPlayer
+
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { _ in
+            finishAd()
+        }
+
+        timeObserver = avPlayer.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
+            queue: .main
+        ) { _ in
+            if avPlayer.rate > 0 {
+                markImpression()
+            }
+        }
+
+        avPlayer.play()
+        markImpression()
     }
 
     private func updateSkipState() {
@@ -193,11 +262,14 @@ struct AdPrerollView: View {
     }
 
     private func openAdLink(_ urlString: String) {
-        guard let token = adSlot?.impressionToken else { return }
-        Task { try? await AdsService.shared.logClick(impressionToken: token) }
-        if let url = URL(string: urlString) {
-            UIApplication.shared.open(url)
+        let token = adSlot?.impressionToken
+        Task {
+            if let token {
+                try? await AdsService.shared.logClick(impressionToken: token)
+            }
         }
+        guard let url = Self.normalizedURL(urlString) else { return }
+        UIApplication.shared.open(url, options: [:], completionHandler: nil)
     }
 
     private func finishAd() {
@@ -234,6 +306,54 @@ struct AdPrerollView: View {
         player?.pause()
         player = nil
     }
+
+    static func mediaURL(from raw: String) -> URL? {
+        normalizedURL(raw)
+    }
+
+    /// `matterya.com` (no scheme) must become https://… or open() does nothing.
+    static func normalizedURL(_ raw: String) -> URL? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let url = URL(string: trimmed), url.scheme != nil {
+            return url
+        }
+        return URL(string: "https://\(trimmed)")
+    }
+}
+
+/// Aspect-fill AV layer — no black letterbox bars like stock `VideoPlayer`.
+private struct AdFillPlayerView: UIViewRepresentable {
+    let player: AVPlayer
+
+    func makeUIView(context: Context) -> AdPlayerUIView {
+        let view = AdPlayerUIView()
+        view.playerLayer.videoGravity = .resizeAspectFill
+        view.playerLayer.player = player
+        return view
+    }
+
+    func updateUIView(_ uiView: AdPlayerUIView, context: Context) {
+        if uiView.playerLayer.player !== player {
+            uiView.playerLayer.player = player
+        }
+        uiView.playerLayer.videoGravity = .resizeAspectFill
+    }
+}
+
+private final class AdPlayerUIView: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .black
+        playerLayer.videoGravity = .resizeAspectFill
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 }
 
 /// Standalone Sparks ad card — its own swipe page, never an overlay on organic Sparks.
@@ -252,16 +372,17 @@ struct SparkAdStandaloneCard: View {
         ZStack {
             Color.black
             if let player {
-                VideoPlayer(player: player)
-                    .disabled(true)
+                AdFillPlayerView(player: player)
                     .ignoresSafeArea()
-            } else if let url = post.playableVideoURL ?? post.mediaURL.flatMap(URL.init(string:)) {
+                    .allowsHitTesting(false)
+            } else if let url = post.playableVideoURL
+                ?? AdPrerollView.normalizedURL(post.mediaURL ?? "") {
                 Color.black
                     .task(id: post.id) { mount(url: url) }
             }
 
             LinearGradient(
-                colors: [.black.opacity(0.4), .clear, .black.opacity(0.62)],
+                colors: [.black.opacity(0.32), .clear, .black.opacity(0.55)],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -271,17 +392,17 @@ struct SparkAdStandaloneCard: View {
                 HStack {
                     Text("Sponsored")
                         .font(.caption.weight(.bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Theme.ink)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .background(.black.opacity(0.55), in: Capsule())
+                        .background(Theme.matte.opacity(0.92), in: Capsule())
                     Spacer()
                     Text("Swipe up")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .foregroundStyle(Theme.ink.opacity(0.85))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .background(.black.opacity(0.45), in: Capsule())
+                        .background(Theme.matte.opacity(0.75), in: Capsule())
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 56)
@@ -292,23 +413,26 @@ struct SparkAdStandaloneCard: View {
                     if let title = post.title, !title.isEmpty {
                         Text(title)
                             .font(.headline.weight(.bold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Theme.matte)
                     }
                     if !post.body.isEmpty {
                         Text(post.body)
                             .font(.subheadline)
-                            .foregroundStyle(.white.opacity(0.92))
+                            .foregroundStyle(Theme.matte.opacity(0.92))
                             .lineLimit(3)
                     }
                     if let click = post.linkURL, !click.isEmpty {
-                        Button(post.linkTitle ?? "Learn more") {
+                        Button {
                             openLink(click)
+                        } label: {
+                            Text(post.linkTitle ?? "Learn more")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.ink)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+                                .background(Theme.matte, in: Capsule())
                         }
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(Theme.facebookBlue, in: RoundedRectangle(cornerRadius: Theme.controlRadius))
+                        .buttonStyle(.plain)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -329,11 +453,13 @@ struct SparkAdStandaloneCard: View {
 
     private func mount(url: URL) {
         cleanup()
-        let av = AVPlayer(url: url)
+        let item = AVPlayerItem(url: url)
+        let av = AVPlayer(playerItem: item)
+        av.automaticallyWaitsToMinimizeStalling = false
         player = av
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
-            object: av.currentItem,
+            object: item,
             queue: .main
         ) { _ in
             av.seek(to: .zero)
@@ -361,9 +487,8 @@ struct SparkAdStandaloneCard: View {
         if let token = slot?.impressionToken ?? post.externalRefID {
             Task { try? await AdsService.shared.logClick(impressionToken: token) }
         }
-        if let url = URL(string: urlString) {
-            UIApplication.shared.open(url)
-        }
+        guard let url = AdPrerollView.normalizedURL(urlString) else { return }
+        UIApplication.shared.open(url, options: [:], completionHandler: nil)
     }
 
     private func cleanup() {
