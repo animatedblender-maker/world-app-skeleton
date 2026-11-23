@@ -1,4 +1,5 @@
 import { pool } from '../../../db.js';
+import { verifyStoreKitTransactionJws } from './ads.apple-jws.js';
 
 /** StoreKit consumable — pay once per new campaign create (not a subscription). */
 export const AD_CAMPAIGN_CREATE_PRODUCT_ID =
@@ -26,25 +27,6 @@ export type AdCreateEntitlement = {
   credits_available: number;
   product_id: string;
 };
-
-/** Decode StoreKit 2 JWS payload (middle segment) without full cert verification. */
-export function decodeAppleJwsPayload(
-  jws: string
-): Record<string, unknown> | null {
-  try {
-    const parts = String(jws).split('.');
-    if (parts.length < 2) return null;
-    const b64 = parts[1]!.replace(/-/g, '+').replace(/_/g, '/');
-    const pad = b64.length % 4 === 0 ? '' : '='.repeat(4 - (b64.length % 4));
-    const json = Buffer.from(b64 + pad, 'base64').toString('utf8');
-    const parsed = JSON.parse(json);
-    return parsed && typeof parsed === 'object'
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
 
 export async function resolveUserEmail(
   userId: string,
@@ -93,8 +75,9 @@ export async function getCreateEntitlement(
 }
 
 /**
- * Redeem a StoreKit 2 consumable purchase into one unused create credit.
- * MVP trusts the client JWS payload fields after basic checks; transaction_id is unique.
+ * Redeem a StoreKit 2 consumable into one unused create credit.
+ * Requires a cryptographically verified JWS (Apple Root CA G3 + leaf signature).
+ * Client-supplied product/transaction ids must match the verified payload.
  */
 export async function redeemCreatePurchase(
   userId: string,
@@ -114,24 +97,17 @@ export async function redeemCreatePurchase(
     throw new Error('transaction_id is required.');
   }
 
-  // Optional: parse JWS payload (middle segment) for product / bundle sanity.
   const jws = input.jws != null ? String(input.jws).trim() : '';
-  if (jws) {
-    const payload = decodeAppleJwsPayload(jws);
-    if (payload) {
-      const claimedProduct = String(payload.productId ?? '').trim();
-      if (claimedProduct && claimedProduct !== AD_CAMPAIGN_CREATE_PRODUCT_ID) {
-        throw new Error('Purchase product mismatch.');
-      }
-      const bundle = String(payload.bundleId ?? '').trim();
-      if (bundle && bundle !== 'com.matterya.worldapp') {
-        throw new Error('Purchase bundle mismatch.');
-      }
-      const claimedTx = String(payload.transactionId ?? '').trim();
-      if (claimedTx && claimedTx !== transactionId) {
-        throw new Error('Purchase transaction mismatch.');
-      }
-    }
+  if (!jws) {
+    throw new Error('Signed App Store transaction (jws) is required.');
+  }
+
+  const verified = await verifyStoreKitTransactionJws(jws);
+  if (verified.productId !== productId) {
+    throw new Error('Purchase product mismatch.');
+  }
+  if (verified.transactionId !== transactionId) {
+    throw new Error('Purchase transaction mismatch.');
   }
 
   await pool.query(
@@ -144,12 +120,13 @@ export async function redeemCreatePurchase(
     `,
     [
       userId,
-      productId,
-      transactionId,
-      input.original_transaction_id
-        ? String(input.original_transaction_id).trim()
-        : null,
-      jws || null,
+      verified.productId,
+      verified.transactionId,
+      verified.originalTransactionId ||
+        (input.original_transaction_id
+          ? String(input.original_transaction_id).trim()
+          : null),
+      jws,
     ]
   );
 

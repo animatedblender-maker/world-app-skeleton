@@ -1,6 +1,6 @@
 # Ads (Sparks + Hubs)
 
-Teammate map for Matterya video ads. **Phase 1** = organize modules. **Phase 2** = security hardening (see below). Behavior must stay the same when you move code.
+Teammate map for Matterya video ads. Phase 1 organized modules; Phase 2 hardened security (shipped).
 
 ## Surfaces
 
@@ -18,6 +18,7 @@ Services/AdsModels.swift     AdDeliveryPolicy, AdCreative/Campaign/Slot,
                              CountryPost.sponsoredAd, SparkAdRegistry,
                              AdServeCache, AdURL
 Services/AdsService.swift    GraphQL client (serve / impression / click / CRUD)
+Services/AdCampaignBilling.swift  StoreKit purchase → redeem with JWS
 Views/Ads/AdPrerollView.swift     Hubs pre-roll only
 Views/Ads/SparkAdCard.swift       Sparks standalone page
 Views/Ads/AdPlayerSurface.swift   AdFillPlayerView (aspectFill — no black letterbox)
@@ -38,9 +39,9 @@ Views/Reels/ReelsVerticalFeed.swift   density insert using AdDeliveryPolicy
 | `skipAfterSecondsClamp` | Client clamp of server skip delay |
 | `serveTimeoutSeconds` | Cold GraphQL serve timeout |
 
-### URL open
+### URL open (iOS)
 
-Always use `AdURL.normalized(_:)` / `AdURL.media(_:)`. Bare hosts (`matterya.com`) become `https://…`. Non-http(s) schemes are rejected on iOS.
+Always use `AdURL.normalized(_:)` / `AdURL.media(_:)`. Bare hosts become `https://…`. Rejects non-http(s), `javascript:` / `data:` / `file:`, credentials-in-URL, empty host, length &gt; 2048.
 
 ## API module map
 
@@ -49,12 +50,28 @@ apps/api/src/graphql/modules/ads/
   ads.resolver.ts       GraphQL entry (keep thin)
   ads.service.ts        Facade + campaign/creative CRUD
   ads.serve.ts          serveVideoAd, pacing, budget
-  ads.attribution.ts    logImpression, logClick
-  ads.billing.ts        IAP create-credit, free-email entitlement
-  ads.urls.ts           normalizeClickUrl, country codes
+  ads.attribution.ts    logImpression, logClick (TTL + unique click)
+  ads.billing.ts        IAP create-credit redeem (requires verified JWS)
+  ads.apple-jws.ts      StoreKit 2 JWS verify (x5c → Apple Root CA G3)
+  ads.urls.ts           normalizeClickUrl / normalizeMediaUrl / country codes
 ```
 
-Resolver keeps importing `AdsService` from `ads.service.ts`. New serve/attribution logic goes in the focused modules; the facade re-exports for callers.
+Resolver keeps importing `AdsService` from `ads.service.ts`.
+
+## Security (Phase 2 — shipped)
+
+| ID | Control | Where |
+|----|---------|--------|
+| T3 | Redeem requires StoreKit JWS; signature + Apple Root CA G3 chain; product/bundle/tx match verified payload | `ads.apple-jws.ts`, `ads.billing.ts` |
+| T2 | Click/media URLs http(s) only; no credentials; block localhost/private hosts; re-normalize on serve | `ads.urls.ts`, createCreative, serve map, iOS `AdURL` |
+| T1 | Impression/click tokens must be UUID shape; 2h TTL from `served_at`; one `ad_clicks` row per impression | `ads.attribution.ts`, migration `20261123120000_ad_clicks_impression_unique.sql` |
+| T4+ | `debugServeVideoAd` disabled in production unless `ADS_DEBUG_SERVE=1`; server budget/pacing remains source of truth in `ads.serve.ts` | resolver + serve |
+
+### Ops notes
+
+- Free create emails: default owner + `ADS_FREE_CREATE_EMAILS` env (comma-separated).
+- Apply migration `20261123120000_ad_clicks_impression_unique.sql` on every environment (prod applied with Phase 2 ship).
+- Do **not** restore decode-only JWS redeem paths.
 
 ## Product rules (do not break)
 
@@ -64,26 +81,14 @@ Resolver keeps importing `AdsService` from `ads.service.ts`. New serve/attributi
 4. Player is **aspect fill** (`AdFillPlayerView`), not stock `VideoPlayer` letterbox.
 5. Skip control is **bottom-right**; Learn more is Matterya matte capsule on ink text.
 
-## Phase 2 security backlog (do not ship as “done” in Phase 1)
-
-Discussed threat model for future PRs (order of attack):
-
-| ID | Risk | Direction |
-|----|------|-----------|
-| T3 | IAP / create-credit: client-trusted JWS decode | Verify with App Store Server API; never trust decoded payload alone |
-| T2 | Click URL open / stored `click_url` | Allowlist schemes + hosts; reject `javascript:` / data / intent; server + client |
-| T1 | Impression / click mutation without auth or TTL | Require viewer JWT where product allows; short-lived impression tokens; rate limits |
-| T4 | Serve budget bypass | Server-side remaining budget + pacing as source of truth |
-| T5–T8 | Token replay, free-email abuse, debug serve in prod, studio earn double-credit | Harden as follow-ups |
-
-When you touch billing or attribution, read `ads.billing.ts` / `ads.attribution.ts` first and add tests for the threat you are closing.
-
 ## Quick change recipes
 
-**Change Sparks ad density** → edit ranges in `AdDeliveryPolicy` only; do not hardcode `12...28` in the feed again.
+**Change Sparks ad density** → edit ranges in `AdDeliveryPolicy` only.
 
 **New ad UI chrome** → `SparkAdCard` or `AdPrerollView`; shared player stays in `AdPlayerSurface`.
 
 **New serve rule (geo, budget, pacing)** → `ads.serve.ts`; keep resolver thin.
 
 **Learn more broken** → check DB `click_url`, API `normalizeClickUrl`, iOS `AdURL.normalized`.
+
+**Purchase redeem fails** → client must send StoreKit `jwsRepresentation`; server verifies chain to Apple Root CA G3.

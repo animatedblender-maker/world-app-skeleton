@@ -19,6 +19,7 @@ import {
 import {
   normalizeClickUrl,
   normalizeCountryCodeArray,
+  normalizeMediaUrl,
 } from './ads.urls.js';
 
 export type { AdCreateEntitlement, ServeVideoAdInput };
@@ -435,8 +436,8 @@ export class AdsService {
   }
 
   private normalizeCreativeInput(input: AdCreativeInput): Required<AdCreativeInput> {
-    const mediaUrl = String(input?.media_url ?? '').trim();
-    if (!mediaUrl) throw new Error('Creative media URL is required.');
+    const mediaUrl = normalizeMediaUrl(input?.media_url ?? null);
+    if (!mediaUrl) throw new Error('Creative media URL must be a safe HTTP(S) URL.');
     const mediaKind = String(input?.media_kind ?? 'video').trim().toLowerCase();
     if (mediaKind !== 'video' && mediaKind !== 'image') {
       throw new Error('Creative media kind must be video or image.');
@@ -446,12 +447,19 @@ export class AdsService {
         'Creative video URL must be a direct HTTP(S) file URL ending in .mp4, .webm, .mov, or .m4v.'
       );
     }
+    const rawClick = String(input?.click_url ?? '').trim();
+    const clickUrl = normalizeClickUrl(input?.click_url ?? null);
+    if (rawClick && !clickUrl) {
+      throw new Error(
+        'Creative click URL must be http(s) without credentials or blocked hosts.'
+      );
+    }
     return {
       title: String(input?.title ?? '').trim() || null,
       body: String(input?.body ?? '').trim() || null,
       media_kind: mediaKind,
       media_url: mediaUrl,
-      click_url: normalizeClickUrl(input?.click_url ?? null),
+      click_url: clickUrl,
       cta_label: String(input?.cta_label ?? '').trim() || null,
       duration_seconds: Math.max(3, Math.min(30, Math.floor(Number(input?.duration_seconds ?? 8) || 8))),
     };
@@ -542,7 +550,7 @@ export class AdsService {
       body: row.body ?? null,
       media_kind: row.media_kind,
       media_url: row.media_url,
-      click_url: row.click_url ?? null,
+      click_url: normalizeClickUrl(row.click_url ?? null),
       cta_label: row.cta_label ?? null,
       duration_seconds: Number(row.duration_seconds ?? 0),
       created_at: row.created_at,

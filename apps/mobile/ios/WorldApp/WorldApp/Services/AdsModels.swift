@@ -165,19 +165,36 @@ enum AdServeCache {
 // MARK: - Safe URL open
 
 enum AdURL {
-    /// `matterya.com` (no scheme) → `https://matterya.com`. Rejects non-http(s).
+    /// `matterya.com` (no scheme) → `https://matterya.com`.
+    /// Rejects non-http(s), credentials-in-URL, and empty hosts.
     static func normalized(_ raw: String) -> URL? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard !trimmed.isEmpty, trimmed.count <= 2048 else { return nil }
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("javascript:")
+            || lower.hasPrefix("data:")
+            || lower.hasPrefix("file:")
+            || lower.hasPrefix("vbscript:")
+            || lower.hasPrefix("blob:")
+            || lower.hasPrefix("about:")
+            || lower.hasPrefix("intent:")
+            || lower.hasPrefix("app:")
+        {
+            return nil
+        }
         let candidate: URL?
         if let url = URL(string: trimmed), url.scheme != nil {
             candidate = url
+        } else if trimmed.hasPrefix("//") {
+            candidate = URL(string: "https:\(trimmed)")
         } else {
             candidate = URL(string: "https://\(trimmed)")
         }
         guard let url = candidate,
               let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https"
+              scheme == "http" || scheme == "https",
+              let host = url.host, !host.isEmpty,
+              url.user == nil, url.password == nil
         else { return nil }
         return url
     }

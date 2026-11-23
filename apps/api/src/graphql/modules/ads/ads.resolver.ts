@@ -52,6 +52,15 @@ export const adsResolvers = {
     },
     debugServeVideoAd: async (_: any, args: ServeVideoAdInput, ctx: Context) => {
       requireAuth(ctx);
+      // Prod locked unless ADS_DEBUG_SERVE=1 (owner diagnostics only).
+      const debugEnabled =
+        process.env.ADS_DEBUG_SERVE === '1' ||
+        process.env.NODE_ENV !== 'production';
+      if (!debugEnabled) {
+        throw new GraphQLError('debugServeVideoAd is disabled.', {
+          extensions: { code: 'FORBIDDEN' },
+        });
+      }
       return await svc().debugServeVideoAd(args);
     },
   },
@@ -124,6 +133,8 @@ export const adsResolvers = {
     },
     logAdImpression: async (_: any, args: { impression_token: string }, ctx: Context) => {
       if (!args?.impression_token) throw new Error('impression_token is required.');
+      // Token must exist + be within TTL (enforced in ads.attribution). Auth optional so
+      // signed-out viewers can still attribute; forged tokens fail the UUID+DB lookup.
       return { ok: await svc().logImpression(args.impression_token, ctx.user?.id ?? null) };
     },
     logAdClick: async (_: any, args: { impression_token: string }, ctx: Context) => {

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { pool } from '../../../db.js';
-import { normalizeCountryCode } from './ads.urls.js';
+import { normalizeClickUrl, normalizeCountryCode } from './ads.urls.js';
 
 export type ServeVideoAdInput = {
   placement: string;
@@ -103,7 +103,8 @@ function mapCreativeRow(row: AdCreativeRow): AdCreativeRow {
     body: row.body ?? null,
     media_kind: row.media_kind,
     media_url: row.media_url,
-    click_url: row.click_url ?? null,
+    // Re-normalize on serve so legacy unsafe click_url never reaches clients.
+    click_url: normalizeClickUrl(row.click_url ?? null),
     cta_label: row.cta_label ?? null,
     duration_seconds: Number(row.duration_seconds ?? 0),
     created_at: row.created_at,
