@@ -19,7 +19,8 @@ struct AdsView: View {
     @State private var campaignName = ""
     @State private var placement = "video"
     @State private var status = "draft"
-    @State private var countryCodesInput = ""
+    /// Empty = Worldwide. Non-empty ISO-2 tags from `AdsCountryTargetField`.
+    @State private var targetCountryCodes: [String] = []
     @State private var budgetEUR = ""
     @State private var dailyBudgetEUR = ""
     @State private var startAt = Date()
@@ -148,7 +149,7 @@ struct AdsView: View {
                 PremiumTextField(title: "Name", text: $campaignName)
                 adsPicker(title: "Placement", selection: $placement, options: [("video", "Video"), ("reel", MatteryaCopy.spark)])
                 adsPicker(title: "Status", selection: $status, options: [("draft", "Draft"), ("active", "Active"), ("paused", "Paused")])
-                PremiumTextField(title: "Target countries", text: $countryCodesInput)
+                AdsCountryTargetField(selectedCodes: $targetCountryCodes)
                 PremiumTextField(title: "Total budget (EUR)", text: $budgetEUR, keyboard: .decimalPad)
                 PremiumTextField(title: "Daily budget (EUR)", text: $dailyBudgetEUR, keyboard: .decimalPad)
                 scheduleToggle(title: "Start", isOn: $hasStartAt, date: $startAt)
@@ -515,7 +516,7 @@ struct AdsView: View {
             name: campaignName.trimmingCharacters(in: .whitespacesAndNewlines),
             placement: placement,
             status: status,
-            targetCountryCodes: parseCountryCodes(countryCodesInput),
+            targetCountryCodes: targetCountryCodes.map { $0.uppercased() },
             budgetCents: toCents(budgetEUR),
             dailyBudgetCents: toCents(dailyBudgetEUR),
             startAt: hasStartAt ? isoString(startAt) : nil,
@@ -643,7 +644,7 @@ struct AdsView: View {
         campaignName = campaign.name
         placement = campaign.placement
         status = campaign.status
-        countryCodesInput = campaign.targetCountryCodes.joined(separator: ", ")
+        targetCountryCodes = campaign.targetCountryCodes.map { $0.uppercased() }
         budgetEUR = String(format: "%.2f", Double(campaign.budgetCents) / 100)
         dailyBudgetEUR = String(format: "%.2f", Double(campaign.dailyBudgetCents) / 100)
         if let start = parseDate(campaign.startAt) {
@@ -681,7 +682,7 @@ struct AdsView: View {
         campaignName = ""
         placement = "video"
         status = "draft"
-        countryCodesInput = ""
+        targetCountryCodes = []
         budgetEUR = ""
         dailyBudgetEUR = ""
         hasStartAt = false
@@ -707,7 +708,9 @@ struct AdsView: View {
             PillItem(text: campaign.status, style: .neutral),
             PillItem(text: campaignPhaseLabel(campaign), style: phaseStyle(campaign)),
         ]
-        if !campaign.targetCountryCodes.isEmpty {
+        if campaign.targetCountryCodes.isEmpty {
+            items.append(PillItem(text: "Worldwide", style: .neutral))
+        } else {
             items.append(PillItem(text: campaign.targetCountryCodes.joined(separator: ", "), style: .neutral))
         }
         return items
@@ -768,12 +771,6 @@ struct AdsView: View {
 
     private func formatMoney(_ cents: Int) -> String {
         String(format: "EUR %.2f", Double(cents) / 100)
-    }
-
-    private func parseCountryCodes(_ raw: String) -> [String] {
-        raw.split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() }
-            .filter { !$0.isEmpty }
     }
 
     private func toCents(_ raw: String) -> Int {
