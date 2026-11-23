@@ -27,6 +27,41 @@ enum AdDeliveryPolicy {
     static var adsEnabled: Bool {
         !SubscriptionService.shared.isPremium
     }
+
+    /// Must match `ads.serve.ts` pacing: `budget_cents / 10` max impressions.
+    static let costPerImpressionCents = 10
+    /// Share of impressions expected to register as a video view (estimate only).
+    static let estimatedViewRate: Double = 0.85
+}
+
+/// Facebook-style reach estimates from advertiser-set budgets.
+enum AdsBudgetEstimate {
+    struct Snapshot: Equatable {
+        let totalImpressions: Int
+        let totalViews: Int
+        let dailyImpressions: Int
+        let dailyViews: Int
+        let costPerImpressionEUR: Double
+        let effectiveCPM: Double
+    }
+
+    static func snapshot(totalBudgetEUR: Double, dailyBudgetEUR: Double) -> Snapshot {
+        let totalCents = max(0, Int((totalBudgetEUR * 100).rounded()))
+        let dailyCents = max(0, Int((dailyBudgetEUR * 100).rounded()))
+        let perImp = AdDeliveryPolicy.costPerImpressionCents
+        let totalImp = perImp > 0 ? totalCents / perImp : 0
+        let dailyImp = perImp > 0 ? dailyCents / perImp : 0
+        let rate = AdDeliveryPolicy.estimatedViewRate
+        let costEUR = Double(perImp) / 100.0
+        return Snapshot(
+            totalImpressions: totalImp,
+            totalViews: Int((Double(totalImp) * rate).rounded()),
+            dailyImpressions: dailyImp,
+            dailyViews: Int((Double(dailyImp) * rate).rounded()),
+            costPerImpressionEUR: costEUR,
+            effectiveCPM: costEUR * 1000
+        )
+    }
 }
 
 // MARK: - Domain models

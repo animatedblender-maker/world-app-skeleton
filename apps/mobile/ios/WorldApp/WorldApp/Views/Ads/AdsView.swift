@@ -85,38 +85,16 @@ struct AdsView: View {
             Text("Advertiser dashboard")
                 .font(.title.weight(.bold))
                 .foregroundStyle(Theme.ink)
-            Text("MVP setup for direct campaigns. Create a campaign, attach one hosted video creative, then it can serve as pre-roll on videos and \(MatteryaCopy.sparks.lowercased()).")
+            Text("Set your own budget, target Worldwide or specific countries, upload a video creative, and reach people in Sparks and Hubs. You control spend — Matterya estimates impressions and views from your budget.")
                 .font(.subheadline)
                 .foregroundStyle(Theme.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
-            billingBanner
+            Text("Campaign create is free. Delivery paces against the budget you enter.")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.success)
+                .padding(.top, 4)
         }
         .adsCard()
-    }
-
-    private var billingBanner: some View {
-        Group {
-            if billing.freeCreate {
-                Text("Owner — create ads free (no payment).")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.success)
-            } else if billing.creditsAvailable > 0 {
-                Text("Payment ready: \(billing.creditsAvailable) create credit(s). Tap Create to use one.")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.inkSecondary)
-            } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Pay when you create — \(billing.displayPrice) per new ad campaign (App Store).")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.inkSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text("Not a subscription. Editing an existing campaign stays free.")
-                        .font(.caption)
-                        .foregroundStyle(Theme.inkMuted)
-                }
-            }
-        }
-        .padding(.top, 4)
     }
 
     // MARK: - Composer
@@ -152,6 +130,7 @@ struct AdsView: View {
                 AdsCountryTargetField(selectedCodes: $targetCountryCodes)
                 PremiumTextField(title: "Total budget (EUR)", text: $budgetEUR, keyboard: .decimalPad)
                 PremiumTextField(title: "Daily budget (EUR)", text: $dailyBudgetEUR, keyboard: .decimalPad)
+                budgetEstimateCard
                 scheduleToggle(title: "Start", isOn: $hasStartAt, date: $startAt)
                 scheduleToggle(title: "End", isOn: $hasEndAt, date: $endAt)
             }
@@ -217,7 +196,6 @@ struct AdsView: View {
             .buttonStyle(PrimaryButtonStyle())
             .disabled(
                 saving
-                    || billing.isBusy
                     || campaignName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     || creativeMediaURL.isEmpty
             )
@@ -228,17 +206,82 @@ struct AdsView: View {
         }
     }
 
+    private var budgetEstimateCard: some View {
+        let snap = AdsBudgetEstimate.snapshot(
+            totalBudgetEUR: Double(budgetEUR.replacingOccurrences(of: ",", with: ".")) ?? 0,
+            dailyBudgetEUR: Double(dailyBudgetEUR.replacingOccurrences(of: ",", with: ".")) ?? 0
+        )
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Estimated reach")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.inkMuted)
+            if snap.totalImpressions <= 0 && snap.dailyImpressions <= 0 {
+                Text("Enter a total or daily budget to see estimated impressions and views.")
+                    .font(.caption)
+                    .foregroundStyle(Theme.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                if snap.totalImpressions > 0 {
+                    estimateRow(
+                        title: "Total budget",
+                        impressions: snap.totalImpressions,
+                        views: snap.totalViews
+                    )
+                }
+                if snap.dailyImpressions > 0 {
+                    estimateRow(
+                        title: "Daily budget",
+                        impressions: snap.dailyImpressions,
+                        views: snap.dailyViews
+                    )
+                }
+                Text(
+                    String(
+                        format: "Estimates use Matterya’s current delivery rate (≈ €%.2f per impression, ~€%.0f CPM). Actual results vary by targeting, creative, and inventory.",
+                        snap.costPerImpressionEUR,
+                        snap.effectiveCPM
+                    )
+                )
+                .font(.caption2)
+                .foregroundStyle(Theme.inkMuted)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.canvasMuted, in: RoundedRectangle(cornerRadius: Theme.controlRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.controlRadius)
+                .stroke(Theme.border, lineWidth: 0.5)
+        )
+    }
+
+    private func estimateRow(title: String, impressions: Int, views: Int) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.inkSecondary)
+            Text("~\(Self.formatCount(impressions)) impressions · ~\(Self.formatCount(views)) video views")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Theme.ink)
+        }
+    }
+
+    private static func formatCount(_ value: Int) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 0
+        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+
     private var createButtonTitle: String {
-        if saving || billing.isBusy {
-            return editingCampaignID == nil ? "Working…" : "Saving…"
+        if saving {
+            return editingCampaignID == nil ? "Creating…" : "Saving…"
         }
         if editingCampaignID != nil {
             return "Save changes"
         }
-        if billing.freeCreate || billing.creditsAvailable > 0 {
-            return "Create"
-        }
-        return "Pay \(billing.displayPrice) & create"
+        return "Create campaign"
     }
 
     private var uploadRow: some View {
@@ -543,12 +586,10 @@ struct AdsView: View {
                 }
                 successMessage = "Campaign updated."
             } else {
-                // Free for animatedblender@gmail.com; everyone else buys one create credit first.
-                try await billing.ensureCreateAllowance()
+                // Create is free — advertiser-set budgets drive delivery estimates + pacing.
                 let campaign = try await AdsService.shared.createCampaign(input: input)
                 _ = try await AdsService.shared.createCreative(campaignID: campaign.id, input: creativeInput)
                 successMessage = "Campaign created."
-                await billing.refresh()
             }
             resetForm()
             await loadCampaigns(silent: true)

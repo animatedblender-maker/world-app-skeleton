@@ -34,16 +34,11 @@ final class AdCampaignBilling {
         await loadProduct()
     }
 
-    /// Ensures the signed-in account may create one campaign (free or after purchase).
+    /// Create is free — advertisers set their own budgets. Kept as a no-op so
+    /// call sites stay stable; real spend / Stripe can plug in later.
     func ensureCreateAllowance() async throws {
-        await refreshEntitlementFromServer()
-        if freeCreate || creditsAvailable > 0 { return }
-
-        try await purchaseCreateCredit()
-        await refreshEntitlementFromServer()
-        guard freeCreate || creditsAvailable > 0 else {
-            throw AdBillingError.purchaseRequired
-        }
+        freeCreate = true
+        lastError = nil
     }
 
     func purchaseCreateCredit() async throws {

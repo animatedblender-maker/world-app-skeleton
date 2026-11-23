@@ -11,6 +11,11 @@ Teammate map for Matterya video ads. Phase 1 organized modules; Phase 2 hardened
 
 Premium (`SubscriptionService.isPremium`) skips ads on both surfaces via `AdDeliveryPolicy.adsEnabled`.
 
+### Budget model (client-set)
+- Advertisers set **total** and **daily** budget in EUR. Campaign **create is free** (no App Store create-IAP).
+- Delivery pacing in `ads.serve.ts` uses **€0.10 per impression** (`budget_cents / 10`). iOS `AdsBudgetEstimate` mirrors that for estimated impressions / views (~85% view rate).
+- Real money collection (Stripe / invoicing) can plug in later; do not resurrect fixed create SKUs for ad spend.
+
 ## iOS module map
 
 ```

@@ -4,9 +4,7 @@ import {
   logImpression as attributionLogImpression,
 } from './ads.attribution.js';
 import {
-  consumeCreateCredit,
   getCreateEntitlement as billingGetCreateEntitlement,
-  isAdsFreeCreateEmail,
   redeemCreatePurchase as billingRedeemCreatePurchase,
   resolveUserEmail as billingResolveUserEmail,
   type AdCreateEntitlement,
@@ -205,22 +203,11 @@ export class AdsService {
   async createCampaign(
     userId: string,
     input: AdCampaignInput,
-    opts?: { email?: string | null }
+    _opts?: { email?: string | null }
   ): Promise<AdCampaignRow & { creatives: AdCreativeRow[] }> {
     await this.ensureAdvertiser(userId);
-    const email = await this.resolveUserEmail(userId, opts?.email);
-    const freeCreate = isAdsFreeCreateEmail(email);
-    if (!freeCreate) {
-      const entitlement = await this.getCreateEntitlement(userId, email);
-      if (entitlement.credits_available < 1) {
-        const err = new Error(
-          'Payment required to create an ad. Complete the App Store purchase when creating, then try again.'
-        );
-        (err as any).code = 'ADS_PURCHASE_REQUIRED';
-        throw err;
-      }
-    }
-
+    // Create is free. Advertisers set their own total/daily budgets; delivery
+    // paces against those (see ads.serve). App Store create-IAP is retired.
     const normalized = this.normalizeCampaignInput(input);
     const { rows } = await pool.query<{ id: string }>(
       `
@@ -251,19 +238,6 @@ export class AdsService {
       ]
     );
     const campaignId = rows[0]!.id;
-    if (!freeCreate) {
-      const consumed = await consumeCreateCredit(userId, campaignId);
-      if (!consumed) {
-        await pool.query(`delete from public.ad_campaigns where id = $1::uuid`, [
-          campaignId,
-        ]);
-        const err = new Error(
-          'Payment required to create an ad. Complete the App Store purchase when creating, then try again.'
-        );
-        (err as any).code = 'ADS_PURCHASE_REQUIRED';
-        throw err;
-      }
-    }
     const campaign = await this.campaignById(campaignId, userId);
     if (!campaign) throw new Error('Campaign not found after creation.');
     return campaign;
