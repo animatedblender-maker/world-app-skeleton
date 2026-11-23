@@ -1693,6 +1693,8 @@ struct ReelsScrollViewer: View {
 
     /// Fire-and-forget catalog bulk; queues a second pass if one is already in flight.
     private func requestLoadMore() {
+        // Instant local top-up on the near-end edge — do not wait for network.
+        topUpAheadLocally(want: SparksQueueBudget.minQueueAhead, allowRecycle: true)
         if isExpandingFeed {
             loadMoreQueued = true
             return
@@ -1750,54 +1752,108 @@ struct ReelsScrollViewer: View {
         Task { await ensureBulkQueueAhead() }
     }
 
-    /// Keep at least `target` unplayed Sparks after the focused index.
+    /// Keep at least `target` clips after the focused index — **local first**, network second.
+    /// Waiting on `/v1/sparks` timeouts (12s+) left the player stuck for ~a minute.
     private func ensureBulkQueueAhead(target: Int = SparksQueueBudget.minQueueAhead) async {
+        // Instant memory fill so swipe never hits a wall while API is slow.
+        topUpAheadLocally(want: target, allowRecycle: true)
+        var remaining = max(0, posts.count - activeIndex - 1)
+        if remaining >= target {
+            // Refresh from network in the background; do not block the pager.
+            if !isExpandingFeed {
+                Task { await loadMoreReels() }
+            }
+            return
+        }
+
         var guardPasses = 0
-        while guardPasses < 5 {
+        while guardPasses < 3 {
             guardPasses += 1
-            let remaining = max(0, posts.count - activeIndex - 1)
+            remaining = max(0, posts.count - activeIndex - 1)
             guard remaining < target else { return }
             let before = posts.count
-            let beforeIndex = activeIndex
             await loadMoreReels()
             let afterRemaining = max(0, posts.count - activeIndex - 1)
             if afterRemaining > remaining || posts.count > before {
                 SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
                 continue
             }
-            // Unviewed inventory dry — stop inventing ahead from watched history.
+            // Network dry/timed out — force local recycle again and stop waiting.
+            topUpAheadLocally(want: target, allowRecycle: true)
+            if max(0, posts.count - activeIndex - 1) <= remaining {
+                rotateQueueForEndless()
+            }
+            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
             return
         }
     }
 
-    /// Instant neighbors from memory — **unviewed only**, append only.
-    private func seedFromWarmCatalogIfNeeded() {
-        guard posts.count < SparksQueueBudget.minQueueAhead else { return }
+    /// Fill the ahead window from in-memory catalog / queue rotation — never awaits network.
+    @discardableResult
+    private func topUpAheadLocally(want: Int, allowRecycle: Bool) -> Int {
+        let aheadBefore = max(0, posts.count - activeIndex - 1)
+        guard aheadBefore < want else { return aheadBefore }
+
         var seen = Set(posts.map(\.id))
         var toAppend: [CountryPost] = []
-        let warm = SparkDiscoveryEngine.rankForDiscovery(
-            PostsService.shared.sparksCatalogSnapshot()
-                .filter { ReelsRankingEngine.isSparkEligible($0) }
-        )
-        .filter { !SparkDiscoveryEngine.isViewed($0) }
-        for post in warm {
+        let need = want - aheadBefore
+        let catalog = PostsService.shared.sparksCatalogSnapshot()
+            .filter { ReelsRankingEngine.isSparkEligible($0) }
+
+        let unviewed = SparkDiscoveryEngine.rankForDiscovery(catalog)
+            .filter { !seen.contains($0.id) && !SparkDiscoveryEngine.isViewed($0) }
+        for post in unviewed {
             guard seen.insert(post.id).inserted else { continue }
-            guard !SparkDiscoveryEngine.isViewed(post) else { continue }
             let hasPath = MediaURLResolver.videoURL(for: post) != nil
                 || !(post.mediaURL ?? "").isEmpty
                 || post.hasVideo
             guard hasPath else { continue }
             toAppend.append(post)
-            if posts.count + toAppend.count >= 96 { break }
+            if toAppend.count >= need { break }
         }
-        guard !toAppend.isEmpty else { return }
-        var t = Transaction()
-        t.disablesAnimations = true
-        withTransaction(t) {
-            posts.append(contentsOf: toAppend)
+
+        if toAppend.count < need, allowRecycle {
+            // Prefer clips not already in the pager; then least-recent from catalog.
+            let recycled = SparkDiscoveryEngine.rankForDiscovery(catalog)
+                .filter { !seen.contains($0.id) }
+            for post in recycled {
+                guard seen.insert(post.id).inserted else { continue }
+                let hasPath = MediaURLResolver.videoURL(for: post) != nil
+                    || !(post.mediaURL ?? "").isEmpty
+                    || post.hasVideo
+                guard hasPath else { continue }
+                toAppend.append(post)
+                if toAppend.count >= need { break }
+            }
         }
-        hasMorePages = true
-        SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+
+        if !toAppend.isEmpty {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                posts.append(contentsOf: toAppend)
+            }
+            hasMorePages = true
+            #if DEBUG
+            print("[Sparks] local top-up +\(toAppend.count) ahead=\(max(0, posts.count - activeIndex - 1))")
+            #endif
+        }
+
+        var ahead = max(0, posts.count - activeIndex - 1)
+        if ahead < want, allowRecycle {
+            // Everything from catalog is already in the list — rotate far-behind to ahead.
+            rotateQueueForEndless()
+            ahead = max(0, posts.count - activeIndex - 1)
+        }
+        if ahead > aheadBefore {
+            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+        }
+        return ahead
+    }
+
+    /// Instant neighbors from memory — uses ahead remaining, not total posts count.
+    private func seedFromWarmCatalogIfNeeded() {
+        topUpAheadLocally(want: SparksQueueBudget.minQueueAhead, allowRecycle: false)
     }
 
     private func expandFeed() async {
@@ -1945,22 +2001,23 @@ struct ReelsScrollViewer: View {
             }
         }
 
-        let existingIDs = Set(posts.map(\.id))
-        let tail = Array(posts.suffix(8))
-        let bulk = SparksQueueBudget.bulkBatchSize
-
         if ReviewThinCatalog.isActive {
             hasMorePages = false
             feedCursor = nil
             return
         }
 
-        // Newest-first /v1/sparks page — keep pages small on scroll so load-more
-        // never freezes the pager (deep preload still comes from SparkWarmPool).
+        // Local fill FIRST — never leave the pager empty while API times out (~12s+).
+        let ahead = topUpAheadLocally(want: SparksQueueBudget.minQueueAhead, allowRecycle: true)
+        let existingIDs = Set(posts.map(\.id))
+        let tail = Array(posts.suffix(8))
+        let bulk = SparksQueueBudget.bulkBatchSize
+
+        // One short surface page only on scroll — multi-page walks stacked timeouts to ~1 min.
         let surface = await SurfacePageClient.fetchSparksPages(
-            want: min(bulk, 36),
+            want: min(bulk, 28),
             startingCursor: feedCursor,
-            maxPages: posts.count > 20 ? 2 : 4,
+            maxPages: 1,
             excluding: existingIDs,
             skipViewed: true
         )
@@ -1979,104 +2036,26 @@ struct ReelsScrollViewer: View {
         }
         if let next = surface.nextCursor {
             feedCursor = next
+            hasMorePages = true
         }
 
-        // Parallel bulk sources — catalog + random library sample.
-        async let catalogTask = PostsService.shared.loadSparksDiscoveryCatalog(
-            forceRefresh: false,
-            deep: true
-        )
-        async let discoverTask = PostsService.shared.fetchDiscoverSparks(
-            limit: min(120, bulk + 20),
-            excluding: Array(existingIDs) + SparkDiscoveryEngine.viewedIDList(limit: 500)
-        )
-        let catalog = await catalogTask
-        let discover = await discoverTask
-
-        // Unviewed catalog + random DB sample only — never re-queue watched Sparks.
+        // Memory catalog only (no await) — already warmed by earlier sparks pages.
+        let catalog = PostsService.shared.sparksCatalogSnapshot()
         let remaining = SparkDiscoveryEngine.rankForDiscovery(
-            (catalog + discover).filter {
+            catalog.filter {
                 !existingIDs.contains($0.id)
                     && ReelsRankingEngine.isSparkEligible($0)
                     && !SparkDiscoveryEngine.isViewed($0)
             }
         )
         if !remaining.isEmpty {
-            let batch = Array(remaining.prefix(bulk))
-            applyExpandedFeed(batch)
+            applyExpandedFeed(Array(remaining.prefix(bulk)))
             hasMorePages = true
             SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
             return
         }
 
-        // Second remote bulk — unviewed only.
-        let more = await PostsService.shared.fetchDiscoverSparks(
-            limit: min(120, bulk + 20),
-            excluding: Array(existingIDs.prefix(400)) + SparkDiscoveryEngine.viewedIDList(limit: 600)
-        )
-        if !more.isEmpty {
-            let before = posts.count
-            let ranked = SparkDiscoveryEngine.rankForDiscovery(more, excluding: existingIDs)
-                .filter { !SparkDiscoveryEngine.isViewed($0) }
-            if !ranked.isEmpty {
-                applyExpandedFeed(ranked)
-                if posts.count > before {
-                    hasMorePages = true
-                    SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
-                    return
-                }
-            }
-        }
-
-        // Catalog batch — still prefer unviewed (allowRecycle only after unviewed dry).
-        let fromCatalog = ReelsRankingEngine.nextBatch(
-            from: catalog,
-            excluding: existingIDs,
-            limit: bulk,
-            viewerCountry: appState.currentProfile?.countryCode,
-            followingIDs: appState.followingIDs,
-            tail: tail,
-            allowRecycle: false
-        )
-        if !fromCatalog.isEmpty {
-            let before = posts.count
-            applyExpandedFeed(
-                ReelsRankingEngine.sessionFreshOrder(fromCatalog)
-                    .filter { !SparkDiscoveryEngine.isViewed($0) }
-            )
-            if posts.count > before {
-                hasMorePages = true
-                SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
-                return
-            }
-        }
-
-        let page = await PostsService.shared.loadReelsFeedPage(
-            excludingIDs: existingIDs,
-            cursor: feedCursor,
-            batchSize: bulk / 2,
-            fetchLimit: 80,
-            viewerCountry: appState.currentProfile?.countryCode,
-            followingIDs: appState.followingIDs,
-            tail: tail,
-            allowRecycle: false
-        )
-        let pageFresh = page.posts.filter { !SparkDiscoveryEngine.isViewed($0) }
-        if !pageFresh.isEmpty {
-            applyExpandedFeed(ReelsRankingEngine.sessionFreshOrder(pageFresh))
-            feedCursor = page.nextCursor ?? feedCursor
-            hasMorePages = true
-            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
-            return
-        }
-
-        // Unviewed inventory dry — keep the player endless by soft-recycling
-        // far-behind / catalog clips (user expects endless Sparks scroll).
-        if let next = page.nextCursor, next != feedCursor {
-            feedCursor = next
-            hasMorePages = true
-            return
-        }
+        // Soft-recycle / rotate — keep endless without waiting on discover GraphQL.
         let recycled = ReelsRankingEngine.nextBatch(
             from: catalog,
             excluding: existingIDs,
@@ -2095,11 +2074,29 @@ struct ReelsScrollViewer: View {
             #endif
             return
         }
-        rotateQueueForEndless()
+        if ahead < SparksQueueBudget.minQueueAhead {
+            rotateQueueForEndless()
+        }
         hasMorePages = true
         #if DEBUG
-        print("[Sparks] rotateQueueForEndless — keep scrolling")
+        print("[Sparks] rotateQueueForEndless — keep scrolling (ahead was \(ahead))")
         #endif
+
+        // Optional background discover — never blocks the endless path.
+        Task {
+            let more = await PostsService.shared.fetchDiscoverSparks(
+                limit: min(80, bulk + 20),
+                excluding: Array(existingIDs.prefix(400)) + SparkDiscoveryEngine.viewedIDList(limit: 400)
+            )
+            let fresh = SparkDiscoveryEngine.rankForDiscovery(more, excluding: existingIDs)
+                .filter { !SparkDiscoveryEngine.isViewed($0) }
+            guard !fresh.isEmpty else { return }
+            await MainActor.run {
+                applyExpandedFeed(fresh)
+                hasMorePages = true
+                SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+            }
+        }
     }
 
     /// Insert a sponsored video as its own Sparks page (random light density).
@@ -2210,14 +2207,19 @@ struct ReelsScrollViewer: View {
         guard posts.count >= 8 else { return }
         let liveID = posts.indices.contains(activeIndex) ? posts[activeIndex].id : posts[0].id
         let liveIndex = posts.firstIndex(where: { $0.id == liveID }) ?? activeIndex
-        // Long behind window — short keepBehind made swipe-back land on recycled clips.
-        let keepBehind = 32
+        let ahead = max(0, posts.count - liveIndex - 1)
+        // When ahead is thin, recycle more aggressively so scroll never stalls a minute
+        // waiting on API (old keepBehind=32 needed dropCount>=8 and often did nothing).
+        let keepBehind = ahead < 8 ? 6 : 24
         let dropCount = max(0, liveIndex - keepBehind)
-        guard dropCount >= 8 else { return }
+        guard dropCount >= 4 else { return }
         // Far-behind only → append in original order (no discovery reshuffle of nearby clips).
         let moved = Array(posts.prefix(dropCount))
         let keep = Array(posts.dropFirst(dropCount))
         replacePlayerQueue(keep + moved, preserveID: liveID)
+        #if DEBUG
+        print("[Sparks] rotateQueueForEndless moved=\(moved.count) aheadNow=\(max(0, posts.count - (posts.firstIndex(where: { $0.id == liveID }) ?? 0) - 1))")
+        #endif
     }
 
     private func loadEarlierReels() async {
