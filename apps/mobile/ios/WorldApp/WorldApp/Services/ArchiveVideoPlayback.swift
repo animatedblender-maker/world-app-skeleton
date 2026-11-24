@@ -354,6 +354,7 @@ struct MatteryaHubPlayerView: View {
         allowsFullscreen: Bool = true,
         isLandscapeFullscreen: Bool = false,
         protectAsContinuousHubs: Bool = false,
+        allowsContinuingHandoffClaim: Bool = false,
         externalFullscreenToken: Int = 0,
         onFullscreenToggle: (() -> Void)? = nil,
         onReady: (() -> Void)? = nil,
@@ -378,6 +379,7 @@ struct MatteryaHubPlayerView: View {
         self.allowsFullscreen = allowsFullscreen
         self.isLandscapeFullscreen = isLandscapeFullscreen
         self.protectAsContinuousHubs = protectAsContinuousHubs
+        self.allowsContinuingHandoffClaim = allowsContinuingHandoffClaim
         self.externalFullscreenToken = externalFullscreenToken
         self.onFullscreenToggle = onFullscreenToggle
         self.onReady = onReady

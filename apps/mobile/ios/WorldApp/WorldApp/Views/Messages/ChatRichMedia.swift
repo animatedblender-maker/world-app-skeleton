@@ -49,19 +49,22 @@ struct ChatShareCard: View {
     }
 
     var body: some View {
-        Button(action: handleOpen) {
-            VStack(alignment: isMine ? .trailing : .leading, spacing: 6) {
-                if !effective.note.isEmpty {
-                    noteBubble
-                }
-                linkCard
+        // Tap gesture — never a Button. Button + parent contextMenu / swipe-to-reply
+        // was opening Sparks when the user only meant to Reply.
+        VStack(alignment: isMine ? .trailing : .leading, spacing: 6) {
+            if !effective.note.isEmpty {
+                noteBubble
             }
+            linkCard
         }
-        .buttonStyle(.plain)
         .contentShape(Rectangle())
+        .onTapGesture(perform: handleOpen)
         .frame(maxWidth: .infinity, alignment: isMine ? .trailing : .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
         .accessibilityLabel(accessibilityTitle)
         .accessibilityHint("Opens shared content")
+        .accessibilityAction(named: "Open") { handleOpen() }
         .task(id: share.postID) {
             await hydrateIfNeeded()
         }

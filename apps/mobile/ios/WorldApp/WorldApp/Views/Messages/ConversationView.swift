@@ -1122,6 +1122,8 @@ private struct MessageBubble: View {
     var onOpenSender: (() -> Void)? = nil
 
     @State private var resolvedImageURL: URL?
+    /// Blocks share-card open right after Reply (swipe / context menu) so Sparks does not launch.
+    @State private var suppressShareOpenUntil: Date = .distantPast
     @State private var showsStatusDetail = false
     @State private var swipeOffset: CGFloat = 0
     @State private var showImageLightbox = false
@@ -1232,7 +1234,7 @@ private struct MessageBubble: View {
         .simultaneousGesture(swipeToReplyGesture)
         .contextMenu {
             // Clean WhatsApp/iMessage-style actions (theme via system menu + SF Symbols).
-            Button { onReply() } label: {
+            Button { beginReply() } label: {
                 Label("Reply", systemImage: "arrowshape.turn.up.left")
             }
             Button {
@@ -1315,12 +1317,23 @@ private struct MessageBubble: View {
             .onEnded { value in
                 if value.translation.width < -56 {
                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    onReply()
+                    beginReply()
                 }
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
                     swipeOffset = 0
                 }
             }
+    }
+
+    /// Reply wins over share-card open (Spark/Hubs) for a short window after the gesture.
+    private func beginReply() {
+        suppressShareOpenUntil = Date().addingTimeInterval(0.55)
+        onReply()
+    }
+
+    private func openShareIfAllowed(_ share: Message.ShareInfo) {
+        guard Date() >= suppressShareOpenUntil, abs(swipeOffset) < 10 else { return }
+        onOpenShare?(share)
     }
 
     @ViewBuilder
@@ -1401,7 +1414,7 @@ private struct MessageBubble: View {
                 ChatShareCard(
                     share: share,
                     isMine: isMine,
-                    onOpen: { onOpenShare?(share) }
+                    onOpen: { openShareIfAllowed(share) }
                 )
             }
 
@@ -1454,7 +1467,16 @@ private struct MessageBubble: View {
         let rawURL = resolvedImageURL
             ?? MediaURLResolver.resolve(message.mediaURL)
             ?? message.mediaURL.flatMap(URL.init(string:))
-        Button {
+        ZStack {
+            Theme.canvasDeep
+            Image(systemName: "film")
+                .font(.title3)
+                .foregroundStyle(Theme.inkMuted)
+        }
+        .frame(width: cardW, height: cardH)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture {
             guard let rawURL else { return }
             let share = Message.ShareInfo(
                 kind: .post,
@@ -1468,18 +1490,8 @@ private struct MessageBubble: View {
                 mediaType: "video",
                 note: ""
             )
-            onOpenShare?(share)
-        } label: {
-            ZStack {
-                Theme.canvasDeep
-                Image(systemName: "film")
-                    .font(.title3)
-                    .foregroundStyle(Theme.inkMuted)
-            }
-            .frame(width: cardW, height: cardH)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            openShareIfAllowed(share)
         }
-        .buttonStyle(.plain)
         .task(id: message.mediaPath) {
             guard message.mediaURL == nil, let path = message.mediaPath, !path.isEmpty else { return }
             if let signed = try? await MediaService.shared.signedMessageURL(path: path) {
