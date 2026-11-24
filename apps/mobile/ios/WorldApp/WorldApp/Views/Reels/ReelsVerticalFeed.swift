@@ -78,7 +78,8 @@ struct ReelsVerticalFeed: View {
         .onDisappear {
             // Never stopAllPlayback() here — that tore down the hubs mini AVPlayer (black flash).
             MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
-            SparkWarmPool.shared.silenceAllBuffered()
+            // Hard silence continuing handoff slots so Chat/other tabs never hear last Spark.
+            SparkWarmPool.shared.hardSilenceAllBuffered()
             SparkWarmPool.shared.drain()
         }
         .onChange(of: activeIndex) { _, idx in
@@ -1685,7 +1686,7 @@ struct ReelsScrollViewer: View {
         .onDisappear {
             // Closing Sparks: silence Spark players only — hubs mini stays protected.
             MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
-            SparkWarmPool.shared.silenceAllBuffered()
+            SparkWarmPool.shared.hardSilenceAllBuffered()
         }
     }
 

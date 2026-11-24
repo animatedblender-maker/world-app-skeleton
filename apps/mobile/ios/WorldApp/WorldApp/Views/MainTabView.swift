@@ -204,7 +204,7 @@ struct MainTabView: View {
             // stays light. Continuous Hubs mini is spared. (clearElectionOnly alone left
             // feed audio playing under other tabs / Search.)
             FeedVideoFocus.shared.clearElectionOnly()
-            // Closed or still-open Sparks must not keep talking under Masquerade / other tabs.
+            // Closed or still-open Sparks must not keep talking under Masquerade / Chat / other tabs.
             if tab != .feed, appState.reelsViewerContext != nil {
                 appState.closeReelsViewer()
             }
@@ -212,8 +212,10 @@ struct MainTabView: View {
             let leftHubs = oldTab == .hubs
             let openedHubs = tab == .hubs
             let openedMasquerade = tab == .anonymous
+            let openedMessages = tab == .messages
             // One silence pass on the hop frame — second utility pass was doubling tab weight.
-            if leftFeed || tab != .feed || openedMasquerade {
+            // Messages always hard-silences Sparks (continuing handoff was leaking into Chat).
+            if leftFeed || tab != .feed || openedMasquerade || openedMessages {
                 MediaPlaybackCoordinator.shared.silenceFeedSparksAudioPreservingHubsMini()
             }
             // Tab morph first; bookkeeping off the critical path.

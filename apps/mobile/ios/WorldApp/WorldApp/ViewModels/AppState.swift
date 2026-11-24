@@ -1981,7 +1981,9 @@ final class AppState {
         guard reelsViewerContext != nil else { return }
         let keep = MediaPlaybackCoordinator.shared.continuousHubPlayer
         MediaPlaybackCoordinator.shared.stopAllPlayback(except: keep)
-        SparkWarmPool.shared.silenceAllBuffered()
+        // Hard silence — soft `silenceAllBuffered` keeps continuing handoff slots
+        // decoding (and can restart rate), which leaked audio into Chat / other tabs.
+        SparkWarmPool.shared.hardSilenceAllBuffered()
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
