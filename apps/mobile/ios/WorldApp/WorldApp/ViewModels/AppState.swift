@@ -1188,6 +1188,13 @@ final class AppState {
             MessagesService.shared.storeConversation(seed)
         }
 
+        // Never leave Sparks fullscreen under Chat (visual + audio leak of last Spark).
+        if reelsViewerContext != nil {
+            closeReelsViewer()
+        } else {
+            MediaPlaybackCoordinator.shared.silenceFeedSparksAudioPreservingHubsMini()
+        }
+
         // Keep Hubs audio going as mini while chatting (dock under composer).
         // Morph-first minimize — never snap expanded=false (white mini hole).
         if hubPlaybackPost != nil {
