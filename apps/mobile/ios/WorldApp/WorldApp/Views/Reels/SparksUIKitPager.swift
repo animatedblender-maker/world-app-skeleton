@@ -223,8 +223,9 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
             let shouldClose = x > w * 0.12 || v.x > 550
             if shouldClose {
                 // Kill audio immediately; dismiss cover without waiting for the slide to finish.
+                // Hard silence — soft silenceAllBuffered restarts continuing decode into Chat.
                 MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
-                SparkWarmPool.shared.silenceAllBuffered()
+                SparkWarmPool.shared.hardSilenceAllBuffered()
                 self.coordinator?.dismissSparks()
                 UIView.animate(
                     withDuration: 0.12,
@@ -930,21 +931,11 @@ private final class SparksPageCell: UICollectionViewCell {
         super.prepareForReuse()
         lastConfigureSignature = nil
         lastContinueFromFeed = false
-        // Drop active flag so recycled cells never keep ghost audio.
-        if let post = lastPost {
-            configure(
-                post: post,
-                isActive: false,
-                focusGeneration: 0,
-                bottomInset: lastBottomInset,
-                showsOpenPostAction: lastShowsOpen,
-                viewerCountryCode: lastViewer,
-                appState: lastAppState,
-                continueFromFeed: false,
-                onLikeToggle: lastLike ?? {},
-                onOpenPost: lastOpen ?? {},
-                onOpenComments: lastComments ?? {}
-            )
+        lastPost = nil
+        // Black floor only — never keep previous clip's SwiftUI/AV tree while waiting for configure.
+        if let host {
+            host.rootView = AnyView(Color.black)
+            host.view.backgroundColor = .black
         }
     }
 }

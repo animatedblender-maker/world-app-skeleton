@@ -208,10 +208,12 @@ final class SparkWarmPool {
         let deepLimit = deepPrerollLimit ?? MediaBudget.deepPrerollSparks
 
         // Coalesce willDisplay + prefetch + commit storms for the same focus.
+        // Slightly wider window mid-fling — redundant prepare was a common swipe hitch.
         let now = Date()
+        let coalesceWindow: TimeInterval = ScrollBudget.isFlinging ? 0.32 : 0.18
         if index == lastPrepareIndex,
            posts.count == lastPreparePostCount,
-           now.timeIntervalSince(lastPrepareAt) < 0.18 {
+           now.timeIntervalSince(lastPrepareAt) < coalesceWindow {
             return
         }
         lastPrepareIndex = index
@@ -540,17 +542,17 @@ final class SparkWarmPool {
         inUse.removeAll()
     }
 
-    /// Hard-silence every buffered player (page change / open). Keeps items for instant claim.
-    /// Mid-clip Feed→Sparks handoff slots stay muted but keep decoding (never pause).
+    /// Soft-silence every buffered player. Keeps items for instant claim.
+    /// Mid-clip Feed→Sparks handoff slots stay muted and keep decoding if already rolling —
+    /// never restart a paused continuing (that flashed old film / leaked audio mid-session).
+    /// Close / tab leave must use `hardSilenceAllBuffered` instead.
     func silenceAllBuffered() {
         for (id, slot) in slots {
             let p = slot.player
             p.isMuted = true
             p.volume = 0
             if continuingIDs.contains(id) {
-                if p.rate < 0.05 {
-                    p.safePlayImmediately(atRate: 1.0)
-                }
+                // Already decoding for open handoff — leave rate alone. Do not safePlay.
                 continue
             }
             p.pause()

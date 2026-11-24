@@ -403,11 +403,10 @@ struct ReelsPagerCard: View {
 
     private func captureFeedHandoffIfNeeded() {
         guard !feedHandoffSticky else { return }
+        // Only THIS post's continue flags — blanket hasContinuingParked stole other clips.
         guard continueFromFeed
             || SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: post.id)
             || appState.shouldContinuePlayback(for: post.id)
-            || SparkWarmPool.shared.hasContinuingParked
-            || SparkWarmPool.shared.lastClaimWasContinuing
         else { return }
         if let parked = SparkWarmPool.shared.parkedPlayer(for: post.id) {
             let t = parked.currentTime().seconds
@@ -672,7 +671,8 @@ struct ReelsPagerCard: View {
                             seekToSeconds: seekToSeconds,
                             onSeekConsumed: { seekToSeconds = nil },
                             restartFromBeginningToken: restartFromBeginningToken,
-                            isPausedByUser: isPaused
+                            isPausedByUser: isPaused,
+                            allowsContinuingHandoffClaim: isFeedHandoffContinue || continueFromFeed
                         )
                     } else {
                         // Ads are standalone Sparks cards — never overlay pre-roll on organic clips.
@@ -700,10 +700,13 @@ struct ReelsPagerCard: View {
                             seekToSeconds: seekToSeconds,
                             onSeekConsumed: { seekToSeconds = nil },
                             restartFromBeginningToken: restartFromBeginningToken,
-                            isPausedByUser: isPaused
+                            isPausedByUser: isPaused,
+                            allowsContinuingHandoffClaim: isFeedHandoffContinue || continueFromFeed
                         )
                     }
                 }
+                // Force remount on post change so reused hosts never keep prior AV/poster state.
+                .id(post.id)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
                 .animation(nil, value: useFill)
@@ -1661,30 +1664,42 @@ struct ReelsScrollViewer: View {
                 CommentsWarmCache.shared.warm(posts[activeIndex].id)
             }
 
-            // Neighbors + catalog off the first paint path — but high priority so warm finishes
-            // before the user can swipe.
+            // Neighbors + catalog off the first paint path — one prepare after settle, not a storm.
             Task(priority: .userInitiated) { @MainActor in
                 if context.continueFromFeed {
                     // Let claim + first paint finish, then warm neighbors.
                     try? await Task.sleep(nanoseconds: 50_000_000)
-                    SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
                 }
                 seedFromWarmCatalogIfNeeded()
-                SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+                SparkWarmPool.shared.preparePlayerWindow(
+                    posts: posts,
+                    around: activeIndex,
+                    policy: .landing
+                )
                 await ensureBulkQueueAhead(target: max(12, SparksQueueBudget.minQueueAhead))
-                SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
                 await expandFeed()
                 await ensureBulkQueueAhead(target: SparksQueueBudget.minQueueAhead)
-                SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+                // Queue grew — refill window once (coalesce skips redundant same-index storms).
+                SparkWarmPool.shared.preparePlayerWindow(
+                    posts: posts,
+                    around: activeIndex,
+                    policy: .settled
+                )
                 if posts.count < SparksQueueBudget.minQueueAhead {
                     await loadMoreReels()
                     await ensureBulkQueueAhead(target: SparksQueueBudget.minQueueAhead)
-                    SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+                    SparkWarmPool.shared.preparePlayerWindow(
+                        posts: posts,
+                        around: activeIndex,
+                        policy: .settled
+                    )
                 }
             }
         }
         .onDisappear {
             // Closing Sparks: silence Spark players only — hubs mini stays protected.
+            // Parent ReelsVerticalFeed also drains; skip duplicate hardSilence here when
+            // that onDisappear already ran — hardSilence is idempotent and cheap.
             MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
             SparkWarmPool.shared.hardSilenceAllBuffered()
         }

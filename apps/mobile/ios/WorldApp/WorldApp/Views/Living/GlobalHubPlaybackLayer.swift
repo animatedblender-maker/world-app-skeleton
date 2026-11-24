@@ -483,6 +483,10 @@ struct GlobalHubPlaybackLayer: View {
                     isLandscapeFullscreen: landscapeFullscreen,
                     // Survive Sparks open/close — resume mid-clip without black remount.
                     protectAsContinuousHubs: true,
+                    // Feed→Hubs open: claim continuing buffer (share id ≠ origin id).
+                    allowsContinuingHandoffClaim: appState.shouldContinuePlayback(for: post.id)
+                        || SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: post.id)
+                        || SparkWarmPool.shared.hasContinuingParked,
                     // Meta-pull / FS button → same-player landscape (no remount cover).
                     externalFullscreenToken: appState.hubPlaybackFullscreenToken,
                     onFullscreenToggle: {

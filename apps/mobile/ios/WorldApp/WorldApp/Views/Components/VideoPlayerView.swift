@@ -52,6 +52,9 @@ struct VideoPlayerView: View {
     /// User pause on the focused Spark — freezes the **current frame** (does not deactivate
     /// the page, seek to 0, or swap to poster/black).
     var isPausedByUser: Bool = false
+    /// Feed→Sparks open only: allow claiming a continuing handoff player when share id ≠ origin id.
+    /// Must stay false for swipe / preload — otherwise post B installs post A's film.
+    var allowsContinuingHandoffClaim: Bool = false
 
     @State private var adFinished = false
     @State private var player: AVPlayer?
@@ -183,14 +186,18 @@ struct VideoPlayerView: View {
                 }
             }
             .onChange(of: url) { _, _ in
+                // Poster/black FIRST — never leave previous AVPlayer pixels on screen.
                 showPosterCover = true
                 isRestartSeeking = false
+                isPlaying = false
                 teardownPlayer(park: false)
                 Task { await ensurePlayer(forceRebuild: true) }
             }
             .onChange(of: postID) { _, _ in
+                // New clip: cover immediately so cell reuse never flashes the prior film.
                 showPosterCover = true
                 isRestartSeeking = false
+                isPlaying = false
                 // New clip → CC off (do not keep captions from the previous video).
                 liveCaptionHandle?.cancel()
                 liveCaptionHandle = nil
@@ -772,11 +779,12 @@ struct VideoPlayerView: View {
         // Feed hubs: start hidden until tap (CC rides with chrome). Other surfaces keep chrome on.
         applyInitialChromeVisibility()
         // Feed→Sparks continue: never start covered — claim already has painted frames.
-        let handoffContinue = postID.map {
+        // Only this post's continue flags (never a blanket hasContinuingParked — that flashed old film).
+        let handoffContinue = allowsContinuingHandoffClaim && (postID.map {
             SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: $0)
                 || appState.shouldContinuePlayback(for: $0)
                 || SparkWarmPool.shared.hasContinuingParked
-        } ?? SparkWarmPool.shared.hasContinuingParked
+        } ?? false)
         showPosterCover = !handoffContinue
         if isActive {
             liveGate.pageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
@@ -1198,10 +1206,12 @@ struct VideoPlayerView: View {
         let claimWasContinuing = SparkWarmPool.shared.takeLastClaimWasContinuing()
         let t0 = claimed.currentTime().seconds
         let midClipHead = t0.isFinite && t0 > 0.45
-        let handoffFlag = claimWasContinuing
+        // Mid-clip handoff only for THIS post / this claim — never any parked continuing.
+        let handoffFlag = allowsContinuingHandoffClaim && (
+            claimWasContinuing
             || (postID.map { SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: $0) } ?? false)
             || (postID.map { appState.shouldContinuePlayback(for: $0) } ?? false)
-            || SparkWarmPool.shared.hasContinuingParked
+        )
         let resumeAt = resolvedStartTime()
         let savedAhead = resumeAt >= 0.5
             && !(t0.isFinite && abs(t0 - resumeAt) < 1.0)
@@ -1459,10 +1469,14 @@ struct VideoPlayerView: View {
         }
     }
 
-    /// Claim parked continue player for this post or any id still marked continuing.
+    /// Claim parked player for this post. Cross-id continuing claim is Feed→Sparks open only.
     private func claimHandoffPlayer() -> AVPlayer? {
         if let postID, let claimed = SparkWarmPool.shared.claim(postID: postID) {
             return claimed
+        }
+        // Swipe / preload must never steal another clip's continuing buffer (old-film flash).
+        guard allowsContinuingHandoffClaim, SparkWarmPool.shared.hasContinuingParked else {
+            return nil
         }
         return SparkWarmPool.shared.claimFirstContinuing()
     }
@@ -1995,7 +2009,7 @@ private struct MatteryaFullscreenPlayer: View {
 // MARK: - Shared UI
 
 private struct MatteryaVideoSurface: UIViewRepresentable {
-    let player: AVPlayer
+    let player: AVPlayer?
     var fillsFrame: Bool = true
     /// When true, AVPlayerLayer soft floor is clear so a poster underlay can show through
     /// instead of a black blink before the first decoded frame.
@@ -2061,8 +2075,33 @@ private final class MatteryaPlayerUIView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    /// Detach player + wipe layer contents so a prior clip's last frame never paints.
+    func clearSurface() {
+        pendingPlayer = nil
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playerLayer.player = nil
+        playerLayer.contents = nil
+        let floor = softFloorClear ? Self.softFloorClear : Self.softFloorBlack
+        backgroundColor = floor
+        playerLayer.backgroundColor = floor.cgColor
+        CATransaction.commit()
+    }
+
     /// Queue the player until layout has real size — attaching at 0×0 flashes black.
     func setPendingPlayer(_ player: AVPlayer?) {
+        if player == nil {
+            clearSurface()
+            return
+        }
+        // Swap: detach old surface before binding so previous clip pixels never paint.
+        if playerLayer.player != nil, playerLayer.player !== player {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            playerLayer.player = nil
+            playerLayer.contents = nil
+            CATransaction.commit()
+        }
         pendingPlayer = player
         attachPlayerIfReady()
     }
@@ -2072,13 +2111,20 @@ private final class MatteryaPlayerUIView: UIView {
             // Detach while zero-sized so FigGeometry doesn't error / paint black.
             if playerLayer.player != nil {
                 playerLayer.player = nil
+                playerLayer.contents = nil
             }
             return
         }
-        guard let pendingPlayer else { return }
+        guard let pendingPlayer else {
+            if playerLayer.player != nil {
+                clearSurface()
+            }
+            return
+        }
         if playerLayer.player !== pendingPlayer {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
+            playerLayer.contents = nil
             playerLayer.player = pendingPlayer
             CATransaction.commit()
         }

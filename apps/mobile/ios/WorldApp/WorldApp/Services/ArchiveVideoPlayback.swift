@@ -303,6 +303,8 @@ struct MatteryaHubPlayerView: View {
     var isLandscapeFullscreen: Bool = false
     /// Keep the same AVPlayer when Sparks opens over hubs mini (resume mid-clip, no black).
     var protectAsContinuousHubs: Bool = false
+    /// Feed→Hubs open only: allow cross-id continuing claim. False for feed embeds.
+    var allowsContinuingHandoffClaim: Bool = false
     /// Bumped by AppState.requestHubFullscreen (meta pull) to open landscape FS.
     var externalFullscreenToken: Int = 0
     /// Prefer this over remounting `MatteryaLandscapeFullscreenPlayer` (YouTube-smooth).
@@ -433,7 +435,8 @@ struct MatteryaHubPlayerView: View {
                         }
                     },
                     onVideoSize: onVideoSize,
-                    protectAsContinuousHubs: protectAsContinuousHubs
+                    protectAsContinuousHubs: protectAsContinuousHubs,
+                    allowsContinuingHandoffClaim: allowsContinuingHandoffClaim
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
@@ -1573,6 +1576,8 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
     var isPausedByUser: Bool = false
     /// Hubs continuous mini/watch — keep AVPlayer across Sparks open/close.
     var protectAsContinuousHubs: Bool = false
+    /// Feed→Sparks open only: allow cross-id continuing claim. False on swipe/preload.
+    var allowsContinuingHandoffClaim: Bool = false
 
     final class Coordinator {
         var lastURL: URL?
@@ -1597,6 +1602,7 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         vc.loops = loops
         vc.postID = postID
         vc.protectAsContinuousHubs = protectAsContinuousHubs
+        vc.allowsContinuingHandoffClaim = allowsContinuingHandoffClaim
         vc.restartsFromBeginningOnFocus = restartFromBeginningToken > 0
         vc.onReady = onReady
         vc.onFailed = onFailed
@@ -1641,6 +1647,7 @@ struct ArchiveVideoPlayerView: UIViewControllerRepresentable {
         vc.loops = loops
         vc.postID = postID
         vc.protectAsContinuousHubs = protectAsContinuousHubs
+        vc.allowsContinuingHandoffClaim = allowsContinuingHandoffClaim
         vc.restartsFromBeginningOnFocus = restartFromBeginningToken > 0
         vc.onReady = onReady
         vc.onFailed = onFailed
@@ -1783,6 +1790,10 @@ final class ArchiveVideoPlayerController: UIViewController {
     var postID: String?
     /// Global Hubs mini/watch — survive Sparks open/close without remount (no black flash).
     var protectAsContinuousHubs = false
+    /// Feed→Sparks open only: allow cross-id continuing claim. False on swipe/preload.
+    var allowsContinuingHandoffClaim = false
+    /// Post id the current player was installed for (park on swap even if `postID` already updated).
+    private var boundPostID: String?
 
     /// User intent — survives SwiftUI re-renders during pull-down drag.
     private var userWantsPlayback = true
@@ -1940,6 +1951,8 @@ final class ArchiveVideoPlayerController: UIViewController {
             return
         }
 
+        // New source: poster/black FIRST — never leave previous AVPlayer pixels on screen.
+        clearPlayerSurfaceKeepingPoster()
         sourceURL = url
         didRetry = false
         didKickPlayback = false
@@ -1947,6 +1960,7 @@ final class ArchiveVideoPlayerController: UIViewController {
         errorLabel.isHidden = true
         onHasAudioTrack?(nil)
         loadPoster(posterURL)
+        posterView.isHidden = false
         setMuted(muted)
         if active {
             startPlayback(url: url, muted: muted, startTime: startTime, autoplay: true)
@@ -1954,6 +1968,40 @@ final class ArchiveVideoPlayerController: UIViewController {
             // Always pre-buffer off-screen Sparks (silent) so swipe-in is pure play — no black flash.
             startPlayback(url: url, muted: true, startTime: restartsFromBeginningOnFocus ? 0 : startTime, autoplay: false)
         }
+    }
+
+    /// Detach AV layer + wipe contents; keep poster visible so reuse never flashes old film.
+    private func clearPlayerSurfaceKeepingPoster() {
+        loadTask?.cancel()
+        loadTask = nil
+        removeObservers()
+        let parkID = boundPostID
+        if let player {
+            player.pause()
+            player.isMuted = true
+            player.volume = 0
+            player.rate = 0
+            if let parkID, player.currentItem != nil, player.status != .failed {
+                SparkWarmPool.shared.park(postID: parkID, player: player)
+            } else {
+                if let parkID { SparkWarmPool.shared.release(postID: parkID) }
+                player.replaceCurrentItem(with: nil)
+                MediaPlaybackCoordinator.shared.unregister(player)
+            }
+        } else if let parkID {
+            SparkWarmPool.shared.release(postID: parkID)
+        }
+        boundPostID = nil
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playerLayer?.player = nil
+        playerLayer?.contents = nil
+        playerLayer?.removeFromSuperlayer()
+        CATransaction.commit()
+        playerLayer = nil
+        player = nil
+        pendingResumeSeconds = 0
+        onPlayingChanged?(false)
     }
 
     /// When true (Sparks player), becoming focused always seeks to t=0.
@@ -2459,6 +2507,7 @@ final class ArchiveVideoPlayerController: UIViewController {
         playerLayer?.removeFromSuperlayer()
         playerLayer = nil
         player = nil
+        boundPostID = nil
         pendingResumeSeconds = 0
         // Don't deactivate the whole audio session here — other feed cards may still be live.
     }
@@ -2477,10 +2526,15 @@ final class ArchiveVideoPlayerController: UIViewController {
         // Install + play synchronously so the first painted frame is video, not black/poster.
         // Masquerade watches pass postID=nil — never steal a Sparks/Hubs continuing
         // handoff (those park muted and left Masquerade as picture-with-no-sound).
+        // Cross-id continuing claim is Feed→Sparks open only — swipe/preload must not
+        // install another clip's film (old-spark flash).
         let claimed: AVPlayer? = {
             guard let postID, !postID.isEmpty else { return nil }
-            return SparkWarmPool.shared.claim(postID: postID)
-                ?? SparkWarmPool.shared.claimFirstContinuing()
+            if let exact = SparkWarmPool.shared.claim(postID: postID) { return exact }
+            guard allowsContinuingHandoffClaim, SparkWarmPool.shared.hasContinuingParked else {
+                return nil
+            }
+            return SparkWarmPool.shared.claimFirstContinuing()
         }()
         if let claimed {
             installClaimedPlayerSync(claimed, original: url, muted: muted, startTime: startTime, autoplay: autoplay)
@@ -2551,7 +2605,12 @@ final class ArchiveVideoPlayerController: UIViewController {
             existing.pause()
             MediaPlaybackCoordinator.shared.unregister(existing)
         }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playerLayer?.player = nil
+        playerLayer?.contents = nil
         playerLayer?.removeFromSuperlayer()
+        CATransaction.commit()
         didKickPlayback = false
         userWantsPlayback = autoplay
         r2ResourceLoader = nil
@@ -2573,6 +2632,7 @@ final class ArchiveVideoPlayerController: UIViewController {
         CATransaction.commit()
         playerLayer = layer
         player = claimed
+        boundPostID = postID
         resolvedPlayURL = original
         MediaPlaybackCoordinator.shared.register(claimed)
         noteContinuousProtection(claimed)
@@ -2587,13 +2647,12 @@ final class ArchiveVideoPlayerController: UIViewController {
         let claimWasContinuing = SparkWarmPool.shared.takeLastClaimWasContinuing()
         let t = claimed.currentTime().seconds
         let midClipHead = t.isFinite && t > 0.45
-        // Mid-clip handoff ONLY when the claimed head is actually mid-clip.
-        // `claimWasContinuing` alone used to be enough — Continue watching often claimed a
-        // near-zero "continuing" park (handoff export from a t≈0 preview) and skipped the
-        // seek to the saved playhead, so the video always restarted at 0.
-        let handoffFlag = claimWasContinuing
+        // Mid-clip handoff ONLY when the claimed head is actually mid-clip for THIS open.
+        // Never treat an unrelated parked continuing as handoff (old-film flash on swipe).
+        let handoffFlag = allowsContinuingHandoffClaim && (
+            claimWasContinuing
             || (postID.map { SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: $0) } ?? false)
-            || SparkWarmPool.shared.hasContinuingParked
+        )
         let continueMid = midClipHead && handoffFlag
         if handoffFlag, let postID {
             SparkWarmPool.shared.clearContinueFlag(postID: postID)
@@ -2832,6 +2891,7 @@ final class ArchiveVideoPlayerController: UIViewController {
         view.layer.insertSublayer(layer, above: posterView.layer)
         playerLayer = layer
         player = claimed
+        boundPostID = postID
         resolvedPlayURL = original
         MediaPlaybackCoordinator.shared.register(claimed)
         noteContinuousProtection(claimed)
@@ -3028,6 +3088,7 @@ final class ArchiveVideoPlayerController: UIViewController {
         CATransaction.commit()
         playerLayer = layer
         player = newPlayer
+        boundPostID = postID
         resolvedPlayURL = url
         mutedFlag = muted
         MediaPlaybackCoordinator.shared.register(newPlayer)
