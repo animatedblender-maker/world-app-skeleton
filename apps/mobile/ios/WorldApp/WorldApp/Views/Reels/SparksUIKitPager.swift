@@ -566,16 +566,20 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         ScrollBudget.noteSettled()
         commitPageFromScroll()
         flushPendingFlingApply()
+        // Force settled refill (bypasses coalesce) so ±1/±2 are decoding before next fling.
         SparkWarmPool.shared.preparePlayerWindow(
             posts: posts,
             around: activeIndex,
             policy: .settled
         )
-        if activeIndex >= max(0, posts.count - 24) {
-            coordinator?.nearEnd()
-        }
-        if activeIndex <= 2 {
-            coordinator?.nearStart()
+        let idx = activeIndex
+        let nearTail = idx >= max(0, posts.count - 24)
+        let nearHead = idx <= 2
+        if nearTail || nearHead {
+            DispatchQueue.main.async { [weak self] in
+                if nearTail { self?.coordinator?.nearEnd() }
+                if nearHead { self?.coordinator?.nearStart() }
+            }
         }
     }
 
@@ -590,7 +594,9 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
                 policy: .settled
             )
             if activeIndex >= max(0, posts.count - 24) {
-                coordinator?.nearEnd()
+                DispatchQueue.main.async { [weak self] in
+                    self?.coordinator?.nearEnd()
+                }
             }
         }
     }
@@ -715,18 +721,20 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         coordinator?.setActiveIndex(clamped)
         refreshVisibleCells()
 
-        // Keep a deep bulk ahead — fire load-more well before the last page.
-        // Never during fling: nearEnd → ensureBulk → posts mutation freezes the pager.
-        if !ScrollBudget.isFlinging, clamped >= max(0, posts.count - 24) {
-            coordinator?.nearEnd()
-        }
-        if !ScrollBudget.isFlinging, clamped <= 2 {
-            coordinator?.nearStart()
-        }
-
-        if posts.indices.contains(clamped) {
-            // Mark all identities (origin + share) so feed never re-serves this clip.
-            SparkDiscoveryEngine.markWatched(posts[clamped])
+        // Catalog + discovery off the commit critical path — keep claim/play first.
+        // Settle handlers also fire nearEnd; this covers early-commit when not flinging.
+        let needsNearEnd = !ScrollBudget.isFlinging && clamped >= max(0, posts.count - 24)
+        let needsNearStart = !ScrollBudget.isFlinging && clamped <= 2
+        let watchedPost = posts.indices.contains(clamped) ? posts[clamped] : nil
+        if needsNearEnd || needsNearStart || watchedPost != nil {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if needsNearEnd { self.coordinator?.nearEnd() }
+                if needsNearStart { self.coordinator?.nearStart() }
+                if let watchedPost {
+                    SparkDiscoveryEngine.markWatched(watchedPost)
+                }
+            }
         }
     }
 
@@ -767,8 +775,9 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
                     policy: .landing
                 )
             }
-            // Neighbor-only early commit, and only on gentle snaps (not whip flings).
-            if abs(targetPage - activeIndex) == 1, abs(velocity.y) < 1.8 {
+            // Neighbor-only early commit on gentle snaps — whip flings wait for settle
+            // so silence+SwiftUI refresh never hitch mid-decelerate (IG/Loops feel).
+            if abs(targetPage - activeIndex) == 1, abs(velocity.y) < 1.35 {
                 commitPage(targetPage)
             }
         }

@@ -42,6 +42,10 @@ final class SparkWarmPool {
         /// Deep enough that claim starts already buffered (no enter-frame stall).
         static var forwardBufferDeep: Double { isConstrained ? 2 : 3 }
         static var forwardBufferLight: Double { isConstrained ? 1 : 1.5 }
+        /// Soft peak for short vertical clips — uncapped (0) thrash-switches on cellular.
+        /// ~3.5 Mbps ≈ solid 720p Sparks start without stalling the active decoder.
+        static var peakBitRateDeep: Double { isConstrained ? 2_500_000 : 3_500_000 }
+        static var peakBitRateLight: Double { isConstrained ? 1_500_000 : 2_500_000 }
     }
 
     /// How aggressively to warm the Sparks sliding window.
@@ -104,6 +108,7 @@ final class SparkWarmPool {
         }
         switch resolved {
         case .settled:
+            // Force: never let willDisplay/prefetch coalesce eat the settle refill.
             prepare(
                 posts: posts,
                 around: index,
@@ -111,7 +116,8 @@ final class SparkWarmPool {
                 behind: MediaBudget.playerBehind,
                 deepPrerollLimit: MediaBudget.deepPrerollSparks,
                 skipThumbWarm: false,
-                allowNewWarms: true
+                allowNewWarms: true,
+                force: true
             )
         case .flingProtect:
             // Keep next 1 decoding during drag — no thumbs / far-ahead storm.
@@ -125,7 +131,7 @@ final class SparkWarmPool {
                 allowNewWarms: true
             )
         case .landing:
-            // Snap / settle: force deep warm of landing + neighbors even if fling flag lags.
+            // Snap target: force deep warm even if fling coalesce window is open.
             prepare(
                 posts: posts,
                 around: index,
@@ -133,7 +139,8 @@ final class SparkWarmPool {
                 behind: MediaBudget.playerBehind,
                 deepPrerollLimit: MediaBudget.deepPrerollSparks,
                 skipThumbWarm: false,
-                allowNewWarms: true
+                allowNewWarms: true,
+                force: true
             )
         }
     }
@@ -195,6 +202,7 @@ final class SparkWarmPool {
 
     /// Warm CDN resolves for a band (cheap) and buffer players for a tight window.
     /// Call early (open + every page) so the next clip is first-frame ready.
+    /// - Parameter force: skip coalesce (landing / settled must always refill the window).
     func prepare(
         posts: [CountryPost],
         around index: Int,
@@ -202,19 +210,23 @@ final class SparkWarmPool {
         behind: Int = 2,
         deepPrerollLimit: Int? = nil,
         skipThumbWarm: Bool = false,
-        allowNewWarms: Bool = true
+        allowNewWarms: Bool = true,
+        force: Bool = false
     ) {
         guard !posts.isEmpty else { return }
         let deepLimit = deepPrerollLimit ?? MediaBudget.deepPrerollSparks
 
-        // Coalesce willDisplay + prefetch + commit storms for the same focus.
-        // Slightly wider window mid-fling — redundant prepare was a common swipe hitch.
+        // Coalesce willDisplay + prefetch storms for the same focus.
+        // Landing / settled always run — coalesce used to eat the settle refill after
+        // willEndDragging landing, leaving page+2 cold on the next swipe.
         let now = Date()
-        let coalesceWindow: TimeInterval = ScrollBudget.isFlinging ? 0.32 : 0.18
-        if index == lastPrepareIndex,
-           posts.count == lastPreparePostCount,
-           now.timeIntervalSince(lastPrepareAt) < coalesceWindow {
-            return
+        if !force {
+            let coalesceWindow: TimeInterval = ScrollBudget.isFlinging ? 0.28 : 0.14
+            if index == lastPrepareIndex,
+               posts.count == lastPreparePostCount,
+               now.timeIntervalSince(lastPrepareAt) < coalesceWindow {
+                return
+            }
         }
         lastPrepareIndex = index
         lastPrepareAt = now
@@ -712,7 +724,10 @@ final class SparkWarmPool {
             ? MediaBudget.forwardBufferDeep
             : MediaBudget.forwardBufferLight
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-        item.preferredPeakBitRate = 0
+        // Soft peak — short vertical clips start faster on cellular without quality thrash.
+        item.preferredPeakBitRate = deepPreroll
+            ? MediaBudget.peakBitRateDeep
+            : MediaBudget.peakBitRateLight
 
         let player = AVPlayer(playerItem: item)
         player.isMuted = true
@@ -786,11 +801,13 @@ final class SparkWarmPool {
                 player.isMuted = true
                 player.volume = 0
                 player.rate = 0
-                _ = await player.seek(
-                    to: .zero,
-                    toleranceBefore: .zero,
-                    toleranceAfter: .zero
-                )
+                if !Self.isAtStart(player, epsilon: 0.08) {
+                    _ = await player.seek(
+                        to: .zero,
+                        toleranceBefore: .zero,
+                        toleranceAfter: .zero
+                    )
+                }
                 player.pause()
                 player.rate = 0
                 return true
@@ -820,13 +837,16 @@ final class SparkWarmPool {
                 player.isMuted = true
                 player.volume = 0
                 player.rate = 0
-                // Exact start — infinite tolerance was landing on distant keyframes.
-                _ = await player.seek(
-                    to: .zero,
-                    toleranceBefore: .zero,
-                    toleranceAfter: .zero
-                )
-                guard isParked(postID: postID, player: player) else { return true }
+                // Keep a decoded first frame when already near start — re-seeking to 0
+                // wipes the paint buffer and every claim flashes black until re-decode.
+                if !Self.isAtStart(player, epsilon: 0.08) {
+                    _ = await player.seek(
+                        to: .zero,
+                        toleranceBefore: .zero,
+                        toleranceAfter: .zero
+                    )
+                    guard isParked(postID: postID, player: player) else { return true }
+                }
 
                 // Preroll buffers from t=0 without leaving the start (unlike play()+sleep).
                 await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
@@ -844,8 +864,7 @@ final class SparkWarmPool {
                 player.rate = 0
                 player.isMuted = true
                 player.volume = 0
-                // Keep the decoded first frame. Seeking to 0 after preroll wiped the paint
-                // buffer and every Feed claim flashed black until the decoder caught up.
+                // Only re-seek if preroll drifted off the head (≥ ~0.08s).
                 let head = player.currentTime().seconds
                 if head.isFinite, head >= 0.08 {
                     _ = await player.seek(

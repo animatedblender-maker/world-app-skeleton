@@ -547,12 +547,20 @@ struct VideoPlayerView: View {
         }
     }
 
+    /// Sparks fullscreen (loops + fill, not feed-mute cards): snap poster lift like IG/Loops.
+    /// Feed embeds keep the longer black-keyframe guard.
+    private var sparksSnapReveal: Bool {
+        loops && fillsFrame && !sharesFeedMute
+    }
+
     /// True only when the layer is likely painting pixels (not a black ready buffer).
     /// `rate > 0` alone still blinks — decoder often shows 1–2 black frames first.
     private func playerHasPaintedFrames(_ player: AVPlayer) -> Bool {
         let t = player.currentTime().seconds
-        // 0.12s past start — past the typical black keyframe band on R2 / HLS.
-        let advanced = t.isFinite && t >= 0.12
+        // Sparks warm claims are prerolled — ~2 frames past start is enough.
+        // Feed cold enter keeps the longer black-keyframe band.
+        let threshold = sparksSnapReveal ? 0.04 : 0.12
+        let advanced = t.isFinite && t >= threshold
         let moving = player.rate > 0.05
             || (player.timeControlStatus == .playing && player.rate > 0.01)
         return moving && advanced
@@ -568,11 +576,12 @@ struct VideoPlayerView: View {
             onFramesReady?()
             return
         }
-        // Settle: keep poster on top for a couple display frames AFTER paint proof,
-        // so dropping the cover never reveals a still-black AVPlayerLayer (the blink).
+        // Sparks: one display frame after paint proof. Feed: hold a touch longer
+        // so dropping the cover never reveals a still-black AVPlayerLayer.
+        let settleNs: UInt64 = sparksSnapReveal ? 16_000_000 : 64_000_000
         let player = self.player
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 64_000_000)
+            try? await Task.sleep(nanoseconds: settleNs)
             guard showPosterCover else { return }
             guard liveGate.isActive, !liveGate.userWantsPause else { return }
             if let player, !playerHasPaintedFrames(player) { return }
@@ -1304,7 +1313,13 @@ struct VideoPlayerView: View {
         }
 
         if let item = claimed.currentItem {
-            item.preferredForwardBufferDuration = 8
+            // Sparks short clips: ~3s forward is enough; 8s fought the light MediaBudget.
+            item.preferredForwardBufferDuration = sparksSnapReveal
+                ? SparkWarmPool.MediaBudget.forwardBufferDeep + 1
+                : 8
+            if sparksSnapReveal {
+                item.preferredPeakBitRate = SparkWarmPool.MediaBudget.peakBitRateDeep
+            }
             statusObserver = item.observe(\.status, options: [.new, .initial]) { item, _ in
                 Task { @MainActor in
                     switch item.status {
@@ -1388,8 +1403,13 @@ struct VideoPlayerView: View {
     @MainActor
     private func installPlayer(using configuration: MediaPlaybackConfiguration) {
         let item = makePlayerItem(for: configuration)
-        // Deep forward buffer so scroll-back / next-page feel instant.
-        item.preferredForwardBufferDuration = (liveGate.isActive || preloadsWhenInactive) ? 6 : 3
+        // Sparks short clips: tight forward buffer + soft peak. Other surfaces keep deeper.
+        if sparksSnapReveal {
+            item.preferredForwardBufferDuration = SparkWarmPool.MediaBudget.forwardBufferDeep + 1
+            item.preferredPeakBitRate = SparkWarmPool.MediaBudget.peakBitRateDeep
+        } else {
+            item.preferredForwardBufferDuration = (liveGate.isActive || preloadsWhenInactive) ? 6 : 3
+        }
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         let newPlayer = AVPlayer(playerItem: item)
         newPlayer.isMuted = liveGate.isActive ? liveGate.isMuted : true

@@ -83,14 +83,22 @@ struct ReelsVerticalFeed: View {
             SparkWarmPool.shared.drain()
         }
         .onChange(of: activeIndex) { _, idx in
-            recordView(at: idx)
+            // Discovery/network off the focus tick — claim + first frame win first.
+            DispatchQueue.main.async {
+                recordView(at: idx)
+            }
             // Mid-fling: settle handlers refill the deep ahead window.
+            // Settled path forces prepare so coalesce cannot skip neighbor decode.
             if !ScrollBudget.isFlinging {
-                SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: idx)
+                SparkWarmPool.shared.preparePlayerWindow(
+                    posts: posts,
+                    around: idx,
+                    policy: .settled
+                )
             }
             // Request next catalog bulk well before the user reaches the tail.
             if !ScrollBudget.isFlinging, idx >= posts.count - 16 {
-                onNearEnd?()
+                DispatchQueue.main.async { onNearEnd?() }
             }
         }
     }
