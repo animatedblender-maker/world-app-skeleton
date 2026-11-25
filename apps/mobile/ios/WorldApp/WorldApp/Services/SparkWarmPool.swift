@@ -24,28 +24,45 @@ final class SparkWarmPool {
         static var isConstrained: Bool { physicalGB < 3.6 }
         static var isMid: Bool { physicalGB < 5.6 }
 
-        /// Feed/Hubs stay focus+1. Sparks path-local ahead=2 on capable phones so
-        /// swipe lands on an already-decoding neighbor (butter fling → snap).
+        /// Feed/Hubs stay focus+1. Sparks is path-local and hotter than butter:
+        /// capable phones keep focus+3 decoding so whip flings never land cold.
         static var playerAhead: Int { playerAheadSparks }
         static var playerAheadFeed: Int { 1 }
-        static var playerAheadSparks: Int { isConstrained ? 1 : 2 }
+        static var playerAheadSparks: Int {
+            if isConstrained { return 1 }
+            if isMid { return 2 }
+            return 3
+        }
         static var playerAheadHubs: Int { 1 }
-        static var thumbAhead: Int { 2 }
+        static var thumbAhead: Int { isConstrained ? 2 : 3 }
         static var deepPrerollFeed: Int { 1 }
-        static var deepPrerollSparks: Int { isConstrained ? 1 : 2 }
+        static var deepPrerollSparks: Int {
+            if isConstrained { return 1 }
+            if isMid { return 2 }
+            return 3
+        }
         static var deepPrerollHubs: Int { 1 }
-        /// Sparks ahead=2 needs 3 slots on capable devices (focus + 2); constrained stays 2.
-        static var maxSlots: Int { isConstrained ? 2 : 3 }
+        /// Capable: focus + 3 ahead = 4 slots. Mid: 3. Constrained: 2.
+        static var maxSlots: Int {
+            if isConstrained { return 2 }
+            if isMid { return 3 }
+            return 4
+        }
         static var playerBehind: Int { 0 }
-        /// Focus + next must warm in parallel or the entering card waits ~1s for a slot.
-        static var maxConcurrentWarms: Int { isConstrained ? 1 : 2 }
+        /// Parallel warms so +2/+3 fill during the current clip, not after settle.
+        static var maxConcurrentWarms: Int {
+            if isConstrained { return 1 }
+            if isMid { return 2 }
+            return 3
+        }
         /// Deep enough that claim starts already buffered (no enter-frame stall).
-        static var forwardBufferDeep: Double { isConstrained ? 2 : 3 }
-        static var forwardBufferLight: Double { isConstrained ? 1 : 1.5 }
+        static var forwardBufferDeep: Double { isConstrained ? 2 : 3.5 }
+        static var forwardBufferLight: Double { isConstrained ? 1 : 1.75 }
         /// Soft peak for short vertical clips — uncapped (0) thrash-switches on cellular.
-        /// ~3.5 Mbps ≈ solid 720p Sparks start without stalling the active decoder.
-        static var peakBitRateDeep: Double { isConstrained ? 2_500_000 : 3_500_000 }
-        static var peakBitRateLight: Double { isConstrained ? 1_500_000 : 2_500_000 }
+        static var peakBitRateDeep: Double { isConstrained ? 2_500_000 : 4_000_000 }
+        static var peakBitRateLight: Double { isConstrained ? 1_500_000 : 2_800_000 }
+        /// Mid-fling next window (capable keeps +2 decoding while finger is down).
+        static var flingAhead: Int { isConstrained ? 1 : 2 }
     }
 
     /// How aggressively to warm the Sparks sliding window.
@@ -123,13 +140,13 @@ final class SparkWarmPool {
                 force: true
             )
         case .flingProtect:
-            // Keep next 1 decoding during drag — no thumbs / far-ahead storm.
+            // Keep next 1–2 decoding during drag — no thumbs / far-ahead storm.
             prepare(
                 posts: posts,
                 around: index,
-                ahead: 1,
+                ahead: MediaBudget.flingAhead,
                 behind: 0,
-                deepPrerollLimit: 1,
+                deepPrerollLimit: MediaBudget.flingAhead,
                 skipThumbWarm: true,
                 allowNewWarms: true
             )

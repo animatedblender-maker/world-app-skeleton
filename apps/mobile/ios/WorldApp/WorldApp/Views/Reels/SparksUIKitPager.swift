@@ -145,8 +145,8 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         cv.dataSource = self
         cv.delegate = self
         cv.register(SparksPageCell.self, forCellWithReuseIdentifier: SparksPageCell.reuseID)
-        // Snappy page settle — same family as IG/TikTok reels.
-        cv.decelerationRate = MatteryaMotion.collectionDeceleration
+        // Snappier than UIScrollView.fast (0.99) — pages lock sooner like IG Reels.
+        cv.decelerationRate = UIScrollView.DecelerationRate(rawValue: 0.985)
         // Prefetch cells so configure + warm-pool claim happen before the page lands.
         cv.isPrefetchingEnabled = true
         cv.prefetchDataSource = self
@@ -476,13 +476,17 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
     }
 
     private func refreshVisibleCells() {
-        for cell in collectionView.visibleCells {
-            guard let page = cell as? SparksPageCell,
-                  let ip = collectionView.indexPath(for: page),
-                  posts.indices.contains(ip.item) else { continue }
-            let post = posts[ip.item]
-            let active = ip.item == activeIndex
-            let item = ip.item
+        // Only touch focus ±1 — full visible-cell SwiftUI rebuilds were hitching whip flings.
+        let lo = max(0, activeIndex - 1)
+        let hi = min(posts.count - 1, activeIndex + 1)
+        guard lo <= hi else { return }
+        for item in lo...hi {
+            let ip = IndexPath(item: item, section: 0)
+            guard let page = collectionView.cellForItem(at: ip) as? SparksPageCell,
+                  posts.indices.contains(item)
+            else { continue }
+            let post = posts[item]
+            let active = item == activeIndex
             page.configure(
                 post: post,
                 isActive: active,
@@ -492,7 +496,6 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
                 viewerCountryCode: viewerCountryCode,
                 appState: appState,
                 continueFromFeed: continueFromFeedFlag(for: post.id, isActive: active),
-                // Resolve post at tap time from live array (never capture stale likedByMe).
                 onLikeToggle: { [weak self] in
                     guard let self, self.posts.indices.contains(item) else { return }
                     self.coordinator?.likeToggle(self.posts[item])
@@ -783,10 +786,10 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
                     policy: .landing
                 )
             }
-            // Neighbor early-commit restored (was <1.35 and felt slower than butter).
-            // ±1 page always commits as soon as the target is known — IG-style snap.
-            // Multi-page whip still waits for settle to avoid silence storms mid-decelerate.
-            if abs(targetPage - activeIndex) == 1 {
+            // ±1 always early-commits. ±2 on a strong flick commits too so the
+            // second page is already claiming before settle (faster than butter).
+            let delta = abs(targetPage - activeIndex)
+            if delta == 1 || (delta == 2 && abs(velocity.y) > 0.9) {
                 commitPage(targetPage)
             }
         }
@@ -797,10 +800,9 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
 
 extension SparksPagerViewController: UICollectionViewDataSourcePrefetching {
     func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
-        // Mid-fling: skip — prepare coalesces and fling gate already covers ±1.
-        guard !ScrollBudget.isFlinging else { return }
-        // Warm from focus, never from the farthest prefetch index (that re-centered the window).
-        SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
+        // Mid-fling: still warm next 1–2 (flingProtect) — cold skip made whip swipes wait.
+        let policy: SparkWarmPool.PreparePolicy = ScrollBudget.isFlinging ? .flingProtect : .settled
+        SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex, policy: policy)
     }
 }
 
