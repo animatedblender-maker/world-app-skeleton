@@ -573,6 +573,13 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
             policy: .settled
         )
         let idx = activeIndex
+        // Early-commit skipped recordView while flinging — mark watched now that we settled.
+        if posts.indices.contains(idx) {
+            let post = posts[idx]
+            DispatchQueue.main.async {
+                Task { await PostsService.shared.recordView(post) }
+            }
+        }
         let nearTail = idx >= max(0, posts.count - 24)
         let nearHead = idx <= 2
         if nearTail || nearHead {
@@ -693,12 +700,14 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
             return
         }
         let previousIndex = activeIndex
-        // Force-warm landing + deep neighbors BEFORE silence/claim — instant first frame.
+        // Mid-decelerate early-commit: willEndDragging already ran landing warm —
+        // do not storm prepare again (that made whip swipes feel slower than before).
+        // Settled commits still force landing so ±1/±2 decode before the next fling.
         if posts.indices.contains(clamped) {
             SparkWarmPool.shared.preparePlayerWindow(
                 posts: posts,
                 around: clamped,
-                policy: .landing
+                policy: ScrollBudget.isFlinging ? .flingProtect : .landing
             )
         }
         PerformanceTelemetry.mark("reel_swipe_start")
@@ -721,10 +730,10 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         coordinator?.setActiveIndex(clamped)
         refreshVisibleCells()
 
-        // Catalog + discovery off the commit critical path — keep claim/play first.
-        // Settle handlers also fire nearEnd; this covers early-commit when not flinging.
-        let needsNearEnd = !ScrollBudget.isFlinging && clamped >= max(0, posts.count - 24)
-        let needsNearStart = !ScrollBudget.isFlinging && clamped <= 2
+        // Catalog + discovery only when settled — never on mid-fling early-commit.
+        guard !ScrollBudget.isFlinging else { return }
+        let needsNearEnd = clamped >= max(0, posts.count - 24)
+        let needsNearStart = clamped <= 2
         let watchedPost = posts.indices.contains(clamped) ? posts[clamped] : nil
         if needsNearEnd || needsNearStart || watchedPost != nil {
             DispatchQueue.main.async { [weak self] in
@@ -732,7 +741,6 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
                 if needsNearEnd { self.coordinator?.nearEnd() }
                 if needsNearStart { self.coordinator?.nearStart() }
                 if let watchedPost {
-                    // recordView → markWatched (all identities) + strip Home buffered tail.
                     Task { await PostsService.shared.recordView(watchedPost) }
                 }
             }
@@ -766,8 +774,7 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         let h = max(pageSize.height, 1)
         let targetPage = Int(round(targetContentOffset.pointee.y / h))
         // Fast fling: deep-warm landing while decelerating so claim is already ready.
-        // Skip heavy early-commit on multi-page flicks — that silence+refresh mid-decelerate
-        // was a common fling hitch; DidEndDecelerating commits once.
+        // Skip heavy early-commit on multi-page flicks — DidEndDecelerating commits once.
         if abs(velocity.y) > 0.35 || targetPage != activeIndex {
             if posts.indices.contains(targetPage) {
                 SparkWarmPool.shared.preparePlayerWindow(
@@ -776,9 +783,10 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
                     policy: .landing
                 )
             }
-            // Neighbor-only early commit on gentle snaps — whip flings wait for settle
-            // so silence+SwiftUI refresh never hitch mid-decelerate (IG/Loops feel).
-            if abs(targetPage - activeIndex) == 1, abs(velocity.y) < 1.35 {
+            // Neighbor early-commit restored (was <1.35 and felt slower than butter).
+            // ±1 page always commits as soon as the target is known — IG-style snap.
+            // Multi-page whip still waits for settle to avoid silence storms mid-decelerate.
+            if abs(targetPage - activeIndex) == 1 {
                 commitPage(targetPage)
             }
         }
