@@ -1652,6 +1652,13 @@ app.get('/v1/feed', async (req: Request, res: Response) => {
         ? String(req.query.idempotency_key)
         : null;
     const session = req.query.session ? String(req.query.session) : null;
+    // Client watched / in-pager IDs — delivery ledger is serve-once; this is watch-once.
+    const excludeRaw = req.query.exclude != null ? String(req.query.exclude) : '';
+    const excludeIds = excludeRaw
+      .split(/[, ]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 800);
     const page = await fetchHomeFeedPage({
       limit,
       cursor,
@@ -1659,6 +1666,7 @@ app.get('/v1/feed', async (req: Request, res: Response) => {
       viewerEmail: user?.email ?? null,
       idempotencyKey,
       session,
+      excludeIds,
     });
     return res.json({ ok: true, ...page });
   } catch (err: any) {

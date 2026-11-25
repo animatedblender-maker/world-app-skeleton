@@ -1386,6 +1386,8 @@ export async function fetchHomeFeedPage(input: {
   idempotencyKey?: string | null;
   /** Client session — rotates first-page mix so each open isn't identical. */
   session?: string | null;
+  /** Client watched / already-in-pager UUIDs — watch-once on top of delivery ledger. */
+  excludeIds?: string[] | null;
 }): Promise<SurfacePage> {
   const want = Math.min(Math.max(Number(input.limit) || 24, 1), 64);
   const viewerId = input.viewerUserId ? String(input.viewerUserId).trim() : '';
@@ -1394,6 +1396,12 @@ export async function fetchHomeFeedPage(input: {
     String(input.idempotencyKey ?? '').trim().slice(0, 128) || null;
   const sessionSeed = hashSessionSeed(
     String(input.session ?? '').trim() || idem || viewerId || 'anon'
+  );
+  const clientExclude = new Set(
+    (input.excludeIds || [])
+      .map((id) => String(id || '').trim().toLowerCase())
+      .filter((id) => /^[0-9a-f-]{36}$/i.test(id))
+      .slice(0, 800)
   );
 
   // App Review tester: empty Home Feed (everyone else keeps full catalog).
@@ -1545,15 +1553,24 @@ export async function fetchHomeFeedPage(input: {
     { kind: 'image', rows: imageRows, i: imageConsumed },
   ];
 
-  let servedRows = woven.slice(0, want);
+  const wovenUnwatched = clientExclude.size
+    ? woven.filter((row) => {
+        if (clientExclude.has(String(row.id).toLowerCase())) return false;
+        if (row.shared_post_id && clientExclude.has(String(row.shared_post_id).toLowerCase())) {
+          return false;
+        }
+        return true;
+      })
+    : woven;
+  let servedRows = wovenUnwatched.slice(0, want);
   let batchId: string | null = null;
   let deliveryPolicy: 'ledger' | 'cursor' = 'cursor';
   const requestId = newMindRequestId();
   assertSurfaceNamespace('home_for_you', 'public');
 
-  if (viewerId && woven.length && mindLedgerEnabled()) {
+  if (viewerId && wovenUnwatched.length && mindLedgerEnabled()) {
     const delivered = await loadDeliveredCanonicalKeys(viewerId, 'home_for_you');
-    let eligible = woven.filter(
+    let eligible = wovenUnwatched.filter(
       (row) => !canonicalVideoAliasKeys(row).some((k) => delivered.has(k))
     );
     // Prefer share over original when both somehow remain.

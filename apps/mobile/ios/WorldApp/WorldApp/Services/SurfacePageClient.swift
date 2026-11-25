@@ -17,7 +17,8 @@ enum SurfacePageClient {
         limit: Int = 24,
         cursor: String? = nil,
         idempotencyKey: String? = nil,
-        session: String? = nil
+        session: String? = nil,
+        excludeIds: [String] = []
     ) async -> Page? {
         var q: [String: String?] = [
             // API caps at 64 — walk the full R2-backed library newest-first.
@@ -31,6 +32,12 @@ enum SurfacePageClient {
         // Session rotates first-page mix so each open isn't identical newest-first.
         if let session, !session.isEmpty {
             q["session"] = session
+        }
+        // Watched + in-pager IDs — delivery ledger alone is serve-once, not watch-once.
+        var exclude = excludeIds
+        exclude.append(contentsOf: SparkDiscoveryEngine.viewedIDList(limit: 200))
+        if let compact = compactExcludeQuery(exclude, maxIds: 64, maxChars: 1800), !compact.isEmpty {
+            q["exclude"] = compact
         }
         return await get(
             path: "/v1/feed",

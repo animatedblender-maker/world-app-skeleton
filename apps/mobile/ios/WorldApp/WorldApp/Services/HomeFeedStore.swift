@@ -750,7 +750,11 @@ final class HomeFeedStore {
                 (PlayPlatformBridge.isWrittenHomePost($0) && !Self.isHomeImageCard($0))
                     || !SparkDiscoveryEngine.isViewed($0)
             }
-            let wovenNew = Self.weaveWrittenAmongMedia(newcomers)
+            // Interest-rank newcomers (unviewed only) — do not dump raw recency under the pin.
+            let rankedNew = newcomers.isEmpty
+                ? []
+                : await rankForSessionAsync(newcomers)
+            let wovenNew = Self.weaveWrittenAmongMedia(rankedNew)
 
             let merged = head + cleanedBelow + wovenNew
             guard merged.map(\.id) != posts.map(\.id) else { return }
@@ -1100,6 +1104,7 @@ final class HomeFeedStore {
     /// After a meaningful watch: drop this clip from upcoming Home rows (keep on-screen pin).
     func noteClipWatched(_ post: CountryPost) {
         let keys = Set(SparkDiscoveryEngine.discoveryKeys(for: post))
+        let contentKey = post.homeFeedContentKey
         guard !keys.isEmpty, !posts.isEmpty else { return }
         let pin = pinnedPrefixCount(poolCount: posts.count)
         let head = Array(posts.prefix(pin))
@@ -1107,7 +1112,11 @@ final class HomeFeedStore {
         var rest: [CountryPost] = []
         for p in posts.dropFirst(pin) {
             guard seen.insert(p.id).inserted else { continue }
-            if keys.contains(p.id) || SparkDiscoveryEngine.isViewed(p) { continue }
+            // Match by normalized discovery keys (id/share/r2/clip), content key, or ledger.
+            let pKeys = SparkDiscoveryEngine.discoveryKeys(for: p)
+            if pKeys.contains(where: { keys.contains($0) }) { continue }
+            if !contentKey.isEmpty, p.homeFeedContentKey == contentKey { continue }
+            if SparkDiscoveryEngine.isViewed(p) { continue }
             rest.append(p)
         }
         let next = head + rest
@@ -1477,7 +1486,8 @@ final class HomeFeedStore {
                 limit: pageSize,
                 cursor: cursor,
                 idempotencyKey: idem,
-                session: feedSessionId
+                session: feedSessionId,
+                excludeIds: Array(existingIDs.prefix(48))
             ) {
                 thinFeedFailStreak = 0
                 thinFeedCoolUntil = nil
@@ -1572,6 +1582,11 @@ final class HomeFeedStore {
             for post in mixed {
                 guard seen.insert(post.id).inserted else { continue }
                 guard contentKeys.insert(post.homeFeedContentKey).inserted else { continue }
+                // Home never soft-recycles watched — even if a top-up transiently ran dry.
+                if SparkDiscoveryEngine.isViewed(post),
+                   !(PlayPlatformBridge.isWrittenHomePost(post) && !Self.isHomeImageCard(post)) {
+                    continue
+                }
                 appended.append(post)
             }
         }

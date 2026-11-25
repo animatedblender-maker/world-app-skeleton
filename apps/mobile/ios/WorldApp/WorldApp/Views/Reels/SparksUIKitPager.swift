@@ -732,7 +732,8 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
                 if needsNearEnd { self.coordinator?.nearEnd() }
                 if needsNearStart { self.coordinator?.nearStart() }
                 if let watchedPost {
-                    SparkDiscoveryEngine.markWatched(watchedPost)
+                    // recordView → markWatched (all identities) + strip Home buffered tail.
+                    Task { await PostsService.shared.recordView(watchedPost) }
                 }
             }
         }

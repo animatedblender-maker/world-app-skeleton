@@ -2120,6 +2120,16 @@ final class AppState {
             }
         }
 
+        // Opened fullscreen Sparks = watched for Home (session + cold open).
+        SparkDiscoveryEngine.markWatched(start)
+        if let from = fromFeedPost { SparkDiscoveryEngine.markWatched(from) }
+        Task {
+            await PostsService.shared.recordView(start)
+            if let from = fromFeedPost, from.id != start.id {
+                await PostsService.shared.recordView(from)
+            }
+        }
+
         // Paint overlay THIS runloop — no catalog absorb, no ahead warm storm.
         openReelsViewer(startingPost: start, seedPosts: instantSeeds)
 

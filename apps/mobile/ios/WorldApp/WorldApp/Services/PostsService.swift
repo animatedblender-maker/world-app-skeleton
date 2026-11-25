@@ -870,34 +870,13 @@ final class PostsService {
             out.append(post)
         }
 
-        // Soft recycle only when this request found zero unviewed Sparks — explicit penalty path.
+        // Home allowRecycleWhenExhausted = false — never soft-recycle watched onto Feed.
+        // Caller walks more /v1/feed + Sparks pages; returning viewed here re-recommended them.
+        #if DEBUG
         if out.isEmpty {
-            seen = excluding
-            let recycleSurface = await SurfacePageClient.fetchSparksPages(
-                want: max(limit, 24),
-                startingCursor: nil,
-                maxPages: 3,
-                excluding: seen,
-                skipViewed: false
-            )
-            if let next = recycleSurface.nextCursor {
-                homeSparksSurfaceCursor = next
-            }
-            for post in recycleSurface.items {
-                guard seen.insert(post.id).inserted else { continue }
-                guard post.playableVideoURL != nil || post.hasVideo || !(post.mediaURL ?? "").isEmpty else { continue }
-                out.append(post)
-                if out.count >= limit { break }
-            }
-            if out.isEmpty, !sparksSessionCatalog.isEmpty {
-                for post in SparkDiscoveryEngine.rankForDiscovery(sparksSessionCatalog, excluding: seen) {
-                    guard seen.insert(post.id).inserted else { continue }
-                    guard post.playableVideoURL != nil || post.hasVideo || !(post.mediaURL ?? "").isEmpty else { continue }
-                    out.append(post)
-                    if out.count >= limit { break }
-                }
-            }
+            print("[HomeFeed] spark top-up exhausted unviewed (no recycle)")
         }
+        #endif
         return out
     }
 
@@ -3158,6 +3137,8 @@ enum SparkDiscoveryEngine {
         } else if hk.hasPrefix("media:") || hk.hasPrefix("imgcap:") {
             add(hk)
         }
+        // Always persist the content key so thin cards with new UUIDs still match.
+        if !hk.isEmpty { add(hk) }
         return keys
     }
 
