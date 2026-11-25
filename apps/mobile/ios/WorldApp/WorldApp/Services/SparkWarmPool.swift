@@ -78,6 +78,9 @@ final class SparkWarmPool {
     private var warming = Set<String>()
     /// Visible owners currently holding a claimed player — never re-warm these.
     private var inUse = Set<String>()
+    /// Claimed players removed from `slots` but still playing in a cell — must be
+    /// hard-silenced on Chat/Sparks dismiss (slot-only silence missed them).
+    private var claimedPlayers: [String: AVPlayer] = [:]
     /// Loaders handed off on claim — install must take them or AV Range proxy dies.
     private var pendingClaimLoaders: [ObjectIdentifier: R2PresignedResourceLoader] = [:]
     private var maxSlots: Int { MediaBudget.maxSlots }
@@ -421,6 +424,7 @@ final class SparkWarmPool {
             return nil
         }
         inUse.insert(postID)
+        claimedPlayers[postID] = player
         let wasContinuing = continuingIDs.remove(postID) != nil
         lastClaimWasContinuing = wasContinuing
         if let loader = slot.r2ResourceLoader {
@@ -453,6 +457,7 @@ final class SparkWarmPool {
 
     func release(postID: String) {
         inUse.remove(postID)
+        claimedPlayers.removeValue(forKey: postID)
     }
 
     /// Return a still-buffered player so scrolling back is instant (keeps `currentItem`).
@@ -468,6 +473,7 @@ final class SparkWarmPool {
 
     private func parkInternal(postID: String, player: AVPlayer, continueFromCurrentTime: Bool) {
         inUse.remove(postID)
+        claimedPlayers.removeValue(forKey: postID)
 
         guard player.currentItem != nil,
               player.status != .failed,
@@ -552,6 +558,13 @@ final class SparkWarmPool {
         }
         warming.removeAll()
         inUse.removeAll()
+        for (_, player) in claimedPlayers {
+            player.pause()
+            player.isMuted = true
+            player.volume = 0
+            player.rate = 0
+        }
+        claimedPlayers.removeAll()
     }
 
     /// Soft-silence every buffered player. Keeps items for instant claim.
@@ -574,6 +587,8 @@ final class SparkWarmPool {
 
     /// Tab leave / Search browse — pause+mute **every** warm slot, including continuing.
     /// Continuing decode is only for Feed→Sparks handoff, never while browsing another surface.
+    /// Also silences claimed (in-use) players — the active Sparks page removes them from
+    /// `slots`, so slot-only silence was missing the film that was actually playing.
     func hardSilenceAllBuffered() {
         continuingIDs.removeAll(keepingCapacity: true)
         for (_, slot) in slots {
@@ -582,6 +597,12 @@ final class SparkWarmPool {
             p.isMuted = true
             p.volume = 0
             p.rate = 0
+        }
+        for (_, player) in claimedPlayers {
+            player.pause()
+            player.isMuted = true
+            player.volume = 0
+            player.rate = 0
         }
     }
 

@@ -58,6 +58,13 @@ struct ConversationRouteView: View {
         }
         .onAppear {
             ActiveConversationFocus.set(conversationID)
+            // Belt-and-suspenders: Chat must never inherit a live Spark AVPlayer.
+            if appState.reelsViewerContext != nil {
+                appState.closeReelsViewer(resumeHubs: false)
+            } else {
+                MediaPlaybackCoordinator.shared.silenceSparksDismissPreservingHubsMini()
+                SparkWarmPool.shared.hardSilenceAllBuffered()
+            }
             // Keep hubs mini alive while chatting — never pause for navigation.
             if appState.hubPlaybackPost != nil {
                 appState.hubPlaybackPlaying = true

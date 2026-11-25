@@ -1188,11 +1188,15 @@ final class AppState {
             MessagesService.shared.storeConversation(seed)
         }
 
-        // Never leave Sparks fullscreen under Chat (visual + audio leak of last Spark).
+        // Never leave Sparks fullscreen / audio under Chat.
+        // resumeHubs: false — ActiveConversationFocus is not set yet on this call, so the
+        // default close path used to post resume-interrupt and re-wake Spark AVPlayers
+        // into the new chat ("Sparks play on entering chat" + audio leak).
         if reelsViewerContext != nil {
-            closeReelsViewer()
+            closeReelsViewer(resumeHubs: false)
         } else {
-            MediaPlaybackCoordinator.shared.silenceFeedSparksAudioPreservingHubsMini()
+            MediaPlaybackCoordinator.shared.silenceSparksDismissPreservingHubsMini()
+            SparkWarmPool.shared.hardSilenceAllBuffered()
         }
 
         // Keep Hubs audio going as mini while chatting (dock under composer).
@@ -1990,15 +1994,17 @@ final class AppState {
     }
 
     /// Close Sparks overlay — kill Spark audio only; hubs mini stays protected.
-    /// Returning to Chat must stay light: never tear AV items / drain on the close tick
-    /// (that was the hitch), and never post resume-interrupt (that re-woke Spark audio).
-    func closeReelsViewer() {
+    /// - Parameter resumeHubs: When false (Chat open / Messages tab), never post
+    ///   `matteryaResumePlaybackAfterInterrupt` — that re-woke Spark players into Chat.
+    func closeReelsViewer(resumeHubs: Bool = true) {
         guard reelsViewerContext != nil else { return }
-        let returningToChat = ActiveConversationFocus.current != nil
+        let returningToChat = !resumeHubs
+            || ActiveConversationFocus.current != nil
+            || selectedTab == .messages
 
-        // Mute/pause every Spark player first — including claimed (in-use) ones that
-        // already left the warm-pool `slots` map. No replaceCurrentItem here.
+        // Mute/pause every Spark player first — including claimed (in-use) ones.
         MediaPlaybackCoordinator.shared.silenceSparksDismissPreservingHubsMini()
+        SparkWarmPool.shared.hardSilenceAllBuffered()
 
         var transaction = Transaction()
         transaction.disablesAnimations = true
@@ -2007,7 +2013,7 @@ final class AppState {
         }
 
         if returningToChat {
-            // Reassert hubs mini quietly — never post resume-interrupt (that re-woke Sparks).
+            // Quiet hubs reassert only — no resume-interrupt notification.
             if hubPlaybackPost != nil {
                 hubPlaybackPlaying = true
                 MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
@@ -2015,14 +2021,18 @@ final class AppState {
                     rate: hubPlaybackRate
                 )
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
-                // Overlay gone — safe to drain warm slots without hitching Chat scroll.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
                 SparkWarmPool.shared.hardSilenceAllBuffered()
                 SparkWarmPool.shared.drain()
-                MediaPlaybackCoordinator.shared.silenceFeedSparksAudioPreservingHubsMini()
+                MediaPlaybackCoordinator.shared.silenceSparksDismissPreservingHubsMini()
+            }
+        } else if resumeHubs {
+            resumeHubPlaybackAfterSparks()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+                SparkWarmPool.shared.hardSilenceAllBuffered()
+                SparkWarmPool.shared.drain()
             }
         } else {
-            resumeHubPlaybackAfterSparks()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
                 SparkWarmPool.shared.hardSilenceAllBuffered()
                 SparkWarmPool.shared.drain()

@@ -847,11 +847,17 @@ struct VideoPlayerView: View {
         // liveGate + solo only — never resume an off-screen / non-solo Spark
         // (comments overlay used to wake “older” pages that still had isActive=true).
         guard liveGate.isActive, !liveGate.userWantsPause, let player, player.currentItem != nil else { return }
+        // Chat / Sparks dismiss hard-mutes then may post resume for hubs mini only.
+        // Never unmute a Spark that was just silenced (rate 0 + muted + vol 0).
+        if player.isMuted, player.volume < 0.01, player.rate < 0.01 {
+            return
+        }
         // Must already be solo — do not claim solo here (that stole audio from the current Spark).
         guard MediaPlaybackCoordinator.shared.isSolo(player) else {
             player.pause()
             player.isMuted = true
             player.volume = 0
+            player.rate = 0
             return
         }
         if player.rate < 0.01 {
