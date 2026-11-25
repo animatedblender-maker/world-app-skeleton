@@ -1989,23 +1989,45 @@ final class AppState {
         }
     }
 
-    /// Close Sparks overlay — kill Spark players only; hubs mini stays protected.
+    /// Close Sparks overlay — kill Spark audio only; hubs mini stays protected.
+    /// Returning to Chat must stay light: never tear AV items / drain on the close tick
+    /// (that was the hitch), and never post resume-interrupt (that re-woke Spark audio).
     func closeReelsViewer() {
         guard reelsViewerContext != nil else { return }
-        let keep = MediaPlaybackCoordinator.shared.continuousHubPlayer
-        MediaPlaybackCoordinator.shared.stopAllPlayback(except: keep)
-        // Hard silence — soft `silenceAllBuffered` keeps continuing handoff slots
-        // decoding (and can restart rate), which leaked audio into Chat / Feed.
-        SparkWarmPool.shared.hardSilenceAllBuffered()
-        // Also wipe coordinator-tracked Feed/Sparks players so a remounting Feed
-        // card cannot briefly unmute the orphan Spark AVPlayer.
-        MediaPlaybackCoordinator.shared.silenceFeedSparksAudioPreservingHubsMini()
+        let returningToChat = ActiveConversationFocus.current != nil
+
+        // Mute/pause every Spark player first — including claimed (in-use) ones that
+        // already left the warm-pool `slots` map. No replaceCurrentItem here.
+        MediaPlaybackCoordinator.shared.silenceSparksDismissPreservingHubsMini()
+
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             reelsViewerContext = nil
         }
-        resumeHubPlaybackAfterSparks()
+
+        if returningToChat {
+            // Reassert hubs mini quietly — never post resume-interrupt (that re-woke Sparks).
+            if hubPlaybackPost != nil {
+                hubPlaybackPlaying = true
+                MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+                    userMuted: hubPlaybackMuted,
+                    rate: hubPlaybackRate
+                )
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
+                // Overlay gone — safe to drain warm slots without hitching Chat scroll.
+                SparkWarmPool.shared.hardSilenceAllBuffered()
+                SparkWarmPool.shared.drain()
+                MediaPlaybackCoordinator.shared.silenceFeedSparksAudioPreservingHubsMini()
+            }
+        } else {
+            resumeHubPlaybackAfterSparks()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+                SparkWarmPool.shared.hardSilenceAllBuffered()
+                SparkWarmPool.shared.drain()
+            }
+        }
     }
 
     /// After Sparks full-screen closes — resume hubs mini from the paused frame (no remount / black).

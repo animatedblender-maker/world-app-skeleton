@@ -322,7 +322,13 @@ struct ConversationView: View {
             }
             // Never block chat open / send on call WebSocket — warm signaling in parallel.
             Task { await callManager.ensureSignalingReady() }
-            await loadMessages()
+            // Sparks is an overlay over Chat — `.task` can re-enter after close.
+            // Never re-block the thread with a full load when rows are already painted.
+            if messages.isEmpty {
+                await loadMessages()
+            } else {
+                Task { await silentRefreshMessages() }
+            }
             // Silent receive + read receipts while this chat is open.
             await pollOpenConversation()
         }
@@ -507,7 +513,12 @@ struct ConversationView: View {
                     $0.id.hasPrefix("pending-") || $0.id.hasPrefix("local-call-")
                 }
             }
-            let loaded = try await MessagesService.shared.listMessages(conversationID: conversation.id)
+            // Text-only poll — media signing on every 6s tick was hitching Chat after Sparks.
+            let loaded = try await MessagesService.shared.listMessages(
+                conversationID: conversation.id,
+                limit: 40,
+                hydrateMedia: false
+            )
             await MainActor.run {
                 var next = loaded
                 for local in localHold {
@@ -519,6 +530,35 @@ struct ConversationView: View {
                         }))
                     if !already {
                         next.append(local)
+                    }
+                }
+                // Preserve already-signed media URLs from the painted thread.
+                if let current = MessagesService.shared.cachedMessages(for: conversation.id) {
+                    let signed = Dictionary(
+                        uniqueKeysWithValues: current.compactMap { m -> (String, String)? in
+                            guard let url = m.mediaURL, !url.isEmpty else { return nil }
+                            return (m.id, url)
+                        }
+                    )
+                    if !signed.isEmpty {
+                        next = next.map { m in
+                            guard m.mediaURL == nil || m.mediaURL?.isEmpty == true,
+                                  let url = signed[m.id]
+                            else { return m }
+                            return Message(
+                                id: m.id,
+                                conversationID: m.conversationID,
+                                senderID: m.senderID,
+                                body: m.body,
+                                mediaType: m.mediaType,
+                                mediaPath: m.mediaPath,
+                                mediaURL: url,
+                                mediaName: m.mediaName,
+                                createdAt: m.createdAt,
+                                updatedAt: m.updatedAt,
+                                sender: m.sender
+                            )
+                        }
                     }
                 }
                 let previousIDs = Set(messages.map(\.id))
@@ -764,7 +804,7 @@ struct ConversationView: View {
             // Text-first: do not wait on conversation metadata or media signing.
             let loaded = try await MessagesService.shared.listMessages(
                 conversationID: conversation.id,
-                limit: 50,
+                limit: 40,
                 hydrateMedia: true
             )
             await MainActor.run {
@@ -793,9 +833,15 @@ struct ConversationView: View {
             await PushNotificationService.shared.clearDeliveredNotifications(forConversation: conversation.id)
         } catch {
             await MainActor.run {
-                // Keep cached messages visible on a soft refresh failure.
+                // Keep disk/memory cache on timeout — never leave an empty forever-spinner.
                 if !hadLocalMessages {
-                    errorMessage = error.localizedDescription
+                    if let cached = MessagesService.shared.cachedMessages(for: conversation.id),
+                       !cached.isEmpty {
+                        messages = cached
+                        errorMessage = nil
+                    } else {
+                        errorMessage = "Couldn't load messages. Pull to retry."
+                    }
                 }
                 isLoading = false
             }

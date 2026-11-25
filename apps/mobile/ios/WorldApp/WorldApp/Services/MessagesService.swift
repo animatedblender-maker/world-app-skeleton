@@ -618,9 +618,12 @@ final class MessagesService {
         }
         """
 
+        // Chat open must not sit on the default 25s GraphQL timeout — API cold starts
+        // were painting an endless spinner then "timeout" on first load.
         let result: Response = try await gql.authenticatedRequest(
             query: query,
-            variables: ["conversationId": conversationID, "limit": limit]
+            variables: ["conversationId": conversationID, "limit": limit],
+            timeoutInterval: 12
         )
         let messages = result.messagesByConversation.map(\.toModel)
         // Paint-first: store text/share/call rows now; sign media off the critical path.

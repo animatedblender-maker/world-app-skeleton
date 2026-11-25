@@ -76,11 +76,9 @@ struct ReelsVerticalFeed: View {
             }
         }
         .onDisappear {
-            // Never stopAllPlayback() here — that tore down the hubs mini AVPlayer (black flash).
-            MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
-            // Hard silence continuing handoff slots so Chat/other tabs never hear last Spark.
-            SparkWarmPool.shared.hardSilenceAllBuffered()
-            SparkWarmPool.shared.drain()
+            // Never stopAllPlayback() / drain() here — that hitch Chat when Sparks
+            // was opened from a share. closeReelsViewer already muted + deferred drain.
+            MediaPlaybackCoordinator.shared.silenceSparksDismissPreservingHubsMini()
         }
         .onChange(of: activeIndex) { _, idx in
             // Discovery/network off the focus tick — claim + first frame win first.
@@ -1705,11 +1703,8 @@ struct ReelsScrollViewer: View {
             }
         }
         .onDisappear {
-            // Closing Sparks: silence Spark players only — hubs mini stays protected.
-            // Parent ReelsVerticalFeed also drains; skip duplicate hardSilence here when
-            // that onDisappear already ran — hardSilence is idempotent and cheap.
-            MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
-            SparkWarmPool.shared.hardSilenceAllBuffered()
+            // closeReelsViewer owns mute + deferred drain — keep this a cheap safety net.
+            MediaPlaybackCoordinator.shared.silenceSparksDismissPreservingHubsMini()
         }
     }
 

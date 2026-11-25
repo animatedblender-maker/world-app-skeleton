@@ -26,10 +26,16 @@ final class GraphQLService: Sendable {
 
     func authenticatedRequest<T: Decodable>(
         query: String,
-        variables: [String: Any] = [:]
+        variables: [String: Any] = [:],
+        timeoutInterval: TimeInterval = 25
     ) async throws -> T {
         let token = try await fetchValidToken()
-        return try await request(query: query, variables: variables, token: token)
+        return try await request(
+            query: query,
+            variables: variables,
+            token: token,
+            timeoutInterval: timeoutInterval
+        )
     }
 
     /// Call AuthService directly (it is `@MainActor`). Avoid nesting
@@ -42,11 +48,12 @@ final class GraphQLService: Sendable {
     func request<T: Decodable>(
         query: String,
         variables: [String: Any] = [:],
-        token: String? = nil
+        token: String? = nil,
+        timeoutInterval: TimeInterval = 25
     ) async throws -> T {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.timeoutInterval = 25
+        request.timeoutInterval = timeoutInterval
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token {

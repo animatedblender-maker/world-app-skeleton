@@ -385,7 +385,8 @@ final class MediaPlaybackCoordinator {
             player.replaceCurrentItem(with: nil)
             players.remove(player)
         }
-        SparkWarmPool.shared.silenceAllBuffered()
+        // Hard silence parked warm slots too — soft leave continuing mid-rate.
+        SparkWarmPool.shared.hardSilenceAllBuffered()
 
         if let spare {
             soloPlayer = spare
@@ -566,6 +567,26 @@ final class MediaPlaybackCoordinator {
         player.pause()
         player.isMuted = true
         player.volume = 0
+        player.rate = 0
+    }
+
+    /// Sparks dismiss over Chat/Feed — mute every registered player **without**
+    /// `replaceCurrentItem(nil)`. Item teardown on the MainActor is what made Chat
+    /// hitch when closing a Spark opened from a share.
+    func silenceSparksDismissPreservingHubsMini() {
+        sparkPageEpoch &+= 1
+        soloPlayingThroughInterrupt = nil
+        let keep = protectedContinuousPlayer
+        for player in players.allObjects {
+            if let keep, player === keep { continue }
+            hardSilence(player)
+        }
+        SparkWarmPool.shared.hardSilenceAllBuffered()
+        if let keep, keep.currentItem != nil {
+            soloPlayer = keep
+        } else {
+            soloPlayer = nil
+        }
     }
 
     /// Alias used by older call sites.
