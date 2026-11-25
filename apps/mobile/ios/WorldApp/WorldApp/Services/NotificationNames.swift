@@ -2,6 +2,8 @@ import Foundation
 
 extension Notification.Name {
     static let conversationMessagesDidChange = Notification.Name("conversationMessagesDidChange")
+    /// Media URLs finished signing for an already-painted thread — apply cache only, no network reload.
+    static let conversationMediaDidHydrate = Notification.Name("conversationMediaDidHydrate")
     static let incomingCallPush = Notification.Name("incomingCallPush")
     static let authTokenDidRefresh = Notification.Name("authTokenDidRefresh")
     static let socialNotificationsDidChange = Notification.Name("socialNotificationsDidChange")

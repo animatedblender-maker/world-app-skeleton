@@ -16,9 +16,51 @@ final class MessagesService {
     /// Keeps chat threads warm so re-opening a conversation paints instantly.
     private var cachedMessagesByConversation: [String: [Message]] = [:]
     private var cachedPeerReadByConversation: [String: String] = [:]
+    /// In-flight media hydrate tasks (paint-first listMessages).
+    private var mediaHydrateTasks: [String: Task<Void, Never>] = [:]
+    /// Coalesce banner/badge clear storms (openConversation + RouteView task/onAppear).
+    private var clearingNotificationsIDs: Set<String> = []
+
+    /// Returns false if a clear is already in flight for this conversation.
+    @discardableResult
+    func beginNotificationClear(for conversationID: String) -> Bool {
+        let id = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return false }
+        if clearingNotificationsIDs.contains(id) { return false }
+        clearingNotificationsIDs.insert(id)
+        return true
+    }
+
+    func endNotificationClear(for conversationID: String) {
+        let id = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
+        clearingNotificationsIDs.remove(id)
+    }
 
     private init() {
         restoreDiskCacheIfNeeded()
+    }
+
+    private struct ThreadDiskPayload: Codable {
+        let conversationID: String
+        let savedAt: Date
+        let peerReadAt: String?
+        let messages: [Message]
+    }
+
+    private func threadDiskURL(for conversationID: String) -> URL? {
+        guard let userID = AuthService.shared.currentUser?.id ?? cacheUserID,
+              !userID.isEmpty
+        else { return nil }
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let dir = base
+            .appendingPathComponent("MatteryaThreadCache", isDirectory: true)
+            .appendingPathComponent(userID, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let safe = conversationID
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+        return dir.appendingPathComponent("\(safe).v1.json")
     }
 
     private struct InboxDiskPayload: Codable {
@@ -87,7 +129,16 @@ final class MessagesService {
     func cachedMessages(for conversationID: String) -> [Message]? {
         let id = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty else { return nil }
-        return cachedMessagesByConversation[id]
+        if let mem = cachedMessagesByConversation[id] { return mem }
+        // Cold open: paint from disk before GraphQL (stale-while-revalidate).
+        if let disk = loadMessagesFromDisk(id) {
+            cachedMessagesByConversation[id] = disk.messages
+            if let peer = disk.peerReadAt, !peer.isEmpty {
+                cachedPeerReadByConversation[id] = peer
+            }
+            return disk.messages
+        }
+        return nil
     }
 
     func cachedPeerRead(for conversationID: String) -> String? {
@@ -229,6 +280,7 @@ final class MessagesService {
         if let peerReadAt, !peerReadAt.isEmpty {
             cachedPeerReadByConversation[id] = peerReadAt
         }
+        persistMessagesToDisk(messages, peerReadAt: cachedPeerReadByConversation[id], for: id)
         // Bound memory — keep the most recently touched ~12 threads.
         if cachedMessagesByConversation.count > 12 {
             let overflow = cachedMessagesByConversation.count - 12
@@ -241,15 +293,41 @@ final class MessagesService {
         }
     }
 
+    private func loadMessagesFromDisk(_ conversationID: String) -> ThreadDiskPayload? {
+        guard let url = threadDiskURL(for: conversationID),
+              let data = try? Data(contentsOf: url),
+              let payload = try? JSONDecoder().decode(ThreadDiskPayload.self, from: data),
+              !payload.messages.isEmpty
+        else { return nil }
+        // Discard ancient threads so signed media URLs do not dominate forever.
+        if Date().timeIntervalSince(payload.savedAt) > 7 * 24 * 3600 { return nil }
+        return payload
+    }
+
+    private func persistMessagesToDisk(_ messages: [Message], peerReadAt: String?, for conversationID: String) {
+        guard let url = threadDiskURL(for: conversationID) else { return }
+        // Cap disk payload — recent window is enough for instant open.
+        let payload = ThreadDiskPayload(
+            conversationID: conversationID,
+            savedAt: Date(),
+            peerReadAt: peerReadAt,
+            messages: Array(messages.suffix(80))
+        )
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+        Task.detached(priority: .utility) {
+            try? data.write(to: url, options: [.atomic])
+        }
+    }
+
     /// Warm the first few threads so tapping a chat is instant (messages already local).
-    func prefetchRecentThreads(limit: Int = 2) {
+    func prefetchRecentThreads(limit: Int = 4) {
         let ids = cachedConversations.prefix(limit).map(\.id)
         guard !ids.isEmpty else { return }
         Task(priority: .utility) { @MainActor in
             for id in ids {
-                if cachedMessages(for: id) != nil { continue }
-                // Thin hydrate — enough for open, not a full thread dump on inbox paint.
-                _ = try? await listMessages(conversationID: id, limit: 24)
+                if let cached = cachedMessages(for: id), cached.count >= 12 { continue }
+                // Text-first prefetch — skip media signing so inbox paint stays light.
+                _ = try? await listMessages(conversationID: id, limit: 30, hydrateMedia: false)
             }
         }
     }
@@ -322,7 +400,7 @@ final class MessagesService {
                 cachedConversations = conversations
                 lastConversationsFetchAt = Date()
                 persistInboxToDisk()
-                prefetchRecentThreads(limit: 2)
+                prefetchRecentThreads(limit: 4)
             }
             return conversations
         } catch {
@@ -520,7 +598,13 @@ final class MessagesService {
         return Self.filterConversations(result.conversations.map(\.toModel), inbox: inbox)
     }
 
-    func listMessages(conversationID: String, limit: Int = 50) async throws -> [Message] {
+    /// Fetch thread text immediately. Media URL signing runs in the background so chat open
+    /// is not blocked on N signed-URL round-trips (the old "forever to load" feel).
+    func listMessages(
+        conversationID: String,
+        limit: Int = 50,
+        hydrateMedia: Bool = true
+    ) async throws -> [Message] {
         struct Response: Decodable {
             let messagesByConversation: [GraphQLMessage]
         }
@@ -538,37 +622,77 @@ final class MessagesService {
             query: query,
             variables: ["conversationId": conversationID, "limit": limit]
         )
-        var messages = result.messagesByConversation.map(\.toModel)
-        // Only hydrate media rows (images/video) — text/call logs need no signed URL work.
-        // Cap concurrency so opening a chat never fires 50 parallel GraphQL media signs.
-        let mediaIndices = messages.indices.filter { idx in
-            let m = messages[idx]
-            return m.mediaPath != nil && !(m.mediaPath ?? "").isEmpty
+        let messages = result.messagesByConversation.map(\.toModel)
+        // Paint-first: store text/share/call rows now; sign media off the critical path.
+        storeMessages(messages, for: conversationID)
+        if hydrateMedia {
+            scheduleMediaHydrate(messages, for: conversationID)
         }
-        if !mediaIndices.isEmpty {
-            await withTaskGroup(of: (Int, Message).self) { group in
-                var inFlight = 0
-                var next = 0
-                let maxConcurrent = 4
-                while next < mediaIndices.count || inFlight > 0 {
-                    while inFlight < maxConcurrent, next < mediaIndices.count {
-                        let index = mediaIndices[next]
-                        next += 1
-                        inFlight += 1
-                        let message = messages[index]
-                        group.addTask { [self] in
-                            (index, await hydrateMedia(message))
-                        }
-                    }
-                    if let (index, hydrated) = await group.next() {
-                        inFlight -= 1
-                        messages[index] = hydrated
+        return messages
+    }
+
+    /// Sign media URLs after the thread is already on screen. Tail first (visible bottom).
+    private func scheduleMediaHydrate(_ messages: [Message], for conversationID: String) {
+        let id = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return }
+        mediaHydrateTasks[id]?.cancel()
+        mediaHydrateTasks[id] = Task(priority: .userInitiated) { @MainActor in
+            let hydrated = await hydrateMessagesMedia(messages, prioritizeTail: 10)
+            guard !Task.isCancelled else { return }
+            // Keep newer optimistic rows if they arrived while we were signing.
+            var merged = hydrated
+            if let current = cachedMessagesByConversation[id] {
+                for local in current where local.id.hasPrefix("pending-") || local.id.hasPrefix("local-call-") {
+                    if !merged.contains(where: { $0.id == local.id }) {
+                        merged.append(local)
                     }
                 }
             }
+            storeMessages(merged, for: id)
+            NotificationCenter.default.post(
+                name: .conversationMediaDidHydrate,
+                object: nil,
+                userInfo: ["conversationId": id]
+            )
+            mediaHydrateTasks[id] = nil
         }
-        storeMessages(messages, for: conversationID)
-        return messages
+    }
+
+    private func hydrateMessagesMedia(_ messages: [Message], prioritizeTail: Int) async -> [Message] {
+        var next = messages
+        let mediaIndices = next.indices.filter { idx in
+            let path = next[idx].mediaPath ?? ""
+            return !path.isEmpty && (next[idx].mediaURL == nil || next[idx].mediaURL?.isEmpty == true)
+        }
+        guard !mediaIndices.isEmpty else { return next }
+
+        // Sign the newest media rows first — that is what the open chat shows.
+        let tail = Array(mediaIndices.suffix(prioritizeTail))
+        let tailSet = Set(tail)
+        let head = mediaIndices.filter { !tailSet.contains($0) }
+        let uniqueOrdered = tail + head
+
+        await withTaskGroup(of: (Int, Message).self) { group in
+            var inFlight = 0
+            var cursor = 0
+            let maxConcurrent = 3
+            while cursor < uniqueOrdered.count || inFlight > 0 {
+                while inFlight < maxConcurrent, cursor < uniqueOrdered.count {
+                    let index = uniqueOrdered[cursor]
+                    cursor += 1
+                    inFlight += 1
+                    let message = next[index]
+                    group.addTask { [self] in
+                        (index, await hydrateMedia(message))
+                    }
+                }
+                if let (index, hydrated) = await group.next() {
+                    inFlight -= 1
+                    next[index] = hydrated
+                }
+            }
+        }
+        return next
     }
 
     func startConversation(targetID: String) async throws -> Conversation {

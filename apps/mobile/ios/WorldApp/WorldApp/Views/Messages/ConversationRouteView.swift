@@ -50,21 +50,17 @@ struct ConversationRouteView: View {
         .task(id: conversationID) {
             // Focus first so in-flight pushes for this chat never show a banner.
             ActiveConversationFocus.set(conversationID)
-            // Non-blocking: clear banners + soft-refresh conversation metadata in parallel.
+            // Soft-refresh metadata in parallel with a single notification clear.
+            // (Do not also clear from onAppear / openConversation — that was a 3× storm.)
             async let clear: Void = appState.clearNotifications(forConversation: conversationID)
             async let refresh: Void = softRefreshConversation()
             _ = await (clear, refresh)
-            await appState.refreshUnreadCounts()
-            await appState.syncAppIconBadge()
         }
         .onAppear {
             ActiveConversationFocus.set(conversationID)
             // Keep hubs mini alive while chatting — never pause for navigation.
             if appState.hubPlaybackPost != nil {
                 appState.hubPlaybackPlaying = true
-            }
-            Task {
-                await appState.clearNotifications(forConversation: conversationID)
             }
         }
         .onDisappear {

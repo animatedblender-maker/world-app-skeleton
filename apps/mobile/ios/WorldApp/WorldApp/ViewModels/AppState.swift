@@ -1219,12 +1219,15 @@ final class AppState {
         }
         navigationPath.append(.conversation(trimmed))
 
-        // Warm messages in the background if not already cached (ConversationView also loads).
-        Task {
+        // Warm text-only if memory/disk miss — ConversationView also loads; skip duplicate clear.
+        Task(priority: .userInitiated) {
             if MessagesService.shared.cachedMessages(for: trimmed) == nil {
-                _ = try? await MessagesService.shared.listMessages(conversationID: trimmed, limit: 40)
+                _ = try? await MessagesService.shared.listMessages(
+                    conversationID: trimmed,
+                    limit: 40,
+                    hydrateMedia: false
+                )
             }
-            await clearNotifications(forConversation: trimmed)
         }
     }
 
@@ -1232,6 +1235,9 @@ final class AppState {
     func clearNotifications(forConversation conversationID: String) async {
         let trimmed = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        // Single-flight — openConversation + RouteView used to stack 2–3 clears per open.
+        if MessagesService.shared.beginNotificationClear(for: trimmed) == false { return }
+        defer { MessagesService.shared.endNotificationClear(for: trimmed) }
 
         await PushNotificationService.shared.clearDeliveredNotifications(forConversation: trimmed)
 
@@ -1989,8 +1995,11 @@ final class AppState {
         let keep = MediaPlaybackCoordinator.shared.continuousHubPlayer
         MediaPlaybackCoordinator.shared.stopAllPlayback(except: keep)
         // Hard silence — soft `silenceAllBuffered` keeps continuing handoff slots
-        // decoding (and can restart rate), which leaked audio into Chat / other tabs.
+        // decoding (and can restart rate), which leaked audio into Chat / Feed.
         SparkWarmPool.shared.hardSilenceAllBuffered()
+        // Also wipe coordinator-tracked Feed/Sparks players so a remounting Feed
+        // card cannot briefly unmute the orphan Spark AVPlayer.
+        MediaPlaybackCoordinator.shared.silenceFeedSparksAudioPreservingHubsMini()
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {

@@ -288,7 +288,9 @@ final class MediaPlaybackCoordinator {
             if isProtected(player) { continue }
             hardSilence(player)
         }
-        SparkWarmPool.shared.silenceAllBuffered()
+        // Hard silence warm pool — soft `silenceAllBuffered` kept continuing handoff
+        // slots decoding and leaked the last Spark into Feed after close.
+        SparkWarmPool.shared.hardSilenceAllBuffered()
         // Prefer intentional Masquerade watch audio ownership over mini when both exist.
         // Never call play() here — tab-hop silence must stay feather-light (play hitch).
         if let keepWatch, keepWatch.currentItem != nil {

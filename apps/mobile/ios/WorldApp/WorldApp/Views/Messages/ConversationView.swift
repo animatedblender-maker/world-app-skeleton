@@ -121,7 +121,7 @@ struct ConversationView: View {
                                     usernameHeader: bubbleUsernameHeader(for: message, isMine: mine),
                                     avatarURL: bubbleAvatarURL(for: message, isMine: mine),
                                     avatarSeed: bubbleAvatarSeed(for: message, isMine: mine),
-                                    onReply: { replyingTo = message },
+                                    onReply: { beginComposerReply(to: message) },
                                     onLike: { Task { await toggleMessageLike(message) } },
                                     onReact: { emoji in Task { await reactToMessage(message, emoji: emoji) } },
                                     onUnsend: { Task { await unsendMessage(message) } },
@@ -353,6 +353,15 @@ struct ConversationView: View {
                     forConversation: conversation.id
                 )
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .conversationMediaDidHydrate)) { notification in
+            guard let conversationID = notification.userInfo?["conversationId"] as? String,
+                  conversationID == conversation.id,
+                  let cached = MessagesService.shared.cachedMessages(for: conversationID),
+                  !cached.isEmpty
+            else { return }
+            // Media URLs arrived — swap in without another GraphQL round-trip.
+            messages = cached
         }
         .onAppear {
             Task { await refreshPeerReadReceipt() }
@@ -594,27 +603,41 @@ struct ConversationView: View {
     }
 
     private var composerBar: some View {
-        VStack(spacing: 10) {
+        // Tight stack — WhatsApp/IG style: reply chip sits flush above the field (no 16+10 gap).
+        VStack(alignment: .leading, spacing: 6) {
             if let replyingTo {
-                HStack(alignment: .top, spacing: 10) {
+                HStack(alignment: .center, spacing: 8) {
                     RoundedRectangle(cornerRadius: 1, style: .continuous)
-                        .fill(Theme.accent.opacity(0.45))
-                        .frame(width: 2)
-                    VStack(alignment: .leading, spacing: 4) {
+                        .fill(Theme.accent.opacity(0.55))
+                        .frame(width: 2, height: 28)
+                    VStack(alignment: .leading, spacing: 1) {
                         Text("Replying to \(replyingTo.sender?.displayName ?? replyingTo.sender?.username ?? "Message")")
-                            .font(.caption.weight(.semibold))
+                            .font(.caption2.weight(.semibold))
                             .foregroundStyle(Theme.ink)
+                            .lineLimit(1)
                         Text(replyingTo.previewText)
-                            .font(.caption)
+                            .font(.caption2)
                             .foregroundStyle(Theme.inkSecondary)
-                            .lineLimit(2)
+                            .lineLimit(1)
                     }
                     Spacer(minLength: 0)
-                    Button("Cancel") { self.replyingTo = nil }
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.accent)
+                    Button {
+                        self.replyingTo = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.inkMuted)
+                            .frame(width: 28, height: 28)
+                            .background(Theme.matteDeep, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Cancel reply")
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Theme.canvasMuted, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .padding(.horizontal, Theme.pagePadding)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
 
             if let pendingMediaImage {
@@ -659,7 +682,7 @@ struct ConversationView: View {
                         Keyboard.dismiss()
                     }
                     .padding(12)
-                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.controlRadius))
+                    .background(Theme.canvasMuted, in: RoundedRectangle(cornerRadius: Theme.controlRadius))
                     .overlay(
                         RoundedRectangle(cornerRadius: Theme.controlRadius)
                             .stroke(Theme.border, lineWidth: 0.5)
@@ -678,11 +701,22 @@ struct ConversationView: View {
                 .disabled(isSending || !canSend)
             }
             .padding(.horizontal, Theme.pagePadding)
-            .padding(.bottom, Theme.pagePadding)
         }
-        .padding(.top, Theme.pagePadding)
+        .padding(.top, replyingTo == nil ? Theme.pagePadding : 8)
+        .padding(.bottom, Theme.pagePadding)
+        .animation(.easeOut(duration: 0.18), value: replyingTo?.id)
         .background(Theme.surface)
         .overlay(Rectangle().frame(height: 0.5).foregroundStyle(Theme.border), alignment: .top)
+    }
+
+    /// Swipe / context-menu Reply — focus the field immediately (no dead air before typing).
+    private func beginComposerReply(to message: Message) {
+        withAnimation(.easeOut(duration: 0.18)) {
+            replyingTo = message
+        }
+        DispatchQueue.main.async {
+            composerFocused = true
+        }
     }
 
     private func acceptPendingRequest() async {
@@ -727,11 +761,12 @@ struct ConversationView: View {
                 }
                 return hold
             }
-            async let loadedTask = MessagesService.shared.listMessages(conversationID: conversation.id)
-            async let refreshedTask = MessagesService.shared.getConversationById(conversation.id)
-            let loaded = try await loadedTask
-            let refreshed = try? await refreshedTask
-            let peerRead = refreshed?.otherMember(currentUserID: currentUserID ?? "")?.lastReadAt
+            // Text-first: do not wait on conversation metadata or media signing.
+            let loaded = try await MessagesService.shared.listMessages(
+                conversationID: conversation.id,
+                limit: 50,
+                hydrateMedia: true
+            )
             await MainActor.run {
                 var next = loaded
                 for local in localHold {
@@ -746,22 +781,15 @@ struct ConversationView: View {
                     }
                 }
                 messages = next
-                if let peerRead { peerLastReadAt = peerRead }
                 errorMessage = nil
                 isLoading = false
-                MessagesService.shared.storeMessages(
-                    next,
-                    peerReadAt: peerRead,
-                    for: conversation.id
-                )
-                // Always land on the latest message when opening / refreshing this chat.
+                MessagesService.shared.storeMessages(next, for: conversation.id)
                 requestScrollToBottom()
             }
-            // One deferred pin after layout — triple scroll was hitching chat open.
-            try? await Task.sleep(nanoseconds: 90_000_000)
+            // Peer read + banners after paint — never on the open critical path.
+            Task { await refreshPeerReadReceipt() }
+            try? await Task.sleep(nanoseconds: 60_000_000)
             await MainActor.run { requestScrollToBottom() }
-            _ = hadLocalMessages
-            // listMessages updates last_read_at server-side — drop banners + tab badge for this chat.
             await PushNotificationService.shared.clearDeliveredNotifications(forConversation: conversation.id)
         } catch {
             await MainActor.run {
