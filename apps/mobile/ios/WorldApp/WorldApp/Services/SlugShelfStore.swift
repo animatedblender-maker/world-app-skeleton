@@ -167,7 +167,7 @@ final class SlugShelfStore {
             // Network failed — keep cache; signal empty page for append.
             // Do NOT fall back to session LongForm when the seed catalog is hidden —
             // that re-painted pipeline Hubs during App Review.
-            let seedPublic = RemoteConfigClient.bool("seed_catalog_public", default: false)
+            let seedPublic = RemoteConfigClient.bool("seed_catalog_public", default: true)
             if !append, state.posts.isEmpty, seedPublic {
                 let local = localFallback(slug: slug)
                 if !local.isEmpty {

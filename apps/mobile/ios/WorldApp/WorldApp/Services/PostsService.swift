@@ -734,7 +734,7 @@ final class PostsService {
         // App Review: LongForm hub catalog is hidden — don't refill Feed from local/R2 hubs.
         // seed_catalog_public stays true globally; Review empty is enforced by HomeFeedStore.catalogForcedEmpty
         // (which skips calling this) plus empty /v1/hubs for the Review JWT.
-        if !RemoteConfigClient.bool("seed_catalog_public", default: false) {
+        if !RemoteConfigClient.bool("seed_catalog_public", default: true) {
             return []
         }
         var seen = excluding.union(Set(SparkDiscoveryEngine.viewedIDList(limit: 800)))

@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 // MARK: - Delivery policy (single place for teammates)
@@ -16,11 +17,11 @@ enum AdDeliveryPolicy {
     /// How far ahead to look to avoid stacking ads.
     static let upcomingAdAvoidWindow = 18
     /// Client cache TTL for last successful serve (Hubs instant start).
-    static let serveCacheMaxAge: TimeInterval = 120
+    static let serveCacheMaxAge: TimeInterval = 180
     /// Skip control becomes available after this many seconds (clamped with server value).
     static let skipAfterSecondsClamp = 3...5
-    /// GraphQL serve timeout for cold pre-roll (seconds).
-    static let serveTimeoutSeconds: Double = 8
+    /// GraphQL serve timeout for cold pre-roll (seconds). Skip to film fast — never hang on spinner.
+    static let serveTimeoutSeconds: Double = 2.5
 
     /// Premium gate — must hop to MainActor with `SubscriptionService`.
     @MainActor
@@ -191,6 +192,8 @@ enum SparkAdRegistry {
 @MainActor
 enum AdServeCache {
     private static var byPlacement: [String: (slot: AdSlot, at: Date)] = [:]
+    /// Warmed assets so AdPreroll mounts without a cold CDN round-trip.
+    private static var warmAssets: [String: AVURLAsset] = [:]
 
     static func peek(placement: String) -> AdSlot? {
         guard let entry = byPlacement[placement],
@@ -206,10 +209,40 @@ enum AdServeCache {
         if placement == "video" {
             byPlacement["reel"] = (slot, now)
         }
+        warmMedia(slot.creative.mediaURL)
+    }
+
+    /// AVPlayerItem from a warmed asset when possible — instant Hubs pre-roll start.
+    static func playerItem(for mediaURL: String) -> AVPlayerItem? {
+        guard let url = AdURL.media(mediaURL) else { return nil }
+        let key = url.absoluteString
+        if let asset = warmAssets[key] {
+            return AVPlayerItem(asset: asset)
+        }
+        let asset = AVURLAsset(url: url)
+        warmAssets[key] = asset
+        warmAssetKeys(asset)
+        return AVPlayerItem(asset: asset)
+    }
+
+    static func warmMedia(_ raw: String) {
+        guard let url = AdURL.media(raw) else { return }
+        let key = url.absoluteString
+        if warmAssets[key] != nil { return }
+        let asset = AVURLAsset(url: url)
+        warmAssets[key] = asset
+        warmAssetKeys(asset)
+    }
+
+    private static func warmAssetKeys(_ asset: AVURLAsset) {
+        asset.loadValuesAsynchronously(forKeys: ["playable", "duration"]) {
+            // Keep asset retained in warmAssets; values load into AVFoundation cache.
+        }
     }
 
     static func clear() {
         byPlacement.removeAll()
+        warmAssets.removeAll()
     }
 }
 

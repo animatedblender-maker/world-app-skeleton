@@ -393,17 +393,24 @@ final class AppState {
         // Hubs: reshuffle only after a real away — every-hop reload froze tab navigation.
         // Skip while a hubs video is open/minimized so expand/morph stays smooth.
         // nil hubsLeftAt must NOT count as "stale" (that forced a reshuffle on every first hop).
-        if new == .hubs, old != .hubs, hubPlaybackPost == nil {
-            if let left = hubsLeftAt {
-                let away = Date().timeIntervalSince(left)
-                if away >= hubsStaleAwayInterval {
-                    #if DEBUG
-                    print("[Hubs] away \(Int(away))s ≥ \(Int(hubsStaleAwayInterval))s → fresh session")
-                    #endif
-                    hubsFreshSessionToken += 1
+        if new == .hubs, old != .hubs {
+            // Warm ad inventory on tab enter so the first video open is cache-hit, not spinner.
+            AdsService.shared.prefetchServe(
+                placement: "video",
+                countryCode: currentProfile?.countryCode
+            )
+            if hubPlaybackPost == nil {
+                if let left = hubsLeftAt {
+                    let away = Date().timeIntervalSince(left)
+                    if away >= hubsStaleAwayInterval {
+                        #if DEBUG
+                        print("[Hubs] away \(Int(away))s ≥ \(Int(hubsStaleAwayInterval))s → fresh session")
+                        #endif
+                        hubsFreshSessionToken += 1
+                    }
                 }
+                hubsLeftAt = nil
             }
-            hubsLeftAt = nil
         }
     }
 
@@ -1398,6 +1405,11 @@ final class AppState {
         hubPlaybackMuted = false
 
         if expanded {
+            // Warm pre-roll serve + media BEFORE the overlay mounts — cold GraphQL was the ad lag.
+            AdsService.shared.prefetchServe(
+                placement: "video",
+                countryCode: watchPost.countryCode ?? currentProfile?.countryCode
+            )
             rememberHubPlaybackChatReturnIfNeeded()
             navigationPath.removeAll()
             selectedTab = .hubs

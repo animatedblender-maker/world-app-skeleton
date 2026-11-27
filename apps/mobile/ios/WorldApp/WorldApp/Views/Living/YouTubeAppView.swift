@@ -732,13 +732,17 @@ struct YouTubeAppView: View {
                     from: "hubs_task_start",
                     meta: ["path": "painted_skip_storm"]
                 )
+                AdsService.shared.prefetchServe(
+                    placement: "video",
+                    countryCode: appState.currentProfile?.countryCode
+                )
                 await consumePendingRoutingIfNeeded()
                 scheduleSoftHubsRefreshIfNeeded()
                 return
             }
 
-            // Cold empty: yield one frame after instant paint, then fetch.
-            try? await Task.sleep(nanoseconds: 280_000_000)
+            // Cold empty: yield one frame after instant paint, then fetch (was 280ms — felt stuck).
+            try? await Task.sleep(nanoseconds: 48_000_000)
             guard !Task.isCancelled, appState.selectedTab == .hubs else { return }
             await loadVideos(forceRefresh: false, mode: .fast)
             guard !Task.isCancelled else { return }
@@ -747,6 +751,11 @@ struct YouTubeAppView: View {
             }
             butterWarmHubCatalog(Array(stableDiscoverVideos.prefix(2)))
             lastHubsSoftRefreshAt = Date()
+            // Next video open should hit AdServeCache, not a cold GraphQL spinner.
+            AdsService.shared.prefetchServe(
+                placement: "video",
+                countryCode: appState.currentProfile?.countryCode
+            )
             PerformanceTelemetry.milestone(
                 "hubs_interactive",
                 surface: "hubs",
@@ -777,6 +786,10 @@ struct YouTubeAppView: View {
             // Already painted: zero warm/reload — hop must feel instant.
             // Fresh mix after a real away is owned by hubsFreshSessionToken.
             if hubsShellIsUseful {
+                AdsService.shared.prefetchServe(
+                    placement: "video",
+                    countryCode: appState.currentProfile?.countryCode
+                )
                 scheduleSoftHubsRefreshIfNeeded()
                 return
             }
@@ -784,6 +797,10 @@ struct YouTubeAppView: View {
             Task { @MainActor in
                 await loadVideos(forceRefresh: false, mode: .fast)
                 butterWarmHubCatalog(Array(stableDiscoverVideos.prefix(2)))
+                AdsService.shared.prefetchServe(
+                    placement: "video",
+                    countryCode: appState.currentProfile?.countryCode
+                )
             }
         }
         .onChange(of: appState.hubsFreshSessionToken) { _, token in
@@ -1090,9 +1107,11 @@ struct YouTubeAppView: View {
 
     /// True when Hubs can paint without a network round-trip.
     /// When seed catalog is hidden, never treat sticky local LongForm as "useful".
+    /// Default `true` matches server `DEFAULT_FLAGS` — `false` blocked instant paint until
+    /// remote config loaded and made every Hubs hop feel cold.
     private var hubsShellIsUseful: Bool {
         if ReviewThinCatalog.isActive { return false }
-        guard RemoteConfigClient.bool("seed_catalog_public", default: false) else { return false }
+        guard RemoteConfigClient.bool("seed_catalog_public", default: true) else { return false }
         return !stableDiscoverVideos.isEmpty && hubsForYouPool.count >= 8
     }
 
@@ -1318,7 +1337,8 @@ struct YouTubeAppView: View {
         let due = Date().timeIntervalSince(lastHubsSoftRefreshAt) >= Self.hubsSoftRefreshInterval
         guard due else { return }
         Task(priority: .utility) {
-            try? await Task.sleep(nanoseconds: 700_000_000)
+            // Stay off the hop frame — 1.4s so tab morph + first scroll settle first.
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
             guard appState.selectedTab == .hubs, appState.hubPlaybackPost == nil else { return }
             guard Date().timeIntervalSince(lastHubsSoftRefreshAt) >= Self.hubsSoftRefreshInterval else { return }
             lastHubsSoftRefreshAt = Date()
@@ -1895,8 +1915,9 @@ struct YouTubeAppView: View {
             return
         }
         // App Review: pipeline LongForm is hidden — never paint sticky local catalog.
+        // Default true matches server — false until remote config arrives blocked first paint.
         if ReviewThinCatalog.isActive
-            || !RemoteConfigClient.bool("seed_catalog_public", default: false)
+            || !RemoteConfigClient.bool("seed_catalog_public", default: true)
         {
             return
         }

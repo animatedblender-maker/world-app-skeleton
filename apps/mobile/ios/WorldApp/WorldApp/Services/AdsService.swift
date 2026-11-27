@@ -274,9 +274,19 @@ final class AdsService {
         return slot
     }
 
-    /// Warm the Hubs/Sparks ad cache so the next pre-roll starts without a GraphQL wait.
+    /// Single-flight warm so Hubs tab enter + video open don't stampede GraphQL.
+    private var prefetchInFlight: [String: Task<Void, Never>] = [:]
+
+    /// Warm the Hubs/Sparks ad cache + media asset so the next pre-roll starts without a wait.
     func prefetchServe(placement: String = "video", countryCode: String? = nil) {
-        Task {
+        // Already fresh in cache — still ensure media bytes are warming.
+        if let cached = AdServeCache.peek(placement: placement) {
+            AdServeCache.warmMedia(cached.creative.mediaURL)
+            return
+        }
+        if prefetchInFlight[placement] != nil { return }
+        let task = Task { @MainActor in
+            defer { prefetchInFlight[placement] = nil }
             _ = try? await serveVideoAd(
                 placement: placement,
                 countryCode: countryCode,
@@ -284,6 +294,7 @@ final class AdsService {
                 postID: nil
             )
         }
+        prefetchInFlight[placement] = task
     }
 
     func logImpression(impressionToken: String) async throws -> Bool {

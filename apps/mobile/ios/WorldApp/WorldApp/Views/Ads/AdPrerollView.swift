@@ -129,8 +129,8 @@ struct AdPrerollView: View {
 
         // Instant path: play cached creative while a fresh serve runs.
         if let cached = AdServeCache.peek(placement: placement),
-           let url = AdURL.media(cached.creative.mediaURL) {
-            mount(slot: cached, url: url)
+           AdURL.media(cached.creative.mediaURL) != nil {
+            mount(slot: cached)
             isLoading = false
             Task { await refreshServeInBackground() }
             return
@@ -139,15 +139,16 @@ struct AdPrerollView: View {
         isLoading = true
         do {
             let slot = try await fetchSlot()
-            guard let slot, let url = AdURL.media(slot.creative.mediaURL) else {
+            guard let slot, AdURL.media(slot.creative.mediaURL) != nil else {
                 isLoading = false
                 onComplete()
                 return
             }
             AdServeCache.store(slot, placement: placement)
-            mount(slot: slot, url: url)
+            mount(slot: slot)
             isLoading = false
         } catch {
+            // Timeout / network — never block the hub film on a cold serve spinner.
             isLoading = false
             onComplete()
         }
@@ -183,7 +184,7 @@ struct AdPrerollView: View {
         return slot
     }
 
-    private func mount(slot: AdSlot, url: URL) {
+    private func mount(slot: AdSlot) {
         cleanupPlayer()
         adSlot = slot
         let clamp = AdDeliveryPolicy.skipAfterSecondsClamp
@@ -192,7 +193,13 @@ struct AdPrerollView: View {
         skipReady = false
         impressionLogged = false
 
-        let item = AVPlayerItem(url: url)
+        // Prefer warmed AVURLAsset so the first frame is not a cold CDN stall.
+        guard let item = AdServeCache.playerItem(for: slot.creative.mediaURL) else {
+            onComplete()
+            return
+        }
+        // Short forward buffer — ad skip is near; leave bandwidth for the hub film underneath.
+        item.preferredForwardBufferDuration = 2
         let avPlayer = AVPlayer(playerItem: item)
         avPlayer.automaticallyWaitsToMinimizeStalling = false
         player = avPlayer

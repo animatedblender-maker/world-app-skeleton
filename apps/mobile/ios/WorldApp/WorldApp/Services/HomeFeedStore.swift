@@ -1606,7 +1606,7 @@ final class HomeFeedStore {
             let attempt = emptyAppendRetriesThisGeneration
             // App Review / thin real catalog: stop the bottom spinner after a few empty walks.
             // Full seed catalog (remote flag on) keeps the endless R2 walk.
-            let seedPublic = RemoteConfigClient.bool("seed_catalog_public", default: false)
+            let seedPublic = RemoteConfigClient.bool("seed_catalog_public", default: true)
             let thinExhausted =
                 (!seedPublic || catalogForcedEmpty)
                 && posts.count > 0
