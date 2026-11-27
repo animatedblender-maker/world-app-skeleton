@@ -27,9 +27,9 @@ final class SparkWarmPool {
         /// Feed/Hubs stay focus+1. Sparks is path-local and hotter than butter:
         /// capable phones keep focus+3 decoding so whip flings never land cold.
         static var playerAhead: Int { playerAheadSparks }
-        /// Focus + next — scrolling into the next card must already have a decoded frame
-        /// (instant-film Feed has no poster; ahead 1 left a ~1s matte/black miss).
-        static var playerAheadFeed: Int { isConstrained ? 1 : 2 }
+        /// Focus + next 2 — scrolling into the next card must already have a decoded frame.
+        /// Poster covers cold misses; ahead keeps enter-frame from waiting on network.
+        static var playerAheadFeed: Int { isConstrained ? 1 : 3 }
         static var playerAheadSparks: Int {
             if isConstrained { return 1 }
             if isMid { return 2 }
@@ -37,7 +37,7 @@ final class SparkWarmPool {
         }
         static var playerAheadHubs: Int { 1 }
         static var thumbAhead: Int { isConstrained ? 2 : 3 }
-        static var deepPrerollFeed: Int { 1 }
+        static var deepPrerollFeed: Int { isConstrained ? 1 : 2 }
         static var deepPrerollSparks: Int {
             if isConstrained { return 1 }
             if isMid { return 2 }
@@ -172,14 +172,14 @@ final class SparkWarmPool {
         guard !posts.isEmpty else { return }
         // Cold open / splash: never spin AV under a frozen MainActor (ghost audio).
         guard FeedVideoFocus.shared.allowsFeedAVWarm else { return }
-        // Mid-fling: warm next 1 only — heavier ahead storms froze the shell.
+        // Mid-fling: still warm next (flingAhead) so landing is never a cold black frame.
         if ScrollBudget.isFlinging {
             prepare(
                 posts: posts,
                 around: index,
-                ahead: 1,
+                ahead: MediaBudget.flingAhead,
                 behind: 0,
-                deepPrerollLimit: 1,
+                deepPrerollLimit: MediaBudget.flingAhead,
                 skipThumbWarm: true,
                 allowNewWarms: true
             )

@@ -40,7 +40,7 @@ final class HomeFeedStore {
     /// Full in-memory pool (not all rendered — `windowLimit` controls LazyVStack).
     private(set) var posts: [CountryPost] = []
     /// How many posts the list may render (window grows on scroll).
-    private(set) var windowLimit = 8
+    private(set) var windowLimit = 10
     private(set) var isBootstrapping = true
     private(set) var isRefreshing = false
     private(set) var isLoadingMore = false
@@ -100,17 +100,17 @@ final class HomeFeedStore {
     private static let officialWelcomeSeenKey = "matterya.home.officialWelcomeSeen.v1"
     private var cachedOfficialWelcome: CountryPost?
 
-    /// Network page size — lighter than light so ranking/merge stays off the scroll path.
-    private let pageSize = 8
-    private let windowPageSize = 5
-    /// First paint window — ~1 screen; grow on scroll.
-    private let firstWindow = 5
-    /// Prefetch later so mid-scroll does not kick network storms.
-    private let prefetchRatio = 0.60
-    /// Request next batch when ~4 cards remain (settle lag + fling headroom).
-    private let nearTailRemaining = 4
+    /// Network page size — Instagram-class endless: refill ahead of the finger.
+    private let pageSize = 14
+    private let windowPageSize = 10
+    /// First paint window — ~1.5 screens; grow on scroll.
+    private let firstWindow = 10
+    /// Prefetch earlier so the tail never waits on network while scrolling.
+    private let prefetchRatio = 0.40
+    /// Request next batch when ~8 cards remain (settle lag + fling headroom).
+    private let nearTailRemaining = 8
     /// Keep at least this many posts buffered in `posts` (beyond the visible window).
-    private let minBufferedPool = 16
+    private let minBufferedPool = 48
 
     private init() {
         scrollSettleObserver = NotificationCenter.default.addObserver(
@@ -688,8 +688,7 @@ final class HomeFeedStore {
         var stagnant = 0
         var lastCount = posts.count
         // Endless Home: keep walking until the buffer is deep or generation changes.
-        // Ultra-light: fewer force-network passes so open/scroll stay free of top-up storms.
-        while posts.count < minBufferedPool, hasMore, !catalogForcedEmpty, guardPasses < 6 {
+        while posts.count < minBufferedPool, hasMore, !catalogForcedEmpty, guardPasses < 12 {
             guardPasses += 1
             let gen = generation
             // Force network — don't only expand the local window.
@@ -1158,7 +1157,7 @@ final class HomeFeedStore {
         let fling = ScrollBudget.isFlinging
         // During a fling, jump the window ahead so LazyVStack always has cells ready.
         let growBy = fling ? windowPageSize * 2 : windowPageSize
-        let growWhenWithin = fling ? 4 : nearTailRemaining
+        let growWhenWithin = fling ? 8 : nearTailRemaining
         let remainingDisplayed = max(0, displayedPosts.count - index - 1)
         let nearTail = remainingDisplayed <= growWhenWithin
 
@@ -1173,23 +1172,21 @@ final class HomeFeedStore {
         }
 
         // Thumbs + Frame0; AV warm on video queue so autoplay is instant.
-        // Ultra-light: visible lead only — settled 5@540 was a decode storm under the finger.
-        let thumbAhead = fling ? 1 : 2
+        // Instagram: keep a short lead of posters warm so enter-frame never paints blank.
+        let thumbAhead = fling ? 2 : 4
         let end = min(displayedPosts.count, index + thumbAhead)
         if index < end {
             let window = Array(displayedPosts[index..<end])
             // Photos warm at ≥420 inside prefetchFeedMedia; this size is video posters only.
-            ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 280 : 360)
-            if !fling {
-                Task(priority: .utility) {
-                    await Frame0PosterResolver.shared.prefetch(
-                        postIDs: Array(window.prefix(2).map(\.id))
-                    )
-                }
+            ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 320 : 480)
+            Task(priority: .utility) {
+                await Frame0PosterResolver.shared.prefetch(
+                    postIDs: Array(window.prefix(fling ? 2 : 4).map(\.id))
+                )
             }
         }
 
-        // Warm focused video + ahead (video queue only). Mid-fling: pool flingProtect (ahead 1).
+        // Warm focused video + ahead (video queue only). Mid-fling still warms next.
         let videos = Self.feedWarmVideoQueue(from: displayedPosts)
         if let warmIdx = Self.feedWarmIndex(
             for: post,
@@ -1200,21 +1197,22 @@ final class HomeFeedStore {
             SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: warmIdx)
         }
 
-        // Don't kick network load-more mid-fling (causes hitch + image storms).
-        guard !fling else {
-            if nearTail || posts.count < minBufferedPool {
-                loadMoreQueuedNearTail = true
-                scheduleDrainQueuedLoadMore(afterMs: 400, forceNearTailRetry: true)
-            }
+        // Instagram endless: refill the pool while the finger is moving — waiting for
+        // scroll-settle left a hard stop at the window tail.
+        let ratioThreshold = max(0, Int(Double(max(posts.count, 1)) * prefetchRatio) - 1)
+        let poolNearExhaust = windowLimit >= max(0, posts.count - nearTailRemaining)
+        let needsTopUp = nearTail || poolNearExhaust || index >= ratioThreshold || posts.count < minBufferedPool
+        guard needsTopUp else { return }
+
+        if fling {
+            // Expand + kick network now; queue a settle retry if already in-flight.
+            requestLoadMore()
+            loadMoreQueuedNearTail = true
+            scheduleDrainQueuedLoadMore(afterMs: 180, forceNearTailRetry: true)
             return
         }
 
-        // Architecture: next batch when ~3 remain — also keep min buffer and mid-pool top-up.
-        let ratioThreshold = max(0, Int(Double(max(posts.count, 1)) * prefetchRatio) - 1)
-        let poolNearExhaust = windowLimit >= max(0, posts.count - nearTailRemaining)
-        if nearTail || poolNearExhaust || index >= ratioThreshold || posts.count < minBufferedPool {
-            requestLoadMore()
-        }
+        requestLoadMore()
     }
 
     /// Drain load-more that was queued mid-fling / mid-flight after settle.

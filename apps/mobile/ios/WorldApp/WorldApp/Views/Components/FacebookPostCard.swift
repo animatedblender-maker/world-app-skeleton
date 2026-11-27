@@ -944,13 +944,13 @@ struct FacebookPostCard: View {
         let isHubFilm = PlayPlatformBridge.isHubFeedCardVideo(post)
             || PlayPlatformBridge.isHubCatalogContent(post)
             || isHubOriginShareCard
-        // Instagram-level Feed: no static poster / Frame0 stack — pre-decoded AV is first paint.
-        // Matte only while warm misses; never Color.black thumb cards.
+        // Instagram-level Feed: Frame0/thumb until AV paints first frame — never black/matte miss.
+        let feedPoster = MediaURLResolver.posterURL(for: post)
         ZStack {
             Theme.matteDeep
             InFrameVideoPlayer(
                 url: url,
-                posterURL: nil,
+                posterURL: feedPoster,
                 placement: nil,
                 countryCode: post.countryCode,
                 contentCountryCode: post.countryCode,
@@ -968,7 +968,7 @@ struct FacebookPostCard: View {
                 allowsFullscreen: isHubFilm,
                 // CC on Home-feed Hubs (light R2 path + archive path). Never Sparks.
                 allowsCaptions: isHubFilm,
-                showsPosterUnderlay: false,
+                showsPosterUnderlay: true,
                 onFullscreenRequest: isHubFilm ? {
                     appState.startHubPlayback(post, expanded: true)
                     appState.requestHubFullscreen()

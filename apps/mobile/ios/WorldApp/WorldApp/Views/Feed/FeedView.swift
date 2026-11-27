@@ -232,9 +232,10 @@ struct FeedView: View {
                         // load-more bumps endlessLoadEpoch (otherwise the absolute bottom
                         // goes quiet forever after filtered-viewed pages).
                         .task(id: "\(store.windowLimit)-\(store.endlessLoadEpoch)") {
-                            // Sleep first so empty-retry backoff is not defeated by an
-                            // immediate re-entry when endlessLoadEpoch alone changes.
-                            try? await Task.sleep(nanoseconds: 700_000_000)
+                            // Short yield so empty-retry backoff is not defeated by an
+                            // immediate re-entry when endlessLoadEpoch alone changes —
+                            // keep it tight so the absolute bottom never feels stuck.
+                            try? await Task.sleep(nanoseconds: 180_000_000)
                             store.drainQueuedLoadMoreIfNeeded()
                             store.requestLoadMore()
                         }
