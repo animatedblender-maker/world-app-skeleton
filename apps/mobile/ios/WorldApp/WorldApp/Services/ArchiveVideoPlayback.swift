@@ -2090,12 +2090,10 @@ final class ArchiveVideoPlayerController: UIViewController {
             player?.isMuted = true
             player?.volume = 0
             // Keep last frame painted (no poster) so a fast swipe-back never blacks out.
+            // Do NOT seek-to-0 here — mid-swipe cells are still visible; rewind flashes the
+            // watched spark’s first frame. Off-screen rewind: SparkWarmPool.rewindParkedForReuse.
             posterView.isHidden = true
             spinner.stopAnimating()
-            // Pre-seek to start while off-screen so next focus is a pure play().
-            if restartsFromBeginningOnFocus {
-                softSeekToBeginning(playAfter: false)
-            }
             DispatchQueue.main.async { [weak self] in
                 self?.onPlayingChanged?(false)
             }

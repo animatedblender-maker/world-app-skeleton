@@ -455,9 +455,18 @@ final class SparkWarmPool {
                 player.safePlayImmediately(atRate: 1.0)
             }
         } else {
-            // Normal park contract: silent at t≈0.
+            // Normal park: must start at t≈0. Freeze-park may still be mid-clip if
+            // didEndDisplaying rewind has not run yet — snap here (layer already for this id).
             player.pause()
             player.rate = 0
+            if !Self.isAtStart(player, epsilon: 0.08) {
+                player.seek(
+                    to: .zero,
+                    toleranceBefore: .zero,
+                    toleranceAfter: .zero,
+                    completionHandler: { _ in }
+                )
+            }
         }
         return player
     }
@@ -478,17 +487,31 @@ final class SparkWarmPool {
     }
 
     /// Return a still-buffered player so scrolling back is instant (keeps `currentItem`).
-    /// Always rewound to **exact t=0** before the next claim (no mid-clip first frame).
+    /// **Freeze only** — never seek-to-0 while a layer may still be on-screen (that flashed
+    /// the watched spark’s first frame mid-swipe). Rewind via `rewindParkedForReuse` after
+    /// `didEndDisplaying`, or on the next non-continuing `claim`.
     func park(postID: String, player: AVPlayer) {
-        parkInternal(postID: postID, player: player, continueFromCurrentTime: false)
+        parkInternal(postID: postID, player: player, continueFromCurrentTime: false, rewindNow: false)
     }
 
     /// Park without seeking to 0 — feed→Sparks/Hubs open continues mid-clip.
     func parkContinuing(postID: String, player: AVPlayer) {
-        parkInternal(postID: postID, player: player, continueFromCurrentTime: true)
+        parkInternal(postID: postID, player: player, continueFromCurrentTime: true, rewindNow: false)
     }
 
-    private func parkInternal(postID: String, player: AVPlayer, continueFromCurrentTime: Bool) {
+    /// Off-screen only: snap parked buffer to t=0 + decode first frame for the next claim.
+    func rewindParkedForReuse(postID: String) {
+        guard let slot = slots[postID], !continuingIDs.contains(postID) else { return }
+        let player = slot.player
+        Task { await silentBufferFill(postID: postID, player: player) }
+    }
+
+    private func parkInternal(
+        postID: String,
+        player: AVPlayer,
+        continueFromCurrentTime: Bool,
+        rewindNow: Bool
+    ) {
         inUse.remove(postID)
         claimedPlayers.removeValue(forKey: postID)
 
@@ -547,8 +570,10 @@ final class SparkWarmPool {
             player.isMuted = true
             player.volume = 0
             player.rate = 0
-            // Snap to exact 0 + decode first frame while parked (never free-play into the clip).
-            Task { await silentBufferFill(postID: postID, player: player) }
+            // Optional immediate rewind (off-screen callers only). Visible swipe must freeze.
+            if rewindNow {
+                Task { await silentBufferFill(postID: postID, player: player) }
+            }
         }
     }
 

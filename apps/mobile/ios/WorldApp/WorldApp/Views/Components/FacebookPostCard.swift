@@ -941,51 +941,16 @@ struct FacebookPostCard: View {
         // Feed: only Archive CDN needs MatteryaHubPlayer. R2 hubs use light AV path —
         // mounting the hub UIKit player on every cell froze scroll.
         let useArchivePath = ArchiveVideoPlayback.isArchiveURL(url)
-        // Prefer usable Frame 0 / LongForm YouTube — feed thumb_url is often expired (403).
-        let posterCandidates: [URL?] = [
-            Frame0PosterCache.url(for: post.id),
-            MediaURLResolver.r2LongformYouTubePosterURL(for: post),
-            MediaURLResolver.posterURL(for: post),
-            post.sharedPost.flatMap { MediaURLResolver.posterURL(for: $0.asCountryPost) },
-            post.sharedPost.flatMap { MediaURLResolver.r2LongformYouTubePosterURL(for: $0.asCountryPost) },
-        ]
-        let poster: URL? = {
-            for candidate in posterCandidates {
-                guard let url = candidate, MediaURLResolver.isUsablePosterURL(url) else { continue }
-                return url
-            }
-            return nil
-        }()
         let isHubFilm = PlayPlatformBridge.isHubFeedCardVideo(post)
             || PlayPlatformBridge.isHubCatalogContent(post)
             || isHubOriginShareCard
+        // Instagram-level Feed: no static poster / Frame0 stack — pre-decoded AV is first paint.
+        // Matte only while warm misses; never Color.black thumb cards.
         ZStack {
-            Color.black
-            if let poster {
-                CachedAsyncImage(
-                    url: poster,
-                    maxPixelSize: 480,
-                    contentMode: isHubFilm ? .fit : .fill,
-                    placeholder: AnyView(Color.black)
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-                .allowsHitTesting(false)
-            } else {
-                // No usable thumb — pack-path Frame 0 only (no full-video download).
-                FrameZeroFallbackPoster(
-                    postID: post.id,
-                    videoURL: url,
-                    fillsFrame: !isHubFilm,
-                    allowClientExtract: false,
-                    seedPosterURL: Frame0PosterCache.url(for: post.id)
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .allowsHitTesting(false)
-            }
+            Theme.matteDeep
             InFrameVideoPlayer(
                 url: url,
-                posterURL: poster,
+                posterURL: nil,
                 placement: nil,
                 countryCode: post.countryCode,
                 contentCountryCode: post.countryCode,
@@ -1003,6 +968,7 @@ struct FacebookPostCard: View {
                 allowsFullscreen: isHubFilm,
                 // CC on Home-feed Hubs (light R2 path + archive path). Never Sparks.
                 allowsCaptions: isHubFilm,
+                showsPosterUnderlay: false,
                 onFullscreenRequest: isHubFilm ? {
                     appState.startHubPlayback(post, expanded: true)
                     appState.requestHubFullscreen()
@@ -1010,7 +976,7 @@ struct FacebookPostCard: View {
                 onViewed: { Task { await PostsService.shared.recordView(post) } }
             )
         }
-        .background(Color.black)
+        .background(Theme.matteDeep)
         // Single 18+ mark — top-left of the film, moderator `is_adult` only.
         .overlay(alignment: .topLeading) {
             if post.isModeratorAdultMarked {

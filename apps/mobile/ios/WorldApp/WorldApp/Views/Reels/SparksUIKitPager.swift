@@ -645,6 +645,13 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         if indexPath.item != activeIndex {
             page.deactivateAudio()
         }
+        // Cell is off-screen — safe to rewind parked buffer to t=0 for the next claim.
+        // Doing this on commitPage while still visible flashed the watched spark’s first frame.
+        if posts.indices.contains(indexPath.item) {
+            SparkWarmPool.shared.rewindParkedForReuse(postID: posts[indexPath.item].id)
+        } else if let id = page.lastDisplayedPostID {
+            SparkWarmPool.shared.rewindParkedForReuse(postID: id)
+        }
     }
 
     func collectionView(
@@ -947,12 +954,19 @@ private final class SparksPageCell: UICollectionViewCell {
     private var lastComments: (() -> Void)?
     private var lastConfigureSignature: String?
 
+    /// Last configured post — used for off-screen rewind when index is already recycled.
+    var lastDisplayedPostID: String? { lastPost?.id }
+
     override func prepareForReuse() {
         super.prepareForReuse()
+        // Rewind before clearing identity — cell is leaving the hierarchy.
+        if let id = lastPost?.id {
+            SparkWarmPool.shared.rewindParkedForReuse(postID: id)
+        }
         lastConfigureSignature = nil
         lastContinueFromFeed = false
         lastPost = nil
-        // Black floor only — never keep previous clip's SwiftUI/AV tree while waiting for configure.
+        // Clear previous SwiftUI/AV tree — black is correct for Sparks chrome (not a film flash).
         if let host {
             host.rootView = AnyView(Color.black)
             host.view.backgroundColor = .black

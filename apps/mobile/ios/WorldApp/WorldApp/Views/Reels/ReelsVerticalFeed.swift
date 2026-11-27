@@ -381,6 +381,7 @@ struct ReelsPagerCard: View {
     }
 
     private var isFeedHandoffContinue: Bool {
+        // Sticky / exact-id continue only — never blanket hasContinuingParked (old-spark flash).
         feedHandoffSticky
             || SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: post.id)
             || appState.shouldContinuePlayback(for: post.id)

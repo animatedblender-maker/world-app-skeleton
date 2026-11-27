@@ -123,13 +123,12 @@ struct VideoPlayerView: View {
         return showPosterCover
     }
 
-    /// Letterbox / cold floor. Prefer clear when a poster exists so enter-frame never blinks black
-    /// through the poster stack (Instagram keeps the first frame / thumb visible).
+    /// Letterbox / cold floor. Prefer clear when a poster exists; matte when Feed instant-film.
     private var softVideoFloor: some View {
         if posterURL != nil {
             Color.clear
         } else {
-            Color.black
+            Theme.matteDeep
         }
     }
 
@@ -218,8 +217,8 @@ struct VideoPlayerView: View {
 
     private var playerLifecycleCore: some View {
         playerRoot
-            // Clear when poster exists — black background flashed under Frame0 on feed enter.
-            .background(posterURL == nil ? Color.black : Color.clear)
+            // Clear when poster exists — matte (not black) when Feed instant-film has no poster.
+            .background(posterURL == nil ? Theme.matteDeep : Color.clear)
             .onAppear { handlePlayerAppear() }
             .task(id: postID) {
                 // Every new post starts with CC off.
@@ -789,10 +788,10 @@ struct VideoPlayerView: View {
         applyInitialChromeVisibility()
         // Feed→Sparks continue: never start covered — claim already has painted frames.
         // Only this post's continue flags (never a blanket hasContinuingParked — that flashed old film).
+        // Exact post id only — blanket hasContinuingParked stole earlier sparks’ film on swipe.
         let handoffContinue = allowsContinuingHandoffClaim && (postID.map {
             SparkWarmPool.shared.shouldContinueFromCurrentTime(postID: $0)
                 || appState.shouldContinuePlayback(for: $0)
-                || SparkWarmPool.shared.hasContinuingParked
         } ?? false)
         showPosterCover = !handoffContinue
         if isActive {
@@ -941,13 +940,11 @@ struct VideoPlayerView: View {
             player?.volume = 0
             isPlaying = false
             // Keep last decoded frame under the next page; don't force poster swap.
+            // Never seek-to-0 while the cell may still be on-screen mid-swipe (that flashed
+            // the already-watched spark’s first frame). Rewind after didEndDisplaying.
             isRestartSeeking = false
             userWantsPause = false
             liveGate.userWantsPause = false
-            // Pre-seek to 0 while OFF-SCREEN so next focus can play without a seek flash.
-            if restartFromBeginningToken > 0 {
-                softSeekToBeginning(playAfter: false)
-            }
         }
     }
 
@@ -2459,6 +2456,8 @@ struct InFrameVideoPlayer: View {
     var onFullscreenRequest: (() -> Void)? = nil
     /// Hubs long-form only (Home feed + Hubs). Never Sparks.
     var allowsCaptions: Bool = false
+    /// When false (Home Feed instant film): no Frame0/thumb underlay — AV pixels only.
+    var showsPosterUnderlay: Bool = true
     var onViewed: (() -> Void)? = nil
     /// Natural video size — Spark feed cards use this for SparksStageLayout fill vs fit.
     var onVideoSize: ((CGSize) -> Void)? = nil
@@ -2495,6 +2494,7 @@ struct InFrameVideoPlayer: View {
         tapToRevealControls: Bool = false,
         allowsFullscreen: Bool = false,
         allowsCaptions: Bool = false,
+        showsPosterUnderlay: Bool = true,
         onFullscreenRequest: (() -> Void)? = nil,
         onViewed: (() -> Void)? = nil,
         onVideoSize: ((CGSize) -> Void)? = nil
@@ -2518,6 +2518,7 @@ struct InFrameVideoPlayer: View {
         self.tapToRevealControls = tapToRevealControls
         self.allowsFullscreen = allowsFullscreen
         self.allowsCaptions = allowsCaptions
+        self.showsPosterUnderlay = showsPosterUnderlay
         self.onFullscreenRequest = onFullscreenRequest
         self.onViewed = onViewed
         self.onVideoSize = onVideoSize
@@ -2556,40 +2557,44 @@ struct InFrameVideoPlayer: View {
         playGate || preloadGate
     }
 
-    /// First-frame stand-in under AV — Frame0 / poster only. Never a black flash on enter.
+    /// First-frame stand-in under AV. Feed instant film skips posters (matte miss only).
     @ViewBuilder
     private var posterFloor: some View {
-        let cachedFrame0 = postID.flatMap { Frame0PosterCache.url(for: $0) }
-        let usablePoster: URL? = {
-            if let posterURL, MediaURLResolver.isUsablePosterURL(posterURL) { return posterURL }
-            if let cachedFrame0, MediaURLResolver.isUsablePosterURL(cachedFrame0) { return cachedFrame0 }
-            return nil
-        }()
-        ZStack {
-            // Clear — black here caused the enter-frame blink when CachedAsyncImage reloaded.
-            Color.clear
-            if let usablePoster {
-                CachedAsyncImage(
-                    url: usablePoster,
-                    maxPixelSize: 720,
-                    contentMode: fillsFrame ? .fill : .fit,
-                    placeholder: AnyView(Color.clear)
-                )
-                .id(usablePoster.absoluteString)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-                .allowsHitTesting(false)
-            }
-            // Pack-path Frame 0 when API thumb missing/unusable.
-            if let postID, usablePoster == nil || posterURL.map({ !MediaURLResolver.isUsablePosterURL($0) }) == true {
-                FrameZeroFallbackPoster(
-                    postID: postID,
-                    videoURL: url,
-                    fillsFrame: fillsFrame,
-                    allowClientExtract: false,
-                    seedPosterURL: cachedFrame0
-                )
-                .allowsHitTesting(false)
+        if !showsPosterUnderlay {
+            Theme.matteDeep
+        } else {
+            let cachedFrame0 = postID.flatMap { Frame0PosterCache.url(for: $0) }
+            let usablePoster: URL? = {
+                if let posterURL, MediaURLResolver.isUsablePosterURL(posterURL) { return posterURL }
+                if let cachedFrame0, MediaURLResolver.isUsablePosterURL(cachedFrame0) { return cachedFrame0 }
+                return nil
+            }()
+            ZStack {
+                // Clear — black here caused the enter-frame blink when CachedAsyncImage reloaded.
+                Color.clear
+                if let usablePoster {
+                    CachedAsyncImage(
+                        url: usablePoster,
+                        maxPixelSize: 720,
+                        contentMode: fillsFrame ? .fill : .fit,
+                        placeholder: AnyView(Color.clear)
+                    )
+                    .id(usablePoster.absoluteString)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .allowsHitTesting(false)
+                }
+                // Pack-path Frame 0 when API thumb missing/unusable.
+                if let postID, usablePoster == nil || posterURL.map({ !MediaURLResolver.isUsablePosterURL($0) }) == true {
+                    FrameZeroFallbackPoster(
+                        postID: postID,
+                        videoURL: url,
+                        fillsFrame: fillsFrame,
+                        allowClientExtract: false,
+                        seedPosterURL: cachedFrame0
+                    )
+                    .allowsHitTesting(false)
+                }
             }
         }
     }
@@ -2607,7 +2612,7 @@ struct InFrameVideoPlayer: View {
 
     var body: some View {
         ZStack {
-            // Always poster base under the player / preload.
+            // Poster path: Frame0 underlay. Instant-film Feed: matte only until AV paints.
             posterFloor
 
             // Approach → silent preload; focus win → active play (claims warm pool).
@@ -2616,7 +2621,7 @@ struct InFrameVideoPlayer: View {
                     if usesArchivePath {
                         MatteryaHubPlayerView(
                             url: url,
-                            posterURL: posterURL,
+                            posterURL: showsPosterUnderlay ? posterURL : nil,
                             isActive: playGate,
                             // Continue mid-clip when feed→hubs/sparks handoff parked this buffer.
                             startTime: continueStartTime,
@@ -2643,17 +2648,17 @@ struct InFrameVideoPlayer: View {
                             onFullscreenToggle: allowsFullscreen ? onFullscreenRequest : nil,
                             onReady: {
                                 onViewed?()
-                                // readyToPlay ≠ painted frames — keep outer poster (black AV blink).
                             },
                             onPlayingChange: { playing in
-                                // Never lift poster on "playing" alone — first ticks are often black.
-                                if !playing {
+                                if !playing, showsPosterUnderlay {
                                     framesReady = false
                                 }
                             },
                             onProgress: { current, _ in
-                                // Paint proof only after the playhead leaves the black keyframe band.
-                                if playGate, current >= 0.12 {
+                                // Instant film: lift as soon as playhead moves. Poster path: longer band.
+                                let threshold = showsPosterUnderlay ? 0.12 : 0.04
+                                if (playGate || (!showsPosterUnderlay && preloadGate)),
+                                   current >= threshold {
                                     markInFrameFramesReady()
                                 }
                             },
@@ -2662,7 +2667,7 @@ struct InFrameVideoPlayer: View {
                     } else {
                         VideoPlayerView(
                             url: url,
-                            posterURL: posterURL,
+                            posterURL: showsPosterUnderlay ? posterURL : nil,
                             placement: placement,
                             countryCode: countryCode,
                             contentCountryCode: contentCountryCode,
@@ -2686,19 +2691,25 @@ struct InFrameVideoPlayer: View {
                             preloadsWhenInactive: true,
                             onViewed: onViewed,
                             onFramesReady: {
-                                guard playGate else { return }
+                                if showsPosterUnderlay {
+                                    guard playGate else { return }
+                                } else {
+                                    guard playGate || preloadGate else { return }
+                                }
                                 markInFrameFramesReady()
                             },
                             onVideoSize: onVideoSize
                         )
                     }
                 }
-                // Keep cover mounted until paint proof — never bare black AV layer.
-                posterFloor
-                    .opacity(playGate && framesReady ? 0 : 1)
-                    .allowsHitTesting(false)
-                    .animation(nil, value: framesReady)
-                    .animation(nil, value: playGate)
+                // Cover until paint proof. Instant-film: matte only (no thumb).
+                if showsPosterUnderlay || !framesReady {
+                    posterFloor
+                        .opacity(playGate && framesReady ? 0 : 1)
+                        .allowsHitTesting(false)
+                        .animation(nil, value: framesReady)
+                        .animation(nil, value: playGate)
+                }
             } else {
                 posterFloor
             }
@@ -2745,14 +2756,17 @@ struct InFrameVideoPlayer: View {
             } else {
                 isMuted = muted
             }
-            // Deep AV + Frame0 only after autoplay unlock — every-cell prefetch on cold open froze UI.
+            // Deep AV after autoplay unlock — every-cell prefetch on cold open froze UI.
+            // Instant-film Feed skips Frame0 mint (no poster underlay).
             if FeedVideoFocus.shared.autoplayUnlocked {
                 if let postID {
                     SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
-                    let needsPoster = posterURL.map { !MediaURLResolver.isUsablePosterURL($0) } ?? true
-                    if needsPoster {
-                        Task(priority: .utility) {
-                            await Frame0PosterResolver.shared.prefetch(postIDs: [postID])
+                    if showsPosterUnderlay {
+                        let needsPoster = posterURL.map { !MediaURLResolver.isUsablePosterURL($0) } ?? true
+                        if needsPoster {
+                            Task(priority: .utility) {
+                                await Frame0PosterResolver.shared.prefetch(postIDs: [postID])
+                            }
                         }
                     }
                 }
@@ -2830,8 +2844,10 @@ struct InFrameVideoPlayer: View {
                 framesReady = false
                 return
             }
-            // Never mark framesReady from warm-at-0 alone — that flashed black on scroll.
-            framesReady = false
+            // Instant film: keep framesReady if preload already painted — focus only bumps rate.
+            if !(showsPosterUnderlay == false && framesReady) {
+                framesReady = false
+            }
             if let postID {
                 SparkWarmPool.shared.warmSingle(postID: postID, url: url, deep: true)
             }
@@ -2853,9 +2869,23 @@ struct InFrameVideoPlayer: View {
         syncPlayGate(immediate: win)
     }
 
-    /// Lift outer Frame0 only after real paint — never reveal a black AV layer.
+    /// Lift cover after real paint — never reveal an empty AV layer.
     private func markInFrameFramesReady() {
-        guard playGate, !framesReady else { return }
+        guard !framesReady else { return }
+        if !showsPosterUnderlay {
+            // Instant film: AV pixels are the UI — lift as soon as frames prove.
+            guard playGate || preloadGate else { return }
+            framesReady = true
+            if playGate, sharesFeedMute {
+                let wantMute = appState.feedVideosMuted
+                isMuted = wantMute
+                if !wantMute {
+                    activatePlaybackAudioIfNeeded(unmuted: true)
+                }
+            }
+            return
+        }
+        guard playGate else { return }
         Task { @MainActor in
             // Hold first-frame poster until the decoder is past the black keyframe band.
             try? await Task.sleep(nanoseconds: fillsFrame ? 90_000_000 : 110_000_000)
