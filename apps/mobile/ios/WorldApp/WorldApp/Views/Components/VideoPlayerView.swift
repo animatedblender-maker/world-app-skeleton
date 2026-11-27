@@ -123,13 +123,9 @@ struct VideoPlayerView: View {
         return showPosterCover
     }
 
-    /// Letterbox / cold floor. Prefer clear when a poster exists; matte when Feed instant-film.
+    /// Letterbox / cold floor — always matte. Clear over black AVPlayerLayer was the Feed flash.
     private var softVideoFloor: some View {
-        if posterURL != nil {
-            Color.clear
-        } else {
-            Theme.matteDeep
-        }
+        Theme.matteDeep
     }
 
     var body: some View {
@@ -313,12 +309,12 @@ struct VideoPlayerView: View {
                 onComplete: { adFinished = true }
             )
         } else if let player {
-            // Feed instant film (no poster): matte AV floor — black layer was the scroll flash.
+            // Never black AV floor — matte until real frames (Feed + in-frame cards).
             MatteryaVideoSurface(
                 player: player,
                 fillsFrame: fillsFrame,
-                softFloorClear: shouldShowPosterCover && posterURL != nil,
-                softFloorMatte: posterURL == nil
+                softFloorClear: false,
+                softFloorMatte: true
             )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
@@ -345,7 +341,7 @@ struct VideoPlayerView: View {
                     url: posterURL,
                     maxPixelSize: 900,
                     contentMode: fillsFrame ? .fill : .fit,
-                    placeholder: AnyView(Color.clear)
+                    placeholder: AnyView(Theme.matteDeep)
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
@@ -2593,7 +2589,7 @@ struct InFrameVideoPlayer: View {
         playGate || preloadGate
     }
 
-    /// First-frame stand-in under AV. Feed instant film skips posters (matte miss only).
+    /// First-frame stand-in under AV. Always matte — never Color.clear over a black AV layer.
     @ViewBuilder
     private var posterFloor: some View {
         if !showsPosterUnderlay {
@@ -2606,14 +2602,14 @@ struct InFrameVideoPlayer: View {
                 return nil
             }()
             ZStack {
-                // Clear — black here caused the enter-frame blink when CachedAsyncImage reloaded.
-                Color.clear
+                // Solid matte under poster — clear let black AVPlayerLayer flash through.
+                Theme.matteDeep
                 if let usablePoster {
                     CachedAsyncImage(
                         url: usablePoster,
                         maxPixelSize: 720,
                         contentMode: fillsFrame ? .fill : .fit,
-                        placeholder: AnyView(Color.clear)
+                        placeholder: AnyView(Theme.matteDeep)
                     )
                     .id(usablePoster.absoluteString)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2738,13 +2734,16 @@ struct InFrameVideoPlayer: View {
                         )
                     }
                 }
-                // Cover until paint proof. Instant-film: matte only (no thumb).
+                // Hide black AV until first decoded frame — poster/matte stays opaque until then.
+                .opacity(framesReady ? 1 : 0)
+                .animation(nil, value: framesReady)
+
+                // Cover until paint proof — solid matte + thumb, never clear-over-black.
                 if showsPosterUnderlay || !framesReady {
                     posterFloor
-                        .opacity(playGate && framesReady ? 0 : 1)
+                        .opacity(framesReady ? 0 : 1)
                         .allowsHitTesting(false)
                         .animation(nil, value: framesReady)
-                        .animation(nil, value: playGate)
                 }
             } else {
                 posterFloor

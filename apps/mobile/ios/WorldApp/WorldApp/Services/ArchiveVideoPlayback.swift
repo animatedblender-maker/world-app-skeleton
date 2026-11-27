@@ -1834,7 +1834,7 @@ final class ArchiveVideoPlayerController: UIViewController {
         return lastKnownSeconds
     }
 
-    /// Letterbox / empty AV floor — black (IG/YT), never paper-white.
+    /// Letterbox / empty AV floor — black (IG/YT hubs). Feed InFrame hides AV until framesReady.
     private static let softFloor = UIColor.black
 
     override func viewDidLoad() {

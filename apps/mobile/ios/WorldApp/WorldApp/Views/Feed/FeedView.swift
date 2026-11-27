@@ -235,9 +235,9 @@ struct FeedView: View {
                             // Short yield so empty-retry backoff is not defeated by an
                             // immediate re-entry when endlessLoadEpoch alone changes —
                             // keep it tight so the absolute bottom never feels stuck.
-                            try? await Task.sleep(nanoseconds: 180_000_000)
+                            try? await Task.sleep(nanoseconds: 80_000_000)
                             store.drainQueuedLoadMoreIfNeeded()
-                            store.requestLoadMore()
+                            store.requestLoadMore(forceNetwork: true)
                         }
                     if store.isLoadingMore, store.displayedPosts.count < 6 {
                         ProgressView()

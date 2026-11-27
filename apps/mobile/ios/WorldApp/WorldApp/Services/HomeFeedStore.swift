@@ -39,8 +39,8 @@ final class HomeFeedStore {
 
     /// Full in-memory pool (not all rendered — `windowLimit` controls LazyVStack).
     private(set) var posts: [CountryPost] = []
-    /// How many posts the list may render (window grows on scroll).
-    private(set) var windowLimit = 10
+    /// How many posts the list may render (snaps to full pool — LazyVStack virtualizes).
+    private(set) var windowLimit = 12
     private(set) var isBootstrapping = true
     private(set) var isRefreshing = false
     private(set) var isLoadingMore = false
@@ -100,17 +100,19 @@ final class HomeFeedStore {
     private static let officialWelcomeSeenKey = "matterya.home.officialWelcomeSeen.v1"
     private var cachedOfficialWelcome: CountryPost?
 
-    /// Network page size — Instagram-class endless: refill ahead of the finger.
-    private let pageSize = 14
-    private let windowPageSize = 10
-    /// First paint window — ~1.5 screens; grow on scroll.
-    private let firstWindow = 10
-    /// Prefetch earlier so the tail never waits on network while scrolling.
-    private let prefetchRatio = 0.40
-    /// Request next batch when ~8 cards remain (settle lag + fling headroom).
-    private let nearTailRemaining = 8
-    /// Keep at least this many posts buffered in `posts` (beyond the visible window).
-    private let minBufferedPool = 48
+    /// Network page size — fat pages so one round-trip covers many scrolls.
+    private let pageSize = 24
+    private let windowPageSize = 24
+    /// First paint window — then unlock full pool (LazyVStack virtualizes).
+    private let firstWindow = 12
+    /// Prefetch as soon as the finger is past the first ~25% of the pool.
+    private let prefetchRatio = 0.25
+    /// Request next batch when ~16 cards remain (never wait at the absolute end).
+    private let nearTailRemaining = 16
+    /// Keep this many posts buffered ahead of the finger — Instagram-class.
+    private let minBufferedPool = 64
+    /// Minimum unconsumed pool rows ahead of `lastVisibleIndex` before we stop topping up.
+    private let minAheadOfFinger = 32
 
     private init() {
         scrollSettleObserver = NotificationCenter.default.addObserver(
@@ -1155,33 +1157,30 @@ final class HomeFeedStore {
         )
 
         let fling = ScrollBudget.isFlinging
-        // During a fling, jump the window ahead so LazyVStack always has cells ready.
-        let growBy = fling ? windowPageSize * 2 : windowPageSize
-        let growWhenWithin = fling ? 8 : nearTailRemaining
-        let remainingDisplayed = max(0, displayedPosts.count - index - 1)
-        let nearTail = remainingDisplayed <= growWhenWithin
-
-        if nearTail, windowLimit < posts.count {
+        // Unlock the entire in-memory pool immediately — artificial windowing caused
+        // "stop after a few scrolls" while network was still sitting unused in `posts`.
+        if windowLimit < posts.count {
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) {
-                windowLimit = min(posts.count, windowLimit + growBy)
+                windowLimit = posts.count
             }
-            // Local pool may still grow via network / R2 — never mark exhausted here.
             hasMore = true
         }
 
+        let remainingInPool = max(0, posts.count - index - 1)
+        let nearTail = remainingInPool <= nearTailRemaining
+        let aheadThin = remainingInPool < minAheadOfFinger
+
         // Thumbs + Frame0; AV warm on video queue so autoplay is instant.
-        // Instagram: keep a short lead of posters warm so enter-frame never paints blank.
-        let thumbAhead = fling ? 2 : 4
+        let thumbAhead = fling ? 3 : 6
         let end = min(displayedPosts.count, index + thumbAhead)
         if index < end {
             let window = Array(displayedPosts[index..<end])
-            // Photos warm at ≥420 inside prefetchFeedMedia; this size is video posters only.
-            ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 320 : 480)
+            ImageCache.shared.prefetchFeedMedia(window, maxPixelSize: fling ? 360 : 540)
             Task(priority: .utility) {
                 await Frame0PosterResolver.shared.prefetch(
-                    postIDs: Array(window.prefix(fling ? 2 : 4).map(\.id))
+                    postIDs: Array(window.prefix(fling ? 3 : 6).map(\.id))
                 )
             }
         }
@@ -1197,22 +1196,20 @@ final class HomeFeedStore {
             SparkWarmPool.shared.prepareFeedWindow(posts: videos, around: warmIdx)
         }
 
-        // Instagram endless: refill the pool while the finger is moving — waiting for
-        // scroll-settle left a hard stop at the window tail.
+        // Never wait for settle — top up as soon as ahead-of-finger is thin.
         let ratioThreshold = max(0, Int(Double(max(posts.count, 1)) * prefetchRatio) - 1)
-        let poolNearExhaust = windowLimit >= max(0, posts.count - nearTailRemaining)
-        let needsTopUp = nearTail || poolNearExhaust || index >= ratioThreshold || posts.count < minBufferedPool
+        let needsTopUp =
+            nearTail
+            || aheadThin
+            || index >= ratioThreshold
+            || posts.count < minBufferedPool
         guard needsTopUp else { return }
 
-        if fling {
-            // Expand + kick network now; queue a settle retry if already in-flight.
-            requestLoadMore()
+        requestLoadMore(forceNetwork: true)
+        if fling || loadMoreInFlight {
             loadMoreQueuedNearTail = true
-            scheduleDrainQueuedLoadMore(afterMs: 180, forceNearTailRetry: true)
-            return
+            scheduleDrainQueuedLoadMore(afterMs: 120, forceNearTailRetry: true)
         }
-
-        requestLoadMore()
     }
 
     /// Drain load-more that was queued mid-fling / mid-flight after settle.
@@ -1241,38 +1238,36 @@ final class HomeFeedStore {
         }
     }
 
-    func requestLoadMore() {
-        // Local window still has room — just expand (handled in onRowAppear).
+    func requestLoadMore(forceNetwork: Bool = false) {
+        // Always expose the full in-memory pool — LazyVStack virtualizes cells.
         if windowLimit < posts.count {
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) {
-                windowLimit = min(posts.count, windowLimit + windowPageSize)
+                windowLimit = posts.count
             }
             hasMore = true
-            // If window is catching the pool tail, also kick network/R2 in parallel.
-            if windowLimit >= posts.count - windowPageSize {
-                // fall through to network
-            } else {
-                return
-            }
+        }
+        let ahead = max(0, posts.count - lastVisibleIndex - 1)
+        // Deep enough ahead of the finger and pool floor met — skip network this tick.
+        if !forceNetwork, ahead >= minAheadOfFinger, posts.count >= minBufferedPool {
+            return
         }
         // Single-flight: UncancellableHTTP ignores Task.cancel, so parallel loadMores
         // storm the same /v1/feed cursor until -1001.
         if loadMoreInFlight || isLoadingMore || isBootstrapping {
             loadMoreQueuedNearTail = true
-            scheduleDrainQueuedLoadMore(afterMs: 400, forceNearTailRetry: true)
+            scheduleDrainQueuedLoadMore(afterMs: 120, forceNearTailRetry: true)
             return
         }
         hasMore = true
         let gen = generation
         pendingLoadMoreTask?.cancel()
-        pendingLoadMoreTask = Task(priority: .utility) { [weak self] in
+        pendingLoadMoreTask = Task(priority: .userInitiated) { [weak self] in
             guard let self else { return }
-            await self.loadMore(generation: gen)
+            await self.loadMore(generation: gen, forceNetwork: true)
         }
-        // Settle lag: drain any race-queued flag once (no forced double-fetch).
-        scheduleDrainQueuedLoadMore(afterMs: 400, forceNearTailRetry: false)
+        scheduleDrainQueuedLoadMore(afterMs: 120, forceNearTailRetry: false)
     }
 
     // MARK: - Mutations from UI
@@ -1434,16 +1429,19 @@ final class HomeFeedStore {
             nextCursor = nil
             return
         }
-        // Prefer expanding the local window through the already-loaded pool.
-        if !forceNetwork, windowLimit < posts.count {
+        // Unlock any already-loaded pool rows immediately (never hide them behind windowLimit).
+        if windowLimit < posts.count {
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) {
-                windowLimit = min(posts.count, windowLimit + windowPageSize)
+                windowLimit = posts.count
             }
-            // Still more once the local window catches up to the pool.
             hasMore = true
-            return
+            // Without forceNetwork, only expand when the pool ahead of the finger is still deep.
+            let ahead = max(0, posts.count - lastVisibleIndex - 1)
+            if !forceNetwork, ahead >= minAheadOfFinger, posts.count >= minBufferedPool {
+                return
+            }
         }
 
         if loadMoreInFlight {
@@ -1623,8 +1621,8 @@ final class HomeFeedStore {
             if emptyAppendRetriesThisGeneration % 3 == 0 {
                 PostsService.shared.nudgeHomeFeedSparkPagerForEndless()
             }
-            // Back off a bit so we don't storm /v1/feed — but never stop (seed-public mode).
-            let delayMs: UInt64 = min(8_000, 350 + UInt64(attempt) * 250)
+            // Tight retry — multi-second backoff is what felt like "stop and wait".
+            let delayMs: UInt64 = min(900, 60 + UInt64(attempt) * 40)
             if attempt <= maxEmptyAppendRetries {
                 let followGen = gen
                 Task(priority: .utility) { [weak self] in
@@ -1646,11 +1644,11 @@ final class HomeFeedStore {
         var poolIDs = Set(posts.map(\.id))
         let dedupedAppend = orderedAppend.filter { poolIDs.insert($0.id).inserted }
         posts.append(contentsOf: dedupedAppend)
-        // Grow window so new rows appear without waiting for another appear cycle.
+        // New rows are visible immediately — no second appear cycle / window drip.
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
-            windowLimit = min(posts.count, max(windowLimit + appended.count, windowLimit + windowPageSize))
+            windowLimit = posts.count
         }
         // Prefer thin network cursor only when we actually used thin items.
         if !pageItems.isEmpty, let pageNextCursor {
@@ -1675,9 +1673,12 @@ final class HomeFeedStore {
         // Re-personalize after pool growth (head stays stable if user engaged).
         Task { await applyServerRankIfPossible() }
         // Keep pool deep so the next scroll never waits on network.
-        if posts.count < minBufferedPool {
-            Task(priority: .utility) { [weak self] in
-                await self?.ensureBufferedPool()
+        let aheadNow = max(0, posts.count - lastVisibleIndex - 1)
+        if posts.count < minBufferedPool || aheadNow < minAheadOfFinger {
+            let followGen = gen
+            Task(priority: .userInitiated) { [weak self] in
+                guard let self, followGen == self.generation else { return }
+                await self.loadMore(generation: followGen, forceNetwork: true)
             }
         }
     }
