@@ -27,7 +27,9 @@ final class SparkWarmPool {
         /// Feed/Hubs stay focus+1. Sparks is path-local and hotter than butter:
         /// capable phones keep focus+3 decoding so whip flings never land cold.
         static var playerAhead: Int { playerAheadSparks }
-        static var playerAheadFeed: Int { 1 }
+        /// Focus + next — scrolling into the next card must already have a decoded frame
+        /// (instant-film Feed has no poster; ahead 1 left a ~1s matte/black miss).
+        static var playerAheadFeed: Int { isConstrained ? 1 : 2 }
         static var playerAheadSparks: Int {
             if isConstrained { return 1 }
             if isMid { return 2 }

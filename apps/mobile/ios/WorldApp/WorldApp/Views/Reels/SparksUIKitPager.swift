@@ -366,6 +366,7 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         // Keep posts array fresh for like counts even without full reload.
         var didPurePrepend = false
         var didPureAppend = false
+        var didEndlessRotate = false
         if dataChanged {
             let oldIDs = lastPostedIDs
             let wouldPureAppend = !oldIDs.isEmpty
@@ -374,6 +375,9 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
             let wouldPurePrepend = !oldIDs.isEmpty
                 && ids.count > oldIDs.count
                 && Array(ids.suffix(oldIDs.count)) == oldIDs
+            // Endless recycle: same IDs, far-behind moved to the tail (keep+moved).
+            // reloadData remounted the focused cell and stopped the playing spark mid-clip.
+            let endlessRotateDrop = Self.endlessRotateDropCount(from: oldIDs, to: ids)
             // Any collection mutation mid-drag/decelerate freezes the pager — defer.
             if ScrollBudget.isFlinging
                 || collectionView.isDragging
@@ -412,6 +416,26 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
                     self.refreshVisibleCells()
                 }
                 didPurePrepend = true
+            } else if let drop = endlessRotateDrop, drop > 0 {
+                let pageH = max(pageSize.height, 1)
+                let oldOffset = collectionView.contentOffset
+                let deletePaths = (0..<drop).map { IndexPath(item: $0, section: 0) }
+                let insertStart = oldIDs.count - drop
+                let insertPaths = (insertStart..<oldIDs.count).map { IndexPath(item: $0, section: 0) }
+                isApplyingScroll = true
+                collectionView.performBatchUpdates {
+                    collectionView.deleteItems(at: deletePaths)
+                    collectionView.insertItems(at: insertPaths)
+                } completion: { [weak self] _ in
+                    guard let self else { return }
+                    self.collectionView.setContentOffset(
+                        CGPoint(x: oldOffset.x, y: max(0, oldOffset.y - CGFloat(drop) * pageH)),
+                        animated: false
+                    )
+                    self.isApplyingScroll = false
+                    self.refreshVisibleCells()
+                }
+                didEndlessRotate = true
             } else {
                 collectionView.reloadData()
             }
@@ -425,11 +449,11 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
 
         if indexChanged || dataChanged {
             let clamped = min(max(0, activeIndex), max(0, posts.count - 1))
-            // Pure append never needs a scroll (focus index unchanged).
+            // Pure append / endless rotate never need scrollToItem (offset already correct).
             // Pure prepend already adjusted contentOffset — do not scrollToItem (that
             // fought the offset pin and snapped back to the entry spark).
             let needScroll: Bool
-            if didPureAppend || didPurePrepend {
+            if didPureAppend || didPurePrepend || didEndlessRotate {
                 needScroll = false
             } else {
                 needScroll = indexChanged || (dataChanged && lastPostedIDs.count <= 1)
@@ -462,6 +486,22 @@ final class SparksPagerViewController: UIViewController, UICollectionViewDataSou
         posts.map {
             "\($0.id):\($0.likedByMe ? 1 : 0):\($0.likeCount):\($0.commentCount):\($0.savedByMe ? 1 : 0)"
         }.joined(separator: "|")
+    }
+
+    /// `new == old[drop...] + old[0..<drop]` — endless recycle without remounting focus.
+    private static func endlessRotateDropCount(from oldIDs: [String], to newIDs: [String]) -> Int? {
+        guard oldIDs.count == newIDs.count, oldIDs.count >= 8 else { return nil }
+        let n = oldIDs.count
+        // Try common drop sizes first (rotateQueueForEndless keepBehind path).
+        let candidates = Array(stride(from: 4, through: min(n - 4, 64), by: 1))
+        for drop in candidates {
+            var rotated: [String] = []
+            rotated.reserveCapacity(n)
+            rotated.append(contentsOf: oldIDs[drop..<n])
+            rotated.append(contentsOf: oldIDs[0..<drop])
+            if rotated == newIDs { return drop }
+        }
+        return nil
     }
 
     /// Sticky continue flag for the feed-handoff post until focus leaves that page.

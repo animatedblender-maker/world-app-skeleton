@@ -313,7 +313,13 @@ struct VideoPlayerView: View {
                 onComplete: { adFinished = true }
             )
         } else if let player {
-            MatteryaVideoSurface(player: player, fillsFrame: fillsFrame, softFloorClear: shouldShowPosterCover)
+            // Feed instant film (no poster): matte AV floor — black layer was the scroll flash.
+            MatteryaVideoSurface(
+                player: player,
+                fillsFrame: fillsFrame,
+                softFloorClear: shouldShowPosterCover && posterURL != nil,
+                softFloorMatte: posterURL == nil
+            )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
                 // Fully hide AV until paint proof — 0.01 still peeked as a black blink on enter-frame.
@@ -326,7 +332,8 @@ struct VideoPlayerView: View {
         } else if loadFailed {
             unavailableState
         } else if posterURL == nil {
-            ProgressView().tint(Theme.accentBright)
+            // Instant-film miss: matte only — ProgressView read as a black stall on scroll.
+            Theme.matteDeep
         }
     }
 
@@ -2050,12 +2057,14 @@ private struct MatteryaVideoSurface: UIViewRepresentable {
     /// When true, AVPlayerLayer soft floor is clear so a poster underlay can show through
     /// instead of a black blink before the first decoded frame.
     var softFloorClear: Bool = false
+    /// Feed instant film: matte floor instead of UIColor.black while decoder catches up.
+    var softFloorMatte: Bool = false
 
     func makeUIView(context: Context) -> MatteryaPlayerUIView {
         let view = MatteryaPlayerUIView()
         // Gravity BEFORE player attach — first decoded frame already correct.
         view.lockGravity(fillsFrame: fillsFrame)
-        view.setSoftFloorClear(softFloorClear)
+        view.setSoftFloor(clear: softFloorClear, matte: softFloorMatte)
         // Defer attach until non-zero bounds (zero-size mount → black + FigGeometry errors).
         view.setPendingPlayer(player)
         return view
@@ -2063,7 +2072,7 @@ private struct MatteryaVideoSurface: UIViewRepresentable {
 
     func updateUIView(_ uiView: MatteryaPlayerUIView, context: Context) {
         uiView.lockGravity(fillsFrame: fillsFrame)
-        uiView.setSoftFloorClear(softFloorClear)
+        uiView.setSoftFloor(clear: softFloorClear, matte: softFloorMatte)
         uiView.setPendingPlayer(player)
     }
 }
@@ -2078,10 +2087,13 @@ private final class MatteryaPlayerUIView: UIView {
     private var gravityLocked = false
     private var pendingPlayer: AVPlayer?
 
-    /// Letterbox / empty AV floor — black by default; clear while poster covers enter-frame.
+    /// Letterbox / empty AV floor — black by default; clear while poster covers; matte for Feed instant film.
     private static let softFloorBlack = UIColor.black
     private static let softFloorClear = UIColor.clear
+    /// Matches `Theme.matteDeep` — never flash pure black on Home Feed enter-frame.
+    private static let softFloorMatte = UIColor(red: 0.941, green: 0.929, blue: 0.910, alpha: 1)
     private var softFloorClear = false
+    private var softFloorMatte = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -2101,10 +2113,21 @@ private final class MatteryaPlayerUIView: UIView {
     }
 
     func setSoftFloorClear(_ clear: Bool) {
+        setSoftFloor(clear: clear, matte: softFloorMatte)
+    }
+
+    func setSoftFloor(clear: Bool, matte: Bool) {
         softFloorClear = clear
-        let color = clear ? Self.softFloorClear : Self.softFloorBlack
+        softFloorMatte = matte
+        let color = currentFloorColor()
         backgroundColor = color
         playerLayer.backgroundColor = color.cgColor
+    }
+
+    private func currentFloorColor() -> UIColor {
+        if softFloorClear { return Self.softFloorClear }
+        if softFloorMatte { return Self.softFloorMatte }
+        return Self.softFloorBlack
     }
 
     required init?(coder: NSCoder) {
@@ -2118,7 +2141,7 @@ private final class MatteryaPlayerUIView: UIView {
         CATransaction.setDisableActions(true)
         playerLayer.player = nil
         playerLayer.contents = nil
-        let floor = softFloorClear ? Self.softFloorClear : Self.softFloorBlack
+        let floor = currentFloorColor()
         backgroundColor = floor
         playerLayer.backgroundColor = floor.cgColor
         CATransaction.commit()
@@ -2174,7 +2197,7 @@ private final class MatteryaPlayerUIView: UIView {
         }
         lockedGravity = gravity
         gravityLocked = true
-        let floor = softFloorClear ? Self.softFloorClear : Self.softFloorBlack
+        let floor = currentFloorColor()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         playerLayer.videoGravity = gravity
@@ -2190,7 +2213,7 @@ private final class MatteryaPlayerUIView: UIView {
         if playerLayer.videoGravity != lockedGravity {
             playerLayer.videoGravity = lockedGravity
         }
-        let floor = softFloorClear ? Self.softFloorClear : Self.softFloorBlack
+        let floor = currentFloorColor()
         if backgroundColor != floor {
             backgroundColor = floor
             playerLayer.backgroundColor = floor.cgColor

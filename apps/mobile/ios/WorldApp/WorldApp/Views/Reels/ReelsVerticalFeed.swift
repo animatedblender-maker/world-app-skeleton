@@ -94,8 +94,9 @@ struct ReelsVerticalFeed: View {
                     policy: .settled
                 )
             }
-            // Request next catalog bulk well before the user reaches the tail.
-            if !ScrollBudget.isFlinging, idx >= posts.count - 16 {
+            // Request next catalog bulk early — waiting until -16 left the player
+            // stalled on load-more / rotate at the tail.
+            if !ScrollBudget.isFlinging, idx >= max(0, posts.count - 24) {
                 DispatchQueue.main.async { onNearEnd?() }
             }
         }
@@ -2234,37 +2235,31 @@ struct ReelsScrollViewer: View {
     /// `applyExpandedFeed` cannot append duplicate IDs — without this, endless scroll dies
     /// once the session has absorbed the library.
     private func rotateInRecycled(_ batch: [CountryPost]) {
-        // Reorder → reloadData — never mid-fling.
+        // Never mid-fling. Prefer append / endless-rotate batch path over full replace —
+        // replacePlayerQueue used to reloadData and stop the playing spark mid-clip.
         guard !ScrollBudget.isFlinging else { return }
         guard !batch.isEmpty, !posts.isEmpty else { return }
         let liveID = posts.indices.contains(activeIndex) ? posts[activeIndex].id : posts[0].id
         let liveIndex = posts.firstIndex(where: { $0.id == liveID }) ?? activeIndex
-        let live = posts[liveIndex]
-        let recycleIDs = Set(batch.map(\.id))
-        // Pull recycle targets out of history so they can reappear after live (no dup IDs).
-        var history = Array(posts.prefix(liveIndex)).filter { !recycleIDs.contains($0.id) }
-        history.append(live)
-        var seen = Set(history.map(\.id))
-        var upcoming: [CountryPost] = []
-        for p in posts.dropFirst(liveIndex + 1) where !recycleIDs.contains(p.id) && seen.insert(p.id).inserted {
-            upcoming.append(p)
-        }
+        var seen = Set(posts.map(\.id))
+        var toAppend: [CountryPost] = []
         for p in batch where p.id != liveID && seen.insert(p.id).inserted {
-            upcoming.append(p)
+            toAppend.append(p)
+            if toAppend.count >= SparksQueueBudget.bulkBatchSize { break }
         }
-        // If still thin, pull from far-behind history (not recent 8).
-        if upcoming.count < 12, liveIndex > 10 {
-            let far = Array(posts.prefix(max(0, liveIndex - 8)))
-            for p in far.shuffled() where p.id != liveID && seen.insert(p.id).inserted {
-                upcoming.append(p)
-                if upcoming.count >= SparksQueueBudget.bulkBatchSize { break }
+        if !toAppend.isEmpty {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                posts.append(contentsOf: toAppend)
             }
-        }
-        guard upcoming.count >= 4 else {
-            rotateQueueForEndless()
+            hasMorePages = true
+            SparkWarmPool.shared.preparePlayerWindow(posts: posts, around: activeIndex)
             return
         }
-        replacePlayerQueue(history + upcoming, preserveID: liveID)
+        // Everything in batch is already in the list — move far-behind to the tail
+        // (pager applies delete+insert without remounting the focused cell).
+        rotateQueueForEndless()
     }
 
     /// Endless recycle only when the ahead pool is exhausted.
