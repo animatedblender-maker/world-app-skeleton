@@ -303,6 +303,79 @@ function toIso(v: Date | string): string {
   return Number.isFinite(d.getTime()) ? d.toISOString() : String(v);
 }
 
+/** True when the card can paint a still before AV (Instagram-class: never black video tiles). */
+function thinCardHasUsablePoster(card: ThinShelfCard): boolean {
+  const thumb = String(card.thumb_url ?? '').trim();
+  if (thumb) {
+    const lower = thumb.toLowerCase();
+    // YouTube / signed Frame0 / any image URL — client still validates; empty was the black flash.
+    if (
+      lower.includes('ytimg.com') ||
+      lower.includes('frame0_') ||
+      /\.(webp|jpe?g|png)(\?|#|$)/i.test(lower) ||
+      lower.startsWith('http')
+    ) {
+      return true;
+    }
+  }
+  const media = String(card.media_url ?? '').trim();
+  if (media.startsWith('{')) {
+    try {
+      const obj = JSON.parse(media) as { posters?: Record<string, string> };
+      const p = obj.posters?.['512'] || obj.posters?.['1080'] || obj.posters?.['256'];
+      if (p && String(p).trim().startsWith('http')) return true;
+    } catch {
+      /* ignore */
+    }
+  }
+  const mt = String(card.media_type ?? '').toLowerCase();
+  // Pure image cards use media_url as the picture.
+  if ((mt === 'image' || mt === 'photo' || mt === 'gif') && media.startsWith('http')) {
+    return true;
+  }
+  // Non-video text cards need no poster.
+  if (!mt || mt === 'text' || mt === 'none') return true;
+  if (!media) return true;
+  return false;
+}
+
+/** Lift nested posters.512 into thumb_url when DB thumb is empty. */
+function promoteEmbeddedPosterToThumb(card: ThinShelfCard): ThinShelfCard {
+  if (String(card.thumb_url ?? '').trim()) return card;
+  const media = String(card.media_url ?? '').trim();
+  if (!media.startsWith('{')) return card;
+  try {
+    const obj = JSON.parse(media) as { posters?: Record<string, string> };
+    const p = obj.posters?.['512'] || obj.posters?.['1080'] || obj.posters?.['256'];
+    if (p && String(p).trim().startsWith('http')) {
+      return { ...card, thumb_url: String(p).trim() };
+    }
+  } catch {
+    /* ignore */
+  }
+  return card;
+}
+
+/**
+ * Home Feed: never ship a video card without a still. Missing Frame0 → black enter-frame on iOS.
+ * Image/text cards pass through. Dropped videos are skipped (client top-ups fill).
+ */
+function requireHomeFeedPosters(items: ThinShelfCard[]): ThinShelfCard[] {
+  return items
+    .map(promoteEmbeddedPosterToThumb)
+    .filter((card) => {
+      if (thinCardHasUsablePoster(card)) return true;
+      const mt = String(card.media_type ?? '').toLowerCase();
+      const looksVideo =
+        mt.includes('video') ||
+        mt === 'reel' ||
+        mt === 'spark' ||
+        /\.mp4|m3u8|video/i.test(String(card.media_url ?? ''));
+      if (!looksVideo) return true;
+      return false;
+    });
+}
+
 /** Re-presign media_url + Frame 0 thumb_url (+ nested posters) so clients never open dead/403 R2 links. */
 async function freshenCardMedia(items: ThinShelfCard[]): Promise<ThinShelfCard[]> {
   if (!items.length) return items;
@@ -335,6 +408,7 @@ async function freshenCardMedia(items: ThinShelfCard[]): Promise<ThinShelfCard[]
       if (withPosters) {
         next = { ...next, media_url: withPosters };
       }
+      next = promoteEmbeddedPosterToThumb(next);
       out[i] = next;
     }
   }
@@ -1629,6 +1703,13 @@ export async function fetchHomeFeedPage(input: {
     }
   }
 
+  // Ledger / weave produced zero video rows — fill with image cards only so the
+  // client does not hit items=[] (scroll stall). Never re-serve ledger-delivered video.
+  if (!servedRows.length && imageRows.length) {
+    servedRows = dedupeHomeImageRows(imageRows).slice(0, want);
+    deliveryPolicy = 'cursor';
+  }
+
   const items = servedRows.map((row) => rowToCard(row, classifyRow(row)));
   let liveItems: ThinShelfCard[];
   try {
@@ -1636,6 +1717,16 @@ export async function fetchHomeFeedPage(input: {
   } catch (err: any) {
     console.error('[feed] freshenCardMedia failed', err?.message ?? err);
     liveItems = items;
+  }
+  // Instagram-class: never return a video without a still (black enter-frame).
+  liveItems = requireHomeFeedPosters(liveItems);
+  // If poster filter wiped the page, refill from image lane + any poster-ready weave.
+  if (!liveItems.length && wovenUnwatched.length) {
+    const rescue = await freshenCardMedia(
+      diversifyHomeRows(wovenUnwatched, want * 2)
+        .map((row) => rowToCard(row, classifyRow(row)))
+    ).catch(() => [] as ThinShelfCard[]);
+    liveItems = requireHomeFeedPosters(rescue).slice(0, want);
   }
 
   const sparkLane = lanes.find((l) => l.kind === 'spark')!;

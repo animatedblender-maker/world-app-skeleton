@@ -1657,14 +1657,14 @@ final class HomeFeedStore {
         hasMore = true
         endlessLoadEpoch &+= 1
         ContentCache.shared.setPosts(Array(posts.prefix(ContentCache.maxCachedPosts)), for: .homeFeed)
-        // Media session 09: page append = thumbs only (no AV pool). Ultra-light decode.
+        // Prefetch stills for the whole appended page — missing posters = black enter-frame.
         ImageCache.shared.prefetchFeedMedia(
-            Array(appended.prefix(SparkWarmPool.MediaBudget.thumbAhead)),
-            maxPixelSize: 360
+            Array(appended.prefix(min(appended.count, 24))),
+            maxPixelSize: 480
         )
         Task {
             await Frame0PosterResolver.shared.prefetch(
-                postIDs: Array(appended.prefix(min(2, SparkWarmPool.MediaBudget.thumbAhead)).map(\.id))
+                postIDs: appended.map(\.id)
             )
         }
         #if DEBUG
