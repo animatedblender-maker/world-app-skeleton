@@ -850,7 +850,11 @@ private final class SparksPageCell: UICollectionViewCell {
         onOpenPost: @escaping () -> Void,
         onOpenComments: @escaping () -> Void
     ) {
-        let sig = "\(post.id)|\(isActive ? 1 : 0)|\(focusGeneration)|\(Int(bottomInset))|\(showsOpenPostAction ? 1 : 0)|\(continueFromFeed ? 1 : 0)|\(post.likedByMe ? 1 : 0)|\(post.likeCount)|\(post.commentCount)"
+        // Activation is applied in place on `pageFocus` so swipe deactivate never remounts AV.
+        pageFocus.isActive = isActive
+        pageFocus.focusGeneration = focusGeneration
+        // Identity excludes isActive/focusGeneration — those must not rebuild the card.
+        let identitySig = "\(post.id)|\(Int(bottomInset))|\(showsOpenPostAction ? 1 : 0)|\(continueFromFeed ? 1 : 0)|\(post.likedByMe ? 1 : 0)|\(post.likeCount)|\(post.commentCount)"
         lastPost = post
         lastBottomInset = bottomInset
         lastShowsOpen = showsOpenPostAction
@@ -861,16 +865,15 @@ private final class SparksPageCell: UICollectionViewCell {
         lastOpen = onOpenPost
         lastComments = onOpenComments
         // Skip identical root rebuilds (SwiftUI thrash = blink + lost swipes).
-        if sig == lastConfigureSignature, host != nil {
+        if identitySig == lastIdentitySignature, host != nil {
             return
         }
-        lastConfigureSignature = sig
+        lastIdentitySignature = identitySig
 
         var root: AnyView = AnyView(
             ReelsPagerCard(
                 post: post,
-                isActive: isActive,
-                focusGeneration: focusGeneration,
+                pageFocus: pageFocus,
                 bottomInset: bottomInset,
                 showsOpenPostAction: showsOpenPostAction,
                 viewerCountryCode: viewerCountryCode,
@@ -926,23 +929,15 @@ private final class SparksPageCell: UICollectionViewCell {
     }
 
     /// Force isActive=false so off-screen pages cannot keep ghost audio.
+    /// Updates focus **in place** — never remount VideoPlayerView (that sought to t=0
+    /// while this cell was still sliding off and flashed the watched spark’s first frame).
     func deactivateAudio() {
-        guard let post = lastPost else { return }
-        configure(
-            post: post,
-            isActive: false,
-            focusGeneration: 0,
-            bottomInset: lastBottomInset,
-            showsOpenPostAction: lastShowsOpen,
-            viewerCountryCode: lastViewer,
-            appState: lastAppState,
-            continueFromFeed: false,
-            onLikeToggle: lastLike ?? {},
-            onOpenPost: lastOpen ?? {},
-            onOpenComments: lastComments ?? {}
-        )
+        pageFocus.isActive = false
+        pageFocus.focusGeneration = 0
     }
 
+    /// Stable focus object for the hosted card — never replaced across configures.
+    private let pageFocus = SparksPageFocus()
     private var lastPost: CountryPost?
     private var lastBottomInset: CGFloat = 28
     private var lastShowsOpen = false
@@ -952,24 +947,30 @@ private final class SparksPageCell: UICollectionViewCell {
     private var lastLike: (() -> Void)?
     private var lastOpen: (() -> Void)?
     private var lastComments: (() -> Void)?
-    private var lastConfigureSignature: String?
+    /// Identity only (post + chrome) — activation lives on `pageFocus`.
+    private var lastIdentitySignature: String?
 
     /// Last configured post — used for off-screen rewind when index is already recycled.
     var lastDisplayedPostID: String? { lastPost?.id }
 
     override func prepareForReuse() {
         super.prepareForReuse()
-        // Rewind before clearing identity — cell is leaving the hierarchy.
-        if let id = lastPost?.id {
-            SparkWarmPool.shared.rewindParkedForReuse(postID: id)
-        }
-        lastConfigureSignature = nil
+        let id = lastPost?.id
+        pageFocus.isActive = false
+        pageFocus.focusGeneration = 0
+        lastIdentitySignature = nil
         lastContinueFromFeed = false
         lastPost = nil
         // Clear previous SwiftUI/AV tree — black is correct for Sparks chrome (not a film flash).
+        // Park runs from VideoPlayerView.onDisappear; rewind after so the player is in slots.
         if let host {
             host.rootView = AnyView(Color.black)
             host.view.backgroundColor = .black
+        }
+        if let id {
+            DispatchQueue.main.async {
+                SparkWarmPool.shared.rewindParkedForReuse(postID: id)
+            }
         }
     }
 }

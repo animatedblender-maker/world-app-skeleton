@@ -280,13 +280,25 @@ private struct SparksTimelineBar: View {
     }
 }
 
+/// In-place Sparks focus. Mutating this must **not** remount `VideoPlayerView`.
+/// Remounting on deactivate parked+reclaimed and sought to t=0 while the outgoing
+/// cell was still sliding off — that flashed the watched spark’s first frame.
+@MainActor
+final class SparksPageFocus: ObservableObject {
+    @Published var isActive: Bool
+    @Published var focusGeneration: UInt
+
+    init(isActive: Bool = false, focusGeneration: UInt = 0) {
+        self.isActive = isActive
+        self.focusGeneration = focusGeneration
+    }
+}
+
 struct ReelsPagerCard: View {
     @Environment(AppState.self) private var appState
 
     let post: CountryPost
-    let isActive: Bool
-    /// Parent focus generation while active (0 when inactive). Drives a single t=0 restart.
-    var focusGeneration: UInt = 0
+    @ObservedObject var pageFocus: SparksPageFocus
     var bottomInset: CGFloat = Theme.tabBarHeight + 12
     var showsOpenPostAction = true
     var viewerCountryCode: String? = nil
@@ -295,6 +307,9 @@ struct ReelsPagerCard: View {
     var onLikeToggle: () -> Void
     var onOpenPost: () -> Void
     var onOpenComments: () -> Void = {}
+
+    private var isActive: Bool { pageFocus.isActive }
+    private var focusGeneration: UInt { pageFocus.focusGeneration }
 
     private var isHomeCountry: Bool {
         MatteryaCountryBridge.isHomeCountry(post: post, viewerCountryCode: viewerCountryCode)
@@ -330,8 +345,7 @@ struct ReelsPagerCard: View {
 
     init(
         post: CountryPost,
-        isActive: Bool,
-        focusGeneration: UInt = 0,
+        pageFocus: SparksPageFocus,
         bottomInset: CGFloat = Theme.tabBarHeight + 12,
         showsOpenPostAction: Bool = true,
         viewerCountryCode: String? = nil,
@@ -341,8 +355,7 @@ struct ReelsPagerCard: View {
         onOpenComments: @escaping () -> Void = {}
     ) {
         self.post = post
-        self.isActive = isActive
-        self.focusGeneration = focusGeneration
+        self.pageFocus = pageFocus
         self.bottomInset = bottomInset
         self.showsOpenPostAction = showsOpenPostAction
         self.viewerCountryCode = viewerCountryCode

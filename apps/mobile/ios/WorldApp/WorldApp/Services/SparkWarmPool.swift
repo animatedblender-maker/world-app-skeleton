@@ -455,18 +455,11 @@ final class SparkWarmPool {
                 player.safePlayImmediately(atRate: 1.0)
             }
         } else {
-            // Normal park: must start at t≈0. Freeze-park may still be mid-clip if
-            // didEndDisplaying rewind has not run yet — snap here (layer already for this id).
+            // Freeze only — never seek here. Claim can run while a layer is still on-screen
+            // (deactivate remount / preload). Off-screen rewind: `rewindParkedForReuse`.
+            // Active install seeks under poster when still mid-clip after a missed rewind.
             player.pause()
             player.rate = 0
-            if !Self.isAtStart(player, epsilon: 0.08) {
-                player.seek(
-                    to: .zero,
-                    toleranceBefore: .zero,
-                    toleranceAfter: .zero,
-                    completionHandler: { _ in }
-                )
-            }
         }
         return player
     }
@@ -499,11 +492,19 @@ final class SparkWarmPool {
         parkInternal(postID: postID, player: player, continueFromCurrentTime: true, rewindNow: false)
     }
 
-    /// Off-screen only: snap parked buffer to t=0 + decode first frame for the next claim.
+    /// Off-screen only: snap buffer to t=0 + decode first frame for the next claim.
+    /// Works for parked slots **and** claimed players still held by an off-screen cell
+    /// (didEndDisplaying often fires before VideoPlayerView parks into `slots`).
     func rewindParkedForReuse(postID: String) {
-        guard let slot = slots[postID], !continuingIDs.contains(postID) else { return }
-        let player = slot.player
-        Task { await silentBufferFill(postID: postID, player: player) }
+        guard !continuingIDs.contains(postID) else { return }
+        if let slot = slots[postID] {
+            let player = slot.player
+            Task { await silentBufferFill(postID: postID, player: player) }
+            return
+        }
+        if let player = claimedPlayers[postID] {
+            Task { await silentRewindInPlace(postID: postID, player: player) }
+        }
     }
 
     private func parkInternal(
@@ -885,15 +886,40 @@ final class SparkWarmPool {
     /// Returns false when the item died (403 / unavailable) so warm can re-resolve once.
     @discardableResult
     private func silentBufferFill(postID: String, player: AVPlayer) async -> Bool {
+        await silentRewindCore(
+            postID: postID,
+            player: player,
+            stillOwned: { self.isParked(postID: postID, player: player) },
+            onDead: { self.evict(postID) }
+        )
+    }
+
+    /// Same rewind for a player still claimed by an off-screen Sparks cell.
+    @discardableResult
+    private func silentRewindInPlace(postID: String, player: AVPlayer) async -> Bool {
+        await silentRewindCore(
+            postID: postID,
+            player: player,
+            stillOwned: { self.claimedPlayers[postID] === player || self.isParked(postID: postID, player: player) },
+            onDead: { /* keep claimed — install path recovers */ }
+        )
+    }
+
+    @discardableResult
+    private func silentRewindCore(
+        postID: String,
+        player: AVPlayer,
+        stillOwned: @escaping () -> Bool,
+        onDead: @escaping () -> Void
+    ) async -> Bool {
         for _ in 0..<80 {
-            guard isParked(postID: postID, player: player) else { return true }
+            guard stillOwned() else { return true }
             if player.currentItem == nil {
-                evict(postID)
+                onDead()
                 return false
             }
             if player.status == .failed || player.currentItem?.status == .failed {
-                // Drop dead warm slots so claim never surfaces “Video unavailable”.
-                evict(postID)
+                onDead()
                 return false
             }
             if player.status == .readyToPlay || player.currentItem?.status == .readyToPlay {
@@ -908,7 +934,7 @@ final class SparkWarmPool {
                         toleranceBefore: .zero,
                         toleranceAfter: .zero
                     )
-                    guard isParked(postID: postID, player: player) else { return true }
+                    guard stillOwned() else { return true }
                 }
 
                 // Preroll buffers from t=0 without leaving the start (unlike play()+sleep).
@@ -917,9 +943,9 @@ final class SparkWarmPool {
                         cont.resume()
                     }
                 }
-                guard isParked(postID: postID, player: player) else { return true }
+                guard stillOwned() else { return true }
                 if player.status == .failed || player.currentItem?.status == .failed {
-                    evict(postID)
+                    onDead()
                     return false
                 }
 
@@ -935,7 +961,7 @@ final class SparkWarmPool {
                         toleranceBefore: .zero,
                         toleranceAfter: .zero
                     )
-                    guard isParked(postID: postID, player: player) else { return true }
+                    guard stillOwned() else { return true }
                     await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
                         player.preroll(atRate: 1.0) { _ in
                             cont.resume()
@@ -950,7 +976,7 @@ final class SparkWarmPool {
             }
             try? await Task.sleep(nanoseconds: 40_000_000)
         }
-        return isParked(postID: postID, player: player)
+        return stillOwned()
     }
 
     /// True when playhead is already at the start (no seek needed on claim).

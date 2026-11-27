@@ -794,6 +794,10 @@ struct VideoPlayerView: View {
                 || appState.shouldContinuePlayback(for: $0)
         } ?? false)
         showPosterCover = !handoffContinue
+        // Inactive mount with an existing painted player: keep the frozen frame, never Frame-0 poster.
+        if !isActive, let player, playerHasPaintedFrames(player) {
+            showPosterCover = false
+        }
         if isActive {
             liveGate.pageEpoch = MediaPlaybackCoordinator.shared.sparkPageEpoch
         }
@@ -1210,7 +1214,9 @@ struct VideoPlayerView: View {
         MediaPlaybackCoordinator.shared.register(claimed)
 
         let gate = liveGate
-        let needsExactStart = restartFromBeginningToken > 0 || loops
+        // Seek-to-0 only when this page is focused. Inactive preload / deactivate must keep
+        // the frozen mid-clip — seeking while the cell slides off flashed Frame 0.
+        let needsExactStart = liveGate.isActive && (restartFromBeginningToken > 0 || loops)
         let alreadyAtStart = SparkWarmPool.isAtStart(claimed)
 
         // Feed → Sparks/Hubs handoff FIRST — never pause/poster over a live mid-clip buffer.
@@ -1347,14 +1353,21 @@ struct VideoPlayerView: View {
         attachTimeObserver(to: claimed)
         player = claimed
         reportVideoSizeIfNeeded(from: claimed.currentItem)
-        currentSeconds = 0
+        currentSeconds = alreadyAtStart ? 0 : (claimed.currentTime().seconds.isFinite ? max(0, claimed.currentTime().seconds) : 0)
         // Claimed warm players must still loop when the Spark finishes.
         claimed.actionAtItemEnd = loops ? .none : .pause
 
-        // Keep poster up — kickAudiblePlayback reveals only after frames paint.
-        showPosterCover = true
+        // Active: poster until frames. Inactive: keep painted mid-clip (no Frame-0 poster flash).
+        if liveGate.isActive {
+            showPosterCover = true
+        } else if playerHasPaintedFrames(claimed) {
+            showPosterCover = false
+        } else {
+            showPosterCover = true
+        }
 
         // If already at t≈0 (warm pool contract), play immediately — no seek, no jump.
+        // Inactive path also returns here (needsExactStart false) — frozen frame stays.
         if alreadyAtStart || !needsExactStart {
             if liveGate.isActive, !liveGate.userWantsPause {
                 kickAudiblePlayback(on: claimed)

@@ -2666,8 +2666,9 @@ final class ArchiveVideoPlayerController: UIViewController {
             && !(t.isFinite && t + 1.5 >= forcedStart)
         // Resume to a saved playhead when not a true mid-clip handoff, or when disk is ahead.
         let needsResumeSeek = savedAheadOfHead && (!continueMid || forcedStart > (t.isFinite ? t : 0) + 1.5)
-        // Sparks / restart-from-0 path.
-        let needsZeroSeek = !continueMid && !needsResumeSeek
+        // Sparks / restart-from-0 path — only while focused. Inactive claim must not
+        // seek (outgoing cell still visible mid-swipe → first-frame flash).
+        let needsZeroSeek = autoplay && !continueMid && !needsResumeSeek
             && (restartsFromBeginningOnFocus || forcedStart < 0.5)
             && !nearZero
 
