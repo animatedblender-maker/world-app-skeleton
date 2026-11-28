@@ -27,10 +27,9 @@ final class SparkWarmPool {
         /// Feed/Hubs stay focus+1. Sparks is path-local and hotter than butter:
         /// capable phones keep focus+3 decoding so whip flings never land cold.
         static var playerAhead: Int { playerAheadSparks }
-        /// Launch settle (TF 652 crash/lag): never open 3–4 HLS pipes under splash unlock.
+        /// Brief AV-only settle after splash — posts/thumbs must stay hot (see HomeFeedStore).
         private static var coldOpen: Bool { ColdOpenGate.isActive }
-        /// Focus + next — scrolling into the next card should already have a decoded frame.
-        /// Cold open stays focus+1 so Stream HLS + Whisper do not jetsam the process.
+        /// Focus + next so enter-frame is ready. Cold open stays focus+1 (one HLS at a time).
         static var playerAheadFeed: Int {
             if coldOpen || isConstrained { return 1 }
             return 2
@@ -52,7 +51,6 @@ final class SparkWarmPool {
             return 3
         }
         static var deepPrerollHubs: Int { 1 }
-        /// Capable: focus + 2 ahead = 3 slots (was 4 — launch thrash with HLS).
         static var maxSlots: Int {
             if coldOpen { return 2 }
             if isConstrained { return 2 }
@@ -60,29 +58,15 @@ final class SparkWarmPool {
             return 3
         }
         static var playerBehind: Int { 0 }
-        /// Parallel warms — cold open serializes so one Stream playlist loads at a time.
+        /// Cold open: 1 concurrent AV warm. After settle: 2 (not 3 — Stream HLS is heavier than MP4).
         static var maxConcurrentWarms: Int {
             if coldOpen || isConstrained { return 1 }
-            if isMid { return 2 }
             return 2
         }
-        /// Deep enough that claim starts already buffered (no enter-frame stall).
-        static var forwardBufferDeep: Double {
-            if coldOpen { return isConstrained ? 1.25 : 2 }
-            return isConstrained ? 2 : 3.5
-        }
+        static var forwardBufferDeep: Double { isConstrained ? 2 : 3.5 }
         static var forwardBufferLight: Double { isConstrained ? 1 : 1.75 }
-        /// Soft peak for short vertical clips — uncapped (0) thrash-switches on cellular.
-        /// HLS cold open stays lower so 1–2 Stream ladders do not saturate the radio.
-        static var peakBitRateDeep: Double {
-            if coldOpen { return isConstrained ? 1_200_000 : 2_000_000 }
-            return isConstrained ? 2_500_000 : 4_000_000
-        }
-        static var peakBitRateLight: Double {
-            if coldOpen { return isConstrained ? 900_000 : 1_500_000 }
-            return isConstrained ? 1_500_000 : 2_800_000
-        }
-        /// Mid-fling next window (capable keeps +2 decoding while finger is down).
+        static var peakBitRateDeep: Double { isConstrained ? 2_500_000 : 4_000_000 }
+        static var peakBitRateLight: Double { isConstrained ? 1_500_000 : 2_800_000 }
         static var flingAhead: Int { isConstrained || coldOpen ? 1 : 2 }
     }
 

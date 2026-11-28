@@ -626,9 +626,8 @@ final class HomeFeedStore {
         }
 
         // 3) Heavy work AFTER first paint + autoplay unlock — never AV under splash.
-        // TF 652 launch crash/lag: do not stack warmHead + 16/6 top-ups + 64-deep pool
-        // in the same beat as Stream HLS unlock. Stagger: AV warm (elsewhere) → brief
-        // pause → small top-up → soft pool → full pool after cold-open settle.
+        // Keep post/thumb refill hot (653 cold-open starved this). Only AV concurrency
+        // stays soft via ColdOpenGate / MediaBudget.
         Task(priority: .utility) { [weak self] in
             guard let self else { return }
             // Wait until cold-open gate opens (or give up after ~4s).
@@ -638,18 +637,18 @@ final class HomeFeedStore {
             }
             guard FeedVideoFocus.shared.allowsFeedAVWarm else { return }
             guard gen == self.generation, !self.catalogForcedEmpty else { return }
-            // warmVideosAfterAutoplayUnlock already prepared focus — skip duplicate warmHead AV.
-            try? await Task.sleep(nanoseconds: 700_000_000)
+            // Tiny yield so first AV claim isn't fighting the same runloop turn.
+            try? await Task.sleep(nanoseconds: 150_000_000)
             guard gen == self.generation, !self.catalogForcedEmpty else { return }
             let exclude = Set(self.posts.map(\.id))
             async let sparkTop = PostsService.shared.homeFeedSparkTopUp(
                 excluding: exclude,
-                limit: 8,
+                limit: 16,
                 forceRefresh: false
             )
             async let hubTop = PostsService.shared.homeFeedHubTopUp(
                 excluding: exclude,
-                limit: 3,
+                limit: 6,
                 forceRefresh: false
             )
             // No text top-up on the hot path — Home stays Sparks/Hubs-smooth; rare text comes from thin feed.
@@ -660,12 +659,6 @@ final class HomeFeedStore {
             }
             if self.posts.count < 16 {
                 self.requestLoadMore()
-            }
-            // Soft buffer during cold open; deepen after settle so launch stays light.
-            await self.ensureBufferedPool(targetOverride: 28, maxPasses: 4)
-            while ColdOpenGate.isActive {
-                try? await Task.sleep(nanoseconds: 400_000_000)
-                guard gen == self.generation, !self.catalogForcedEmpty else { return }
             }
             await self.ensureBufferedPool()
         }
@@ -1673,17 +1666,15 @@ final class HomeFeedStore {
         hasMore = true
         endlessLoadEpoch &+= 1
         ContentCache.shared.setPosts(Array(posts.prefix(ContentCache.maxCachedPosts)), for: .homeFeed)
-        // Prefetch stills for the appended page — missing posters = black enter-frame.
-        // Cold open: tiny band only (Frame0×24 under launch was a main-thread hitch).
-        let cold = ColdOpenGate.isActive
-        let stillCap = cold ? 6 : min(appended.count, 24)
+        // Prefetch stills for the whole appended page — missing posters = black enter-frame.
+        // Do not gate on ColdOpenGate (653 starved thumbs/Frame0 for ~12s).
         ImageCache.shared.prefetchFeedMedia(
-            Array(appended.prefix(stillCap)),
-            maxPixelSize: cold ? 320 : 480
+            Array(appended.prefix(min(appended.count, 24))),
+            maxPixelSize: 480
         )
-        Task(priority: cold ? .utility : .medium) {
+        Task(priority: .userInitiated) {
             await Frame0PosterResolver.shared.prefetch(
-                postIDs: Array(appended.prefix(cold ? 2 : min(appended.count, 12)).map(\.id))
+                postIDs: Array(appended.prefix(min(appended.count, 12)).map(\.id))
             )
         }
         #if DEBUG
@@ -1787,9 +1778,9 @@ final class HomeFeedStore {
     /// Feed Spark/video claims a ready buffer instead of cold-starting after splash.
     func warmVideosAfterAutoplayUnlock() {
         guard FeedVideoFocus.shared.allowsFeedAVWarm else { return }
-        // Never hand the whole unlocked pool (windowLimit == posts.count) into prepare —
-        // cold open only needs the first few video rows.
-        let band = ColdOpenGate.isActive ? 6 : max(windowLimit, firstWindow)
+        // Warm the on-screen video band — posters/images are separate (ImageCache).
+        // Cap the AV prepare list so windowLimit==posts.count cannot open dozens of pipes.
+        let band = ColdOpenGate.isActive ? 8 : min(max(windowLimit, firstWindow), 16)
         let videos = Self.feedWarmVideoQueue(
             from: Array(displayedPosts.prefix(min(band, displayedPosts.count)))
         )

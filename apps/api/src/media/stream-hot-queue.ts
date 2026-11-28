@@ -22,9 +22,14 @@ type HotJob = {
   videoKey?: string | null;
 };
 
-/** Off unless STREAM_HOT_INGEST=1 — prevents burning Stream minutes during cleanup. */
+/**
+ * Hot ingest on by default (race-locked by R2 key). Set STREAM_HOT_INGEST=0 to pause.
+ * Was opt-in after the twin-copy scare; that left Feed on slow R2 while coverage stalled.
+ */
 function hotIngestEnabled(): boolean {
-  return process.env.STREAM_HOT_INGEST?.trim() === '1';
+  const raw = process.env.STREAM_HOT_INGEST?.trim().toLowerCase();
+  if (raw === '0' || raw === 'false' || raw === 'off') return false;
+  return true;
 }
 
 const MAX_CONCURRENT = 1;

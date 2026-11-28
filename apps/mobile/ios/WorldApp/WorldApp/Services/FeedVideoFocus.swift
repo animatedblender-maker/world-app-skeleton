@@ -102,8 +102,8 @@ final class FeedVideoFocus {
             try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
             guard !Task.isCancelled else { return }
             autoplayUnlocked = true
-            // First ~12s: focus+1 AV only, soft buffer top-up (see SparkWarmPool / HomeFeedStore).
-            ColdOpenGate.begin(seconds: 12)
+            // Short AV-only settle — never throttle posts/thumbs/Frame0 (653 over-starved media).
+            ColdOpenGate.begin(seconds: 5)
             PerformanceTelemetry.milestoneFromLaunch("feed_autoplay_unlock", surface: "app")
             scheduleRecompute()
             // Kick Feed AV warm immediately — rows that appeared under splash skipped prepare.
