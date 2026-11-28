@@ -323,11 +323,13 @@ enum MediaURLResolver {
         if isImageURL(url) { return false }
         let lower = url.absoluteString.lowercased()
         if lower.range(
-            of: #"\.(mp4|webm|mov|m4v|avi|mkv)(\?|#|$)"#,
+            of: #"\.(mp4|webm|mov|m4v|avi|mkv|m3u8|mpd)(\?|#|$)"#,
             options: .regularExpression
         ) != nil {
             return true
         }
+        // Cloudflare Stream HLS host
+        if lower.contains("cloudflarestream.com") { return true }
         // Path segment /video/ or query video= — not the substring "video" in identifiers.
         if lower.contains("/video/") || lower.contains("/video.") || lower.contains("video%") {
             return true

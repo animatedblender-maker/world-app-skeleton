@@ -10,6 +10,7 @@
  */
 import { pool } from '../db.js';
 import { freshenMediaUrlString, freshenThumbUrlString } from '../media/r2-playback.js';
+import { playbackFieldsForStreamUid } from '../media/cloudflare-stream.js';
 import {
   hubsEmptyForViewer,
   isAppReviewViewer,
@@ -127,6 +128,9 @@ export type ThinShelfCard = {
   /** 18+ / NSFW — hidden from under-18 accounts. */
   is_adult?: boolean;
   moderation_status?: string | null;
+  /** Cloudflare Stream HLS when ingested — iOS prefers this over progressive R2 MP4. */
+  playback?: { hls: string; poster: string | null } | null;
+  stream_uid?: string | null;
 };
 
 export type ShelfPage = {
@@ -165,6 +169,9 @@ type RawPostRow = {
   updated_at?: Date | string | null;
   /** greatest(updated_at, created_at) when selected for home feed ranking. */
   feed_at?: Date | string | null;
+  /** Cloudflare Stream UID when R2→Stream ingest completed. */
+  stream_uid?: string | null;
+  stream_ready_at?: Date | string | null;
   country_code: string | null;
   country_name: string | null;
   author_id: string;
@@ -505,6 +512,17 @@ function rowToCard(row: RawPostRow, slug: HubParentSlug): ThinShelfCard {
   const status = String(row.moderation_status ?? 'active').toLowerCase();
   const isAdult =
     status === 'sensitive' || textLooksNsfw(row.title, row.body, body);
+  const streamUid =
+    row.stream_uid && String(row.stream_uid).trim()
+      ? String(row.stream_uid).trim()
+      : null;
+  let playback: ThinShelfCard['playback'] = null;
+  if (streamUid) {
+    const fields = playbackFieldsForStreamUid(streamUid);
+    if (fields.hls) {
+      playback = { hls: fields.hls, poster: fields.poster };
+    }
+  }
   return {
     id: row.id,
     slug,
@@ -513,7 +531,7 @@ function rowToCard(row: RawPostRow, slug: HubParentSlug): ThinShelfCard {
     // Preserve none/text/image — defaulting to 'video' hid written posts on thin cards.
     media_type: row.media_type || 'none',
     media_url: row.media_url,
-    thumb_url: thumb,
+    thumb_url: (playback?.poster && !thumb) ? playback.poster : thumb,
     like_count: Number(row.like_count) || 0,
     comment_count: Number(row.comment_count) || 0,
     created_at: createdIso,
@@ -528,6 +546,8 @@ function rowToCard(row: RawPostRow, slug: HubParentSlug): ThinShelfCard {
     origin_sid: originSid,
     is_adult: isAdult,
     moderation_status: status,
+    stream_uid: streamUid,
+    playback,
   };
 }
 
@@ -581,6 +601,7 @@ async function queryVideoPage(opts: {
       p.media_type,
       p.media_url,
       p.thumb_url,
+      p.stream_uid,
       p.like_count,
       p.comment_count,
       p.created_at,
@@ -1251,6 +1272,7 @@ function diversifyHomeRows(rows: RawPostRow[], want: number): RawPostRow[] {
 
 const HOME_FEED_SELECT = (slugSelect: string) => `
       p.id, p.title, p.body, p.media_type, p.media_url, p.thumb_url,
+      p.stream_uid,
       p.like_count, p.comment_count, p.created_at, p.updated_at,
       p.created_at as feed_at,
       p.country_code, p.country_name,
@@ -1803,6 +1825,7 @@ async function loadRawPostsByIds(ids: string[]): Promise<RawPostRow[]> {
       `
       select
         p.id, p.title, p.body, p.media_type, p.media_url, p.thumb_url,
+      p.stream_uid,
         p.like_count, p.comment_count, p.created_at, p.updated_at,
         p.country_code, p.country_name, p.author_id, p.shared_post_id,
         p.moderation_status, ${slugSelect},
@@ -1899,6 +1922,7 @@ export async function fetchSparksPage(input: {
   const sql = `
     select
       p.id, p.title, p.body, p.media_type, p.media_url, p.thumb_url,
+      p.stream_uid,
       p.like_count, p.comment_count, p.created_at, p.updated_at,
       greatest(p.updated_at, p.created_at) as feed_at,
       p.country_code, p.country_name,

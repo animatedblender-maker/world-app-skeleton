@@ -23,7 +23,9 @@
     "media:transcribe:backfill": "tsx src/media/transcribe-runner.ts --backfill --limit=40",
     "docker:media-worker:build": "docker build -f Dockerfile.media-worker -t matterya-media-worker .",
     "matterya:official": "tsx src/matterya-official-runner.ts",
-    "matterya:official:welcome": "tsx src/matterya-official-runner.ts"
+    "matterya:official:welcome": "tsx src/matterya-official-runner.ts",
+    "media:stream-ingest": "tsx src/media/stream-ingest.ts",
+    "media:stream-ingest:dry": "tsx src/media/stream-ingest.ts --dry-run"
   },
   "engines": {
     "node": "22.x"

@@ -214,8 +214,21 @@ enum SurfacePageClient {
         guard let id = row["id"] as? String, !id.isEmpty else { return nil }
         let slug = ((row["slug"] as? String) ?? fallbackSlug ?? "daily").lowercased()
         let mediaType = (row["media_type"] as? String) ?? "none"
-        let mediaURL = row["media_url"] as? String
-        let thumb = row["thumb_url"] as? String
+        // Cloudflare Stream HLS when present — Instagram-class CDN over cold R2 MP4.
+        let playback = row["playback"] as? [String: Any]
+        let hlsURL = (playback?["hls"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let streamPoster = (playback?["poster"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawMedia = row["media_url"] as? String
+        let mediaURL: String? = {
+            if let hlsURL, !hlsURL.isEmpty { return hlsURL }
+            return rawMedia
+        }()
+        let thumb: String? = {
+            if let streamPoster, !streamPoster.isEmpty { return streamPoster }
+            return row["thumb_url"] as? String
+        }()
         if !allowMissingMedia {
             guard let mediaURL, !mediaURL.isEmpty else { return nil }
         }

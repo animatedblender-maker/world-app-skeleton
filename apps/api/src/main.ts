@@ -602,6 +602,25 @@ app.post('/v1/poster/batch', (req, res) => {
   void handlePosterBatch(req, res);
 });
 
+// ─── Cloudflare Stream status (no secrets) ───────────────────────────────────
+app.get('/v1/stream/status', (_req: Request, res: Response) => {
+  void (async () => {
+    try {
+      const { streamConfigured } = await import('./media/cloudflare-stream.js');
+      const { rows } = await pool.query<{ n: string }>(
+        `select count(*)::text as n from public.posts where stream_uid is not null`
+      );
+      return res.json({
+        ok: true,
+        configured: streamConfigured(),
+        posts_with_stream_uid: Number(rows[0]?.n || 0),
+      });
+    } catch (err: any) {
+      return res.status(500).json({ ok: false, error: err?.message ?? 'error' });
+    }
+  })();
+});
+
 // ─── Live R2 playback (never serve a dead signed URL) ─────────────────────────
 // GET /v1/playback/:postId → { url, media_url, r2_key }
 // Light SQL + resolvePlaybackForPostRow (anonymous OK). Avoid heavy postByIdForViewer.
