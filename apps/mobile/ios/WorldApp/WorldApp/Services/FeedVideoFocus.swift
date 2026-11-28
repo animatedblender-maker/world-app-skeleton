@@ -82,15 +82,12 @@ final class FeedVideoFocus {
 
     private init() {}
 
-    /// After unlock, keep Feed AV / network soft so launch does not jetsam or hitch.
-    private var coldOpenUntil: Date = .distantPast
-
     /// Call at process start / before splash dismiss — no audible feed autoplay yet.
     func lockAutoplayForColdOpen() {
         unlockTask?.cancel()
         unlockTask = nil
         autoplayUnlocked = false
-        coldOpenUntil = .distantPast
+        ColdOpenGate.clear()
         // Always hard-silence — warm-pool players can exist before any election.
         publish(winner: nil, previous: activeID, silenceImmediately: true)
         MediaPlaybackCoordinator.shared.silenceAllOffScreenAudio()
@@ -106,7 +103,7 @@ final class FeedVideoFocus {
             guard !Task.isCancelled else { return }
             autoplayUnlocked = true
             // First ~12s: focus+1 AV only, soft buffer top-up (see SparkWarmPool / HomeFeedStore).
-            coldOpenUntil = Date().addingTimeInterval(12)
+            ColdOpenGate.begin(seconds: 12)
             PerformanceTelemetry.milestoneFromLaunch("feed_autoplay_unlock", surface: "app")
             scheduleRecompute()
             // Kick Feed AV warm immediately — rows that appeared under splash skipped prepare.
@@ -118,7 +115,7 @@ final class FeedVideoFocus {
     var allowsFeedAVWarm: Bool { autoplayUnlocked }
 
     /// True for the soft launch window after first unlock (AV + network must stay light).
-    var isColdOpenSettle: Bool { Date() < coldOpenUntil }
+    var isColdOpenSettle: Bool { ColdOpenGate.isActive }
 
     /// Report geometry for a candidate. `ratio` is 0…1 (share of the player height on screen).
     private var recomputeScheduled = false

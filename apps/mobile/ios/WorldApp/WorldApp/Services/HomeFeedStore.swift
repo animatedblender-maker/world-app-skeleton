@@ -663,7 +663,7 @@ final class HomeFeedStore {
             }
             // Soft buffer during cold open; deepen after settle so launch stays light.
             await self.ensureBufferedPool(targetOverride: 28, maxPasses: 4)
-            while FeedVideoFocus.shared.isColdOpenSettle {
+            while ColdOpenGate.isActive {
                 try? await Task.sleep(nanoseconds: 400_000_000)
                 guard gen == self.generation, !self.catalogForcedEmpty else { return }
             }
@@ -1675,7 +1675,7 @@ final class HomeFeedStore {
         ContentCache.shared.setPosts(Array(posts.prefix(ContentCache.maxCachedPosts)), for: .homeFeed)
         // Prefetch stills for the appended page — missing posters = black enter-frame.
         // Cold open: tiny band only (Frame0×24 under launch was a main-thread hitch).
-        let cold = FeedVideoFocus.shared.isColdOpenSettle
+        let cold = ColdOpenGate.isActive
         let stillCap = cold ? 6 : min(appended.count, 24)
         ImageCache.shared.prefetchFeedMedia(
             Array(appended.prefix(stillCap)),
@@ -1789,7 +1789,7 @@ final class HomeFeedStore {
         guard FeedVideoFocus.shared.allowsFeedAVWarm else { return }
         // Never hand the whole unlocked pool (windowLimit == posts.count) into prepare —
         // cold open only needs the first few video rows.
-        let band = FeedVideoFocus.shared.isColdOpenSettle ? 6 : max(windowLimit, firstWindow)
+        let band = ColdOpenGate.isActive ? 6 : max(windowLimit, firstWindow)
         let videos = Self.feedWarmVideoQueue(
             from: Array(displayedPosts.prefix(min(band, displayedPosts.count)))
         )

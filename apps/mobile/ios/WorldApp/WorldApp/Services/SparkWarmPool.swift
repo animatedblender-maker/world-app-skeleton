@@ -28,7 +28,7 @@ final class SparkWarmPool {
         /// capable phones keep focus+3 decoding so whip flings never land cold.
         static var playerAhead: Int { playerAheadSparks }
         /// Launch settle (TF 652 crash/lag): never open 3–4 HLS pipes under splash unlock.
-        private static var coldOpen: Bool { FeedVideoFocus.shared.isColdOpenSettle }
+        private static var coldOpen: Bool { ColdOpenGate.isActive }
         /// Focus + next — scrolling into the next card should already have a decoded frame.
         /// Cold open stays focus+1 so Stream HLS + Whisper do not jetsam the process.
         static var playerAheadFeed: Int {
