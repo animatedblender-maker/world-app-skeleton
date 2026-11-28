@@ -71,7 +71,7 @@ async function cfFetch(path: string, init?: RequestInit): Promise<any> {
 /** Upload-by-URL: Stream pulls from a short-lived R2 signed GET. */
 export async function streamCopyFromUrl(
   sourceUrl: string,
-  meta: { matterya_post_id: string; name?: string }
+  meta: { matterya_post_id: string; name?: string; r2_video_key?: string }
 ): Promise<StreamCopyResult> {
   if (!streamConfigured()) {
     throw new Error('Cloudflare Stream not configured (CF_ACCOUNT_ID / CF_STREAM_API_TOKEN / CF_STREAM_CUSTOMER_CODE)');
@@ -83,6 +83,7 @@ export async function streamCopyFromUrl(
       meta: {
         name: meta.name || meta.matterya_post_id,
         matterya_post_id: meta.matterya_post_id,
+        ...(meta.r2_video_key ? { r2_video_key: meta.r2_video_key } : {}),
       },
       requireSignedURLs: false,
     }),
@@ -122,17 +123,11 @@ export async function savePostStreamUid(
   );
 }
 
-/**
- * Ingest one post: resolve R2 video → Stream copy → save uid.
- * Returns null when Stream env missing or no R2 key.
- */
-export async function ingestPostToStream(post: {
-  id: string;
+/** Normalize to the pack `…/video.mp4` key used as the Stream dedupe fingerprint. */
+export function streamVideoKeyFromPost(post: {
   media_url?: string | null;
   media_path?: string | null;
-  title?: string | null;
-}): Promise<{ uid: string; hls: string | null; ready: boolean } | null> {
-  if (!streamConfigured()) return null;
+}): string | null {
   const key =
     extractR2KeyFromMediaPath(String(post.media_path ?? '')) ||
     extractR2KeyFromMediaUrl(post.media_url ?? null) ||
@@ -141,7 +136,78 @@ export async function ingestPostToStream(post: {
   const videoKey = key.endsWith('/video.mp4')
     ? key
     : key.replace(/\/frame0_\d+\.webp$/i, '/video.mp4');
-  if (!/video\.mp4$/i.test(videoKey)) return null;
+  return /video\.mp4$/i.test(videoKey) ? videoKey : null;
+}
+
+/**
+ * Reuse an existing Stream UID from any post that shares the same R2 video.mp4
+ * (original + feed-share rows look like "duplicates" in Stream if we copy twice).
+ */
+async function findExistingStreamUidForVideoKey(
+  videoKey: string
+): Promise<{ uid: string; ready: boolean } | null> {
+  // Match media_path or embedded r2_key / path substring in media_url JSON.
+  const { rows } = await pool.query<{ stream_uid: string; stream_ready_at: Date | null }>(
+    `
+    select stream_uid, stream_ready_at
+    from public.posts
+    where stream_uid is not null
+      and (
+        media_path ilike '%' || $1 || '%'
+        or media_url ilike '%' || $1 || '%'
+        or media_url ilike '%' || replace($1, '/', '%2F') || '%'
+      )
+    order by stream_ready_at desc nulls last
+    limit 1
+    `,
+    [videoKey]
+  );
+  const uid = rows[0]?.stream_uid?.trim();
+  if (!uid) return null;
+  return { uid, ready: Boolean(rows[0]?.stream_ready_at) };
+}
+
+/**
+ * Ingest one post: resolve R2 video → Stream copy → save uid.
+ * Dedupes by R2 video.mp4 key so share/original twins share one Stream asset.
+ * Returns null when Stream env missing or no R2 key.
+ */
+export async function ingestPostToStream(post: {
+  id: string;
+  media_url?: string | null;
+  media_path?: string | null;
+  title?: string | null;
+}): Promise<{ uid: string; hls: string | null; ready: boolean; reused?: boolean } | null> {
+  if (!streamConfigured()) return null;
+  const videoKey = streamVideoKeyFromPost(post);
+  if (!videoKey) return null;
+
+  // Already have uid on this post — no-op.
+  const existingSelf = await pool.query<{ stream_uid: string | null; stream_ready_at: Date | null }>(
+    `select stream_uid, stream_ready_at from public.posts where id = $1::uuid`,
+    [post.id]
+  );
+  if (existingSelf.rows[0]?.stream_uid) {
+    const uid = existingSelf.rows[0].stream_uid!;
+    return {
+      uid,
+      hls: streamHlsUrl(uid),
+      ready: Boolean(existingSelf.rows[0].stream_ready_at),
+      reused: true,
+    };
+  }
+
+  // Twin post (same R2 file) already ingested — reuse UID, do not copy again.
+  const twin = await findExistingStreamUidForVideoKey(videoKey);
+  if (twin) {
+    await savePostStreamUid(post.id, twin.uid, twin.ready);
+    return {
+      uid: twin.uid,
+      hls: streamHlsUrl(twin.uid),
+      ready: twin.ready,
+      reused: true,
+    };
+  }
 
   // Stream pulls once from a signed R2 GET (same PRESIGN_SECONDS as feed).
   const client = createR2Client();
@@ -151,6 +217,7 @@ export async function ingestPostToStream(post: {
   const copied = await streamCopyFromUrl(sourceUrl, {
     matterya_post_id: post.id,
     name: post.title || post.id,
+    r2_video_key: videoKey,
   });
   if (!copied.uid) return null;
 
@@ -168,10 +235,29 @@ export async function ingestPostToStream(post: {
   }
 
   await savePostStreamUid(post.id, copied.uid, ready);
+
+  // Stamp every other post that points at the same R2 video.mp4.
+  await pool.query(
+    `
+    update public.posts
+    set stream_uid = $2,
+        stream_ready_at = case when $3::boolean then coalesce(stream_ready_at, now()) else stream_ready_at end
+    where stream_uid is null
+      and id <> $1::uuid
+      and (
+        media_path ilike '%' || $4 || '%'
+        or media_url ilike '%' || $4 || '%'
+        or media_url ilike '%' || replace($4, '/', '%2F') || '%'
+      )
+    `,
+    [post.id, copied.uid, ready, videoKey]
+  );
+
   return {
     uid: copied.uid,
     hls: streamHlsUrl(copied.uid),
     ready,
+    reused: false,
   };
 }
 

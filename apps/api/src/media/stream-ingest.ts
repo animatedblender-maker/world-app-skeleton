@@ -100,7 +100,7 @@ async function main() {
         if (result?.uid) {
           ok += 1;
           console.log(
-            `[stream] ok post=${row.id} uid=${result.uid} ready=${result.ready} hls=${result.hls ? 'yes' : 'no'}`
+            `[stream] ${result.reused ? 'reuse' : 'ok'} post=${row.id} uid=${result.uid} ready=${result.ready} hls=${result.hls ? 'yes' : 'no'}`
           );
         } else {
           fail += 1;
