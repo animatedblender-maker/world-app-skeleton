@@ -244,11 +244,10 @@ enum SurfacePageClient {
             lastReadAt: nil
         )
         let created = (row["created_at"] as? String) ?? ISO8601DateFormatter().string(from: Date())
-        // Prefer feed_at (= greatest(updated_at, created_at)) so newest R2 uploads stay on top.
-        let updated = ([row["feed_at"] as? String, row["updated_at"] as? String]
-            .compactMap { $0 }
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first { !$0.isEmpty }) ?? created
+        // Never map feed_at → updatedAt (that made every bumped Spark show “Edited”).
+        let updatedRaw = (row["updated_at"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let updated = (updatedRaw?.isEmpty == false) ? updatedRaw! : created
         let body = (row["body"] as? String) ?? ""
         let isHubSurface = mediaType == "video" || mediaType == "reel" || mediaType == "spark"
         // Thin feed used to strip stamps — API now sends shared_post_id / origin_sid for comments.

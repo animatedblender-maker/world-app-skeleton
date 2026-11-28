@@ -702,13 +702,14 @@ struct CountryPost: Identifiable, Hashable, Sendable, Codable {
     var createdDate: Date? { RelativeTime.parseDate(createdAt) }
     var updatedDate: Date? { RelativeTime.parseDate(updatedAt) }
 
-    /// True only for a plausible in-app edit.
-    /// Seed/import rows often set `updated_at` hours/days after `created_at` — that is not an edit.
+    /// True only for a plausible in-app caption edit.
+    /// R2 sync / Stream ingest / ranking often bump `updated_at` minutes–hours after
+    /// `created_at` — that must never show as “Edited” on Feed Sparks.
     var isEdited: Bool {
         guard let created = createdDate, let updated = updatedDate else { return false }
         let gap = updated.timeIntervalSince(created)
-        // Ignore clock skew; ignore corpus/import bumps (often multi-hour+).
-        guard gap > 120, gap < 6 * 3600 else { return false }
+        // Clock skew floor; human edit session ceiling (pipeline bumps are usually longer).
+        guard gap > 120, gap < 45 * 60 else { return false }
         return true
     }
 

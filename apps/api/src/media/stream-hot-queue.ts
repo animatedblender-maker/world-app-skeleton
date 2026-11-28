@@ -16,10 +16,10 @@ type HotJob = {
   media_path?: string | null;
 };
 
-const MAX_CONCURRENT = 2;
-const MAX_QUEUE = 80;
+const MAX_CONCURRENT = 1;
+const MAX_QUEUE = 24;
 /** Cap new copies per process hour — hot head, not whole catalog. */
-const MAX_INGESTS_PER_HOUR = 120;
+const MAX_INGESTS_PER_HOUR = 40;
 
 const pending = new Map<string, HotJob>();
 const inFlight = new Set<string>();

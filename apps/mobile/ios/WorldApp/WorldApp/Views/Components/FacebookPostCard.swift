@@ -767,7 +767,8 @@ struct FacebookPostCard: View {
     private var postTimestampRow: some View {
         HStack(spacing: 6) {
             Text(RelativeTime.format(post.createdAt))
-            if post.isEdited {
+            // Only the author's own in-app edits — never pipeline/R2/Stream bumps on Sparks.
+            if isOwnPost, post.isEdited {
                 Text("Edited")
                     .fontWeight(.semibold)
             }

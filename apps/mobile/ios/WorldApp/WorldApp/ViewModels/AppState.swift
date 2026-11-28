@@ -2006,13 +2006,10 @@ final class AppState {
     }
 
     /// Close Sparks overlay — kill Spark audio only; hubs mini stays protected.
-    /// - Parameter resumeHubs: When false (Chat open / Messages tab), never post
-    ///   `matteryaResumePlaybackAfterInterrupt` — that re-woke Spark players into Chat.
+    /// Never post `matteryaResumePlaybackAfterInterrupt` here — that re-woke Sparks
+    /// AVPlayers into Feed (and Chat) after dismiss.
     func closeReelsViewer(resumeHubs: Bool = true) {
         guard reelsViewerContext != nil else { return }
-        let returningToChat = !resumeHubs
-            || ActiveConversationFocus.current != nil
-            || selectedTab == .messages
 
         // Mute/pause every Spark player first — including claimed (in-use) ones.
         MediaPlaybackCoordinator.shared.silenceSparksDismissPreservingHubsMini()
@@ -2024,46 +2021,48 @@ final class AppState {
             reelsViewerContext = nil
         }
 
-        if returningToChat {
-            // Quiet hubs reassert only — no resume-interrupt notification.
-            if hubPlaybackPost != nil {
-                hubPlaybackPlaying = true
+        // Hubs mini only (no global resume broadcast — that leaked Sparks audio into Feed).
+        if resumeHubs, hubPlaybackPost != nil {
+            hubPlaybackPlaying = true
+            MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+                userMuted: hubPlaybackMuted,
+                rate: hubPlaybackRate
+            )
+        }
+
+        // Catch late cell onAppear / async play kicks after the cover tears down.
+        let silenceAgain = {
+            SparkWarmPool.shared.hardSilenceAllBuffered()
+            MediaPlaybackCoordinator.shared.silenceSparksDismissPreservingHubsMini()
+        }
+        DispatchQueue.main.async(execute: silenceAgain)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: silenceAgain)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            silenceAgain()
+            SparkWarmPool.shared.drain()
+            if resumeHubs, self.hubPlaybackPost != nil {
+                self.hubPlaybackPlaying = true
                 MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
-                    userMuted: hubPlaybackMuted,
-                    rate: hubPlaybackRate
+                    userMuted: self.hubPlaybackMuted,
+                    rate: self.hubPlaybackRate
                 )
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
-                SparkWarmPool.shared.hardSilenceAllBuffered()
-                SparkWarmPool.shared.drain()
-                MediaPlaybackCoordinator.shared.silenceSparksDismissPreservingHubsMini()
-            }
-        } else if resumeHubs {
-            resumeHubPlaybackAfterSparks()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
-                SparkWarmPool.shared.hardSilenceAllBuffered()
-                SparkWarmPool.shared.drain()
-            }
-        } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
-                SparkWarmPool.shared.hardSilenceAllBuffered()
-                SparkWarmPool.shared.drain()
             }
         }
     }
 
     /// After Sparks full-screen closes — resume hubs mini from the paused frame (no remount / black).
+    /// Does **not** broadcast `matteryaResumePlaybackAfterInterrupt` (Sparks→Feed audio leak).
     func resumeHubPlaybackAfterSparks() {
         guard hubPlaybackPost != nil else { return }
         hubPlaybackPlaying = true
         MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: hubPlaybackMuted, rate: hubPlaybackRate)
-        NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
-        // Second kick after the cover dismiss animation settles.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
             guard let self, self.hubPlaybackPost != nil else { return }
             self.hubPlaybackPlaying = true
-            MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(userMuted: self.hubPlaybackMuted, rate: self.hubPlaybackRate)
-            NotificationCenter.default.post(name: .matteryaResumePlaybackAfterInterrupt, object: nil)
+            MediaPlaybackCoordinator.shared.reassertContinuousHubsAudio(
+                userMuted: self.hubPlaybackMuted,
+                rate: self.hubPlaybackRate
+            )
         }
     }
 
