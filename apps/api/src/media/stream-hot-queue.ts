@@ -6,23 +6,36 @@
  * - Dedupes by post id + R2 video key (ingestPostToStream reuses twins)
  * - Caps concurrency so Feed traffic cannot storm Stream API
  * - No-op when CF_* env is missing
+ * - Opt-in: set STREAM_HOT_INGEST=1 on Render (off by default after storage scare)
  */
-import { streamConfigured, ingestPostToStream } from './cloudflare-stream.js';
+import {
+  streamConfigured,
+  ingestPostToStream,
+  streamVideoKeyFromPost,
+} from './cloudflare-stream.js';
 
 type HotJob = {
   id: string;
   title?: string | null;
   media_url?: string | null;
   media_path?: string | null;
+  videoKey?: string | null;
 };
 
-const MAX_CONCURRENT = 2;
+/** Off unless STREAM_HOT_INGEST=1 — prevents burning Stream minutes during cleanup. */
+function hotIngestEnabled(): boolean {
+  return process.env.STREAM_HOT_INGEST?.trim() === '1';
+}
+
+const MAX_CONCURRENT = 1;
 const MAX_QUEUE = 64;
 /** Cap new copies per process hour — hot head, not whole catalog. */
-const MAX_INGESTS_PER_HOUR = 100;
+const MAX_INGESTS_PER_HOUR = 40;
 
 const pending = new Map<string, HotJob>();
 const inFlight = new Set<string>();
+/** Same R2 pack must not copy twice in parallel (share/original twins). */
+const inFlightVideoKeys = new Set<string>();
 let active = 0;
 let startedThisHour = 0;
 let hourBucket = Math.floor(Date.now() / 3_600_000);
@@ -47,7 +60,7 @@ function rollHour() {
 }
 
 function pump() {
-  if (!streamConfigured()) return;
+  if (!streamConfigured() || !hotIngestEnabled()) return;
   rollHour();
   while (active < MAX_CONCURRENT && pending.size > 0) {
     if (startedThisHour >= MAX_INGESTS_PER_HOUR) break;
@@ -55,7 +68,14 @@ function pump() {
     if (!next) break;
     pending.delete(next.id);
     if (inFlight.has(next.id)) continue;
+    const vkey = next.videoKey || null;
+    if (vkey && inFlightVideoKeys.has(vkey)) {
+      // Twin of an in-flight copy — re-queue after the first finishes (reuse path).
+      pending.set(next.id, next);
+      break;
+    }
     inFlight.add(next.id);
+    if (vkey) inFlightVideoKeys.add(vkey);
     active += 1;
     startedThisHour += 1;
     void (async () => {
@@ -75,6 +95,7 @@ function pump() {
         console.error(`[stream-hot] fail post=${next.id}`, err?.message ?? err);
       } finally {
         inFlight.delete(next.id);
+        if (vkey) inFlightVideoKeys.delete(vkey);
         active -= 1;
         pump();
       }
@@ -97,7 +118,7 @@ export function enqueueHotStreamFromCards(
     playback?: { hls?: string | null } | null;
   }>
 ): { queued: number } {
-  if (!streamConfigured() || !cards?.length) return { queued: 0 };
+  if (!streamConfigured() || !hotIngestEnabled() || !cards?.length) return { queued: 0 };
   rollHour();
   if (startedThisHour >= MAX_INGESTS_PER_HOUR && pending.size === 0) {
     return { queued: 0 };
@@ -115,6 +136,10 @@ export function enqueueHotStreamFromCards(
       title: card.title,
       media_url: card.media_url,
       media_path: card.media_path ?? null,
+      videoKey: streamVideoKeyFromPost({
+        media_url: card.media_url,
+        media_path: card.media_path ?? null,
+      }),
     };
     const isVideo =
       mt.includes('video') ||
@@ -123,6 +148,20 @@ export function enqueueHotStreamFromCards(
       looksVideo(job);
     if (!isVideo) continue;
     if (pending.has(id) || inFlight.has(id)) continue;
+    // Skip enqueue if another post with the same R2 key is already pending/in-flight;
+    // after that copy finishes, feed will stamp stream_uid on twins via ingest.
+    if (job.videoKey) {
+      let keyBusy = inFlightVideoKeys.has(job.videoKey);
+      if (!keyBusy) {
+        for (const p of pending.values()) {
+          if (p.videoKey === job.videoKey) {
+            keyBusy = true;
+            break;
+          }
+        }
+      }
+      if (keyBusy) continue;
+    }
     pending.set(id, job);
     queued += 1;
   }
@@ -138,6 +177,7 @@ export function hotStreamQueueStats() {
     active,
     startedThisHour,
     maxPerHour: MAX_INGESTS_PER_HOUR,
+    enabled: hotIngestEnabled(),
     configured: streamConfigured(),
   };
 }

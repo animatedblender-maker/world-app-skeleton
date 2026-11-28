@@ -170,6 +170,8 @@ async function findExistingStreamUidForVideoKey(
 /**
  * Ingest one post: resolve R2 video → Stream copy → save uid.
  * Dedupes by R2 video.mp4 key so share/original twins share one Stream asset.
+ * Uses a Postgres advisory lock on the video key so concurrent feed/sparks
+ * workers (and multi-instance Render) cannot race two Stream copies.
  * Returns null when Stream env missing or no R2 key.
  */
 export async function ingestPostToStream(post: {
@@ -182,83 +184,96 @@ export async function ingestPostToStream(post: {
   const videoKey = streamVideoKeyFromPost(post);
   if (!videoKey) return null;
 
-  // Already have uid on this post — no-op.
-  const existingSelf = await pool.query<{ stream_uid: string | null; stream_ready_at: Date | null }>(
-    `select stream_uid, stream_ready_at from public.posts where id = $1::uuid`,
-    [post.id]
-  );
-  if (existingSelf.rows[0]?.stream_uid) {
-    const uid = existingSelf.rows[0].stream_uid!;
-    return {
-      uid,
-      hls: streamHlsUrl(uid),
-      ready: Boolean(existingSelf.rows[0].stream_ready_at),
-      reused: true,
-    };
-  }
+  const client = await pool.connect();
+  try {
+    // Serialize all ingests for this R2 key across API processes.
+    await client.query('select pg_advisory_lock(hashtext($1::text))', [videoKey]);
 
-  // Twin post (same R2 file) already ingested — reuse UID, do not copy again.
-  const twin = await findExistingStreamUidForVideoKey(videoKey);
-  if (twin) {
-    await savePostStreamUid(post.id, twin.uid, twin.ready);
-    return {
-      uid: twin.uid,
-      hls: streamHlsUrl(twin.uid),
-      ready: twin.ready,
-      reused: true,
-    };
-  }
+    // Already have uid on this post — no-op.
+    const existingSelf = await client.query<{
+      stream_uid: string | null;
+      stream_ready_at: Date | null;
+    }>(`select stream_uid, stream_ready_at from public.posts where id = $1::uuid`, [post.id]);
+    if (existingSelf.rows[0]?.stream_uid) {
+      const uid = existingSelf.rows[0].stream_uid!;
+      return {
+        uid,
+        hls: streamHlsUrl(uid),
+        ready: Boolean(existingSelf.rows[0].stream_ready_at),
+        reused: true,
+      };
+    }
 
-  // Stream pulls once from a signed R2 GET (same PRESIGN_SECONDS as feed).
-  const client = createR2Client();
-  const sourceUrl = await presignGet(client, videoKey);
-  if (!sourceUrl) return null;
+    // Twin post (same R2 file) already ingested — reuse UID, do not copy again.
+    const twin = await findExistingStreamUidForVideoKey(videoKey);
+    if (twin) {
+      await savePostStreamUid(post.id, twin.uid, twin.ready);
+      return {
+        uid: twin.uid,
+        hls: streamHlsUrl(twin.uid),
+        ready: twin.ready,
+        reused: true,
+      };
+    }
 
-  const copied = await streamCopyFromUrl(sourceUrl, {
-    matterya_post_id: post.id,
-    name: post.title || post.id,
-    r2_video_key: videoKey,
-  });
-  if (!copied.uid) return null;
+    // Stream pulls once from a signed R2 GET (same PRESIGN_SECONDS as feed).
+    const r2 = createR2Client();
+    const sourceUrl = await presignGet(r2, videoKey);
+    if (!sourceUrl) return null;
 
-  let ready = copied.readyToStream;
-  if (!ready) {
-    // Brief poll — encoding often finishes in seconds for short Sparks.
-    for (let i = 0; i < 8; i++) {
-      await new Promise((r) => setTimeout(r, 1500));
-      const st = await streamGetVideo(copied.uid);
-      if (st.readyToStream) {
-        ready = true;
-        break;
+    const copied = await streamCopyFromUrl(sourceUrl, {
+      matterya_post_id: post.id,
+      name: post.title || post.id,
+      r2_video_key: videoKey,
+    });
+    if (!copied.uid) return null;
+
+    let ready = copied.readyToStream;
+    if (!ready) {
+      // Brief poll — encoding often finishes in seconds for short Sparks.
+      for (let i = 0; i < 8; i++) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const st = await streamGetVideo(copied.uid);
+        if (st.readyToStream) {
+          ready = true;
+          break;
+        }
       }
     }
+
+    await savePostStreamUid(post.id, copied.uid, ready);
+
+    // Stamp every other post that points at the same R2 video.mp4.
+    await client.query(
+      `
+      update public.posts
+      set stream_uid = $2,
+          stream_ready_at = case when $3::boolean then coalesce(stream_ready_at, now()) else stream_ready_at end
+      where stream_uid is null
+        and id <> $1::uuid
+        and (
+          media_path ilike '%' || $4 || '%'
+          or media_url ilike '%' || $4 || '%'
+          or media_url ilike '%' || replace($4, '/', '%2F') || '%'
+        )
+      `,
+      [post.id, copied.uid, ready, videoKey]
+    );
+
+    return {
+      uid: copied.uid,
+      hls: streamHlsUrl(copied.uid),
+      ready,
+      reused: false,
+    };
+  } finally {
+    try {
+      await client.query('select pg_advisory_unlock(hashtext($1::text))', [videoKey]);
+    } catch {
+      /* ignore unlock errors */
+    }
+    client.release();
   }
-
-  await savePostStreamUid(post.id, copied.uid, ready);
-
-  // Stamp every other post that points at the same R2 video.mp4.
-  await pool.query(
-    `
-    update public.posts
-    set stream_uid = $2,
-        stream_ready_at = case when $3::boolean then coalesce(stream_ready_at, now()) else stream_ready_at end
-    where stream_uid is null
-      and id <> $1::uuid
-      and (
-        media_path ilike '%' || $4 || '%'
-        or media_url ilike '%' || $4 || '%'
-        or media_url ilike '%' || replace($4, '/', '%2F') || '%'
-      )
-    `,
-    [post.id, copied.uid, ready, videoKey]
-  );
-
-  return {
-    uid: copied.uid,
-    hls: streamHlsUrl(copied.uid),
-    ready,
-    reused: false,
-  };
 }
 
 /** Playback fields for /v1/feed cards when stream_uid is set. */

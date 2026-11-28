@@ -7,6 +7,9 @@
  * Usage:
  *   npm run media:stream-dedupe -- --dry-run
  *   npm run media:stream-dedupe
+ *
+ * Note: Cloudflare's /stream list can repeat the same uid across pages —
+ * we uniquify by uid before grouping so we never DELETE the keep uid.
  */
 import 'dotenv/config';
 import { pool } from '../db.js';
@@ -37,14 +40,29 @@ async function cfFetch(path: string, init?: RequestInit): Promise<any> {
 }
 
 async function listAllStreamVideos(): Promise<any[]> {
-  const all: any[] = [];
-  for (let page = 1; page <= 50; page++) {
+  const byUid = new Map<string, any>();
+  let rawRows = 0;
+  for (let page = 1; page <= 200; page++) {
     const json = await cfFetch(`/stream?per_page=100&page=${page}`);
     const batch = json.result || [];
-    all.push(...batch);
+    rawRows += batch.length;
+    let newOnPage = 0;
+    for (const v of batch) {
+      const uid = String(v.uid || '');
+      if (!uid) continue;
+      if (!byUid.has(uid)) {
+        byUid.set(uid, v);
+        newOnPage += 1;
+      }
+    }
     if (batch.length < 100) break;
+    // Cloudflare sometimes re-serves the same page of uids — stop when no progress.
+    if (newOnPage === 0) break;
   }
-  return all;
+  console.error(
+    `[dedupe] listed raw_rows=${rawRows} unique_uids=${byUid.size}`
+  );
+  return [...byUid.values()];
 }
 
 function fingerprint(v: any): string {
@@ -64,8 +82,10 @@ async function main() {
   const dry = process.argv.includes('--dry-run');
 
   const videos = await listAllStreamVideos();
+  let storedMinutes = 0;
   const groups = new Map<string, any[]>();
   for (const v of videos) {
+    storedMinutes += Number(v.duration || 0) / 60;
     const fp = fingerprint(v);
     if (!groups.has(fp)) groups.set(fp, []);
     groups.get(fp)!.push(v);
@@ -76,35 +96,52 @@ async function main() {
     keep: string;
     drop: string[];
     name: string;
+    drop_minutes: number;
   }[] = [];
 
   for (const [fp, list] of groups) {
-    if (list.length < 2) continue;
+    // Unique by uid inside the group (defensive).
+    const byUid = new Map<string, any>();
+    for (const v of list) byUid.set(String(v.uid), v);
+    const unique = [...byUid.values()];
+    if (unique.length < 2) continue;
+
     // Prefer ready + oldest created (first ingest) as canonical
-    const sorted = [...list].sort((a, b) => {
+    const sorted = [...unique].sort((a, b) => {
       const ar = a.readyToStream ? 1 : 0;
       const br = b.readyToStream ? 1 : 0;
       if (br !== ar) return br - ar;
       return String(a.created).localeCompare(String(b.created));
     });
-    const keep = sorted[0].uid as string;
-    const drop = sorted.slice(1).map((v) => v.uid as string);
+    const keep = String(sorted[0].uid);
+    const drop = sorted
+      .slice(1)
+      .map((v) => String(v.uid))
+      .filter((uid) => uid && uid !== keep);
+    if (!drop.length) continue;
+    const dropMinutes = sorted
+      .slice(1)
+      .reduce((n, v) => n + Number(v.duration || 0) / 60, 0);
     plans.push({
       fp: fp.slice(0, 100),
       keep,
       drop,
       name: String(sorted[0].meta?.name || '').slice(0, 50),
+      drop_minutes: Math.round(dropMinutes * 10) / 10,
     });
   }
 
   const dropCount = plans.reduce((n, p) => n + p.drop.length, 0);
+  const reclaimMinutes = plans.reduce((n, p) => n + p.drop_minutes, 0);
   console.log(
     JSON.stringify(
       {
         dry,
-        stream_total: videos.length,
+        stream_unique: videos.length,
+        stored_minutes: Math.round(storedMinutes * 10) / 10,
         duplicate_groups: plans.length,
         will_delete: dropCount,
+        reclaim_minutes_est: Math.round(reclaimMinutes * 10) / 10,
         sample: plans.slice(0, 6),
       },
       null,
@@ -120,6 +157,7 @@ async function main() {
   let repointed = 0;
   let deleted = 0;
   let failed = 0;
+  const deletedUids = new Set<string>();
 
   for (const plan of plans) {
     // Repoint DB rows from drop UIDs → keep
@@ -136,8 +174,11 @@ async function main() {
       repointed += r.rowCount ?? 0;
     }
     for (const dropUid of plan.drop) {
+      if (dropUid === plan.keep) continue;
+      if (deletedUids.has(dropUid)) continue;
       try {
         await cfFetch(`/stream/${encodeURIComponent(dropUid)}`, { method: 'DELETE' });
+        deletedUids.add(dropUid);
         deleted += 1;
         console.log(`[dedupe] deleted ${dropUid} → keep ${plan.keep} (${plan.name})`);
       } catch (err: any) {
