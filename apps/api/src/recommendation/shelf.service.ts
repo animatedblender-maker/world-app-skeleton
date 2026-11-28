@@ -162,6 +162,7 @@ type RawPostRow = {
   body: string | null;
   media_type: string;
   media_url: string | null;
+  media_path?: string | null;
   thumb_url: string | null;
   like_count: number;
   comment_count: number;
@@ -599,7 +600,7 @@ async function queryVideoPage(opts: {
       p.title,
       p.body,
       p.media_type,
-      p.media_url,
+      p.media_url, p.media_path,
       p.thumb_url,
       p.stream_uid,
       p.like_count,
@@ -1271,7 +1272,7 @@ function diversifyHomeRows(rows: RawPostRow[], want: number): RawPostRow[] {
 }
 
 const HOME_FEED_SELECT = (slugSelect: string) => `
-      p.id, p.title, p.body, p.media_type, p.media_url, p.thumb_url,
+      p.id, p.title, p.body, p.media_type, p.media_url, p.media_path, p.thumb_url,
       p.stream_uid,
       p.like_count, p.comment_count, p.created_at, p.updated_at,
       p.created_at as feed_at,
@@ -1355,7 +1356,7 @@ async function fetchHomeLaneRows(opts: {
       and (
         lower(coalesce(p.media_type, '')) in ('none', 'text')
         or (
-          (p.media_url is null or length(trim(coalesce(p.media_url, ''))) < 4)
+          (p.media_url is null or length(trim(coalesce(p.media_url, p.media_path, ''))) < 4)
           and (
             length(trim(coalesce(p.body, ''))) > 0
             or length(trim(coalesce(p.title, ''))) > 0
@@ -1788,6 +1789,28 @@ export async function fetchHomeFeedPage(input: {
     return `home_${fam}`;
   });
 
+  // Feed-ahead Stream: ingest this page + the next woven videos *before* the finger
+  // gets there (first paint can still be R2; next users / twin shares get HLS).
+  try {
+    const { enqueueHotStreamFromCards } = await import('../media/stream-hot-queue.js');
+    const aheadRaw = wovenUnwatched
+      .filter((r) => !servedIds.has(r.id) && !r.stream_uid)
+      .slice(0, Math.max(want * 2, 36));
+    enqueueHotStreamFromCards([
+      ...liveItems,
+      ...aheadRaw.map((r) => ({
+        id: r.id,
+        title: r.title,
+        media_url: r.media_url,
+        media_path: r.media_path ?? null,
+        media_type: r.media_type,
+        stream_uid: r.stream_uid,
+      })),
+    ]);
+  } catch (err: any) {
+    console.warn('[feed] stream-ahead enqueue', err?.message ?? err);
+  }
+
   return {
     surface: 'home_for_you',
     items: liveItems,
@@ -1824,7 +1847,7 @@ async function loadRawPostsByIds(ids: string[]): Promise<RawPostRow[]> {
     const { rows } = await pool.query<RawPostRow>(
       `
       select
-        p.id, p.title, p.body, p.media_type, p.media_url, p.thumb_url,
+        p.id, p.title, p.body, p.media_type, p.media_url, p.media_path, p.thumb_url,
       p.stream_uid,
         p.like_count, p.comment_count, p.created_at, p.updated_at,
         p.country_code, p.country_name, p.author_id, p.shared_post_id,
@@ -1921,7 +1944,7 @@ export async function fetchSparksPage(input: {
   params.push(focus && !hasCol ? want * 4 : want);
   const sql = `
     select
-      p.id, p.title, p.body, p.media_type, p.media_url, p.thumb_url,
+      p.id, p.title, p.body, p.media_type, p.media_url, p.media_path, p.thumb_url,
       p.stream_uid,
       p.like_count, p.comment_count, p.created_at, p.updated_at,
       greatest(p.updated_at, p.created_at) as feed_at,

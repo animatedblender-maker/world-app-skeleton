@@ -40,9 +40,32 @@ async function main() {
   const concurrency = Math.min(Math.max(Number(arg('concurrency', '2')) || 2, 1), 4);
   const dry = arg('dry-run') === 'true' || process.argv.includes('--dry-run');
 
-  // Prefer ShortForm / spark packs without stream_uid yet.
+  // Prefer Home Feed ShortForm head (same shape users scroll) without stream_uid yet.
+  const feedHead = process.argv.includes('--feed-head');
   const { rows } = await pool.query<Row>(
+    feedHead
+      ? `
+    select
+      p.id,
+      p.title,
+      p.media_url,
+      p.media_path
+    from public.posts p
+    where p.stream_uid is null
+      and coalesce(p.moderation_status, 'active') in ('active', 'sensitive')
+      and coalesce(p.media_path, '') not like '%/LongForm/%'
+      and (
+        coalesce(p.media_path, '') like '%/ShortForm/%'
+        or p.media_url ilike '%ShortForm%'
+        or p.media_type in ('video', 'reel', 'spark')
+      )
+      and (p.media_url is not null or p.media_path is not null)
+    order by
+      case when coalesce(p.media_path, '') like '%/ShortForm/%' then 0 else 1 end,
+      greatest(p.updated_at, p.created_at) desc nulls last
+    limit $1
     `
+      : `
     select
       p.id,
       p.title,

@@ -26,7 +26,8 @@
     "matterya:official:welcome": "tsx src/matterya-official-runner.ts",
     "media:stream-ingest": "tsx src/media/stream-ingest.ts",
     "media:stream-ingest:dry": "tsx src/media/stream-ingest.ts --dry-run",
-    "media:stream-dedupe": "tsx src/media/stream-dedupe-cleanup.ts"
+    "media:stream-dedupe": "tsx src/media/stream-dedupe-cleanup.ts",
+    "media:stream-ingest-feed-head": "tsx src/media/stream-ingest.ts --feed-head"
   },
   "engines": {
     "node": "22.x"
