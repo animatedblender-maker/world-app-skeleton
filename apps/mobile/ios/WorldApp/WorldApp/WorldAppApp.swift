@@ -114,8 +114,11 @@ struct WorldAppApp: App {
             showsLaunchSplash = false
             state.isLaunchSplashVisible = false
         }
-        // Load bundled WhisperKit Small off the critical path (no download UX).
-        TranscriptService.warmModelInBackground()
+        // WhisperKit competes with Feed HLS for RAM/CPU at unlock — wait until settle.
+        Task(priority: .background) {
+            try? await Task.sleep(nanoseconds: 25_000_000_000)
+            TranscriptService.warmModelInBackground()
+        }
         PerformanceTelemetry.milestoneFromLaunch(
             "splash_dismiss",
             surface: "app",
@@ -125,8 +128,8 @@ struct WorldAppApp: App {
             ]
         )
 
-        // Unlock fast after splash — mute-until-frames keeps first audible frame clean.
-        FeedVideoFocus.shared.unlockAutoplayAfterFirstPaint(delayMs: 100)
+        // Unlock after a short layout settle — mute-until-frames keeps first audible frame clean.
+        FeedVideoFocus.shared.unlockAutoplayAfterFirstPaint(delayMs: 280)
         _ = boot
     }
 
