@@ -55,10 +55,30 @@ Apply migration `supabase/migrations/20261127230000_posts_stream_uid.sql`
 - `/v1/feed` will expose `playback.hls` + poster when `stream_uid` is set
 - iOS prefers HLS over progressive MP4
 
+## 8. Hot-only ingest (do not mirror all of R2)
+
+R2 stays the full archive. Stream only gets videos that **real users are about to see**.
+
+1. Client calls `GET /v1/feed` or `GET /v1/sparks`
+2. API returns the page immediately (R2 URL if not ingested yet)
+3. In the background, `stream-hot-queue` copies any video on that page that still has no `stream_uid`
+4. Deduped by R2 `video.mp4` key (share/original twins share one Stream asset)
+5. Caps: **2** concurrent copies, **≤120** new copies per hour per API process
+6. Next time that post is served → `playback.hls` is present → Instagram-class CDN play
+
+Check: `GET /v1/stream/status` → `{ configured, posts_with_stream_uid, hot_queue }`
+
+Optional bulk head-fill (CLI, not required for hot-only):
+
+```bash
+cd apps/api
+npm run media:stream-ingest -- --limit=50
+```
+
 ## Not the same as R2
 
 | | **R2** | **Stream** |
 |---|--------|------------|
 | What | Object storage (mp4/webp) | Transcoded HLS CDN |
-| Feed today | Signed progressive MP4 | Missing (why cold/black) |
-| Env you already have | `R2_*` | Need `CF_STREAM_*` above |
+| Catalog | Keep everything | Only hot Feed/Sparks traffic |
+| Env you already have | `R2_*` | `CF_ACCOUNT_ID` / `CF_STREAM_*` |

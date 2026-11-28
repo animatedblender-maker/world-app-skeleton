@@ -607,6 +607,7 @@ app.get('/v1/stream/status', (_req: Request, res: Response) => {
   void (async () => {
     try {
       const { streamConfigured } = await import('./media/cloudflare-stream.js');
+      const { hotStreamQueueStats } = await import('./media/stream-hot-queue.js');
       const { rows } = await pool.query<{ n: string }>(
         `select count(*)::text as n from public.posts where stream_uid is not null`
       );
@@ -614,6 +615,7 @@ app.get('/v1/stream/status', (_req: Request, res: Response) => {
         ok: true,
         configured: streamConfigured(),
         posts_with_stream_uid: Number(rows[0]?.n || 0),
+        hot_queue: hotStreamQueueStats(),
       });
     } catch (err: any) {
       return res.status(500).json({ ok: false, error: err?.message ?? 'error' });
@@ -1687,6 +1689,14 @@ app.get('/v1/feed', async (req: Request, res: Response) => {
       session,
       excludeIds,
     });
+    // Hot Stream: background-copy videos on this page that still lack stream_uid.
+    // Never await — R2 stays archive; Stream grows with real Feed traffic only.
+    try {
+      const { enqueueHotStreamFromCards } = await import('./media/stream-hot-queue.js');
+      enqueueHotStreamFromCards(page.items || []);
+    } catch (err: any) {
+      console.warn('[feed] stream-hot enqueue', err?.message ?? err);
+    }
     return res.json({ ok: true, ...page });
   } catch (err: any) {
     console.error('[feed]', err?.message ?? err);
@@ -1718,6 +1728,12 @@ app.get('/v1/sparks', async (req: Request, res: Response) => {
       viewerEmail: user?.email ?? null,
       excludeIds,
     });
+    try {
+      const { enqueueHotStreamFromCards } = await import('./media/stream-hot-queue.js');
+      enqueueHotStreamFromCards(page.items || []);
+    } catch (err: any) {
+      console.warn('[sparks] stream-hot enqueue', err?.message ?? err);
+    }
     return res.json({ ok: true, ...page });
   } catch (err: any) {
     console.error('[sparks]', err?.message ?? err);
