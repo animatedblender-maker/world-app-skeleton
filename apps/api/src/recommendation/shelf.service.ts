@@ -1308,33 +1308,26 @@ async function fetchHomeLaneRows(opts: {
   `;
 
   if (opts.kind === 'spark') {
+    // Fast path: media_path / media_type only — never ILIKE the media_url JSON blob
+    // (that forced a ~2s seq scan on posts).
     where += `
       and p.media_type in ('video', 'reel', 'spark')
       and p.media_url is not null
       and length(trim(p.media_url)) > 8
       and coalesce(p.media_path, '') not like '%/LongForm/%'
-      and p.media_url::text not ilike '%/LongForm/%'
       and (
         p.media_type in ('reel', 'spark')
         or coalesce(p.media_path, '') like '%/ShortForm/%'
-        or p.media_url::text ilike '%/ShortForm/%'
-        or coalesce(p.body, '') ilike '%__spark__%'
-        or p.media_url::text ilike '%"kind":"spark"%'
-        or p.media_url::text ilike '%"reel":true%'
+        or coalesce(p.body, '') like '%__spark__%'
       )
     `;
   } else if (opts.kind === 'hub') {
+    // Index-friendly: LongForm path only (body markers were OR'd and skipped the hub index).
     where += `
       and p.media_type = 'video'
       and p.media_url is not null
       and length(trim(p.media_url)) > 8
-      and coalesce(p.body, '') not ilike '%__spark__%'
-      and (
-        coalesce(p.media_path, '') like '%/LongForm/%'
-        or p.media_url::text ilike '%/LongForm/%'
-        or coalesce(p.body, '') ilike '%__hub_origin__%'
-        or coalesce(p.body, '') ilike '%__hub_channel__%'
-      )
+      and p.media_path like '%/LongForm/%'
     `;
   } else if (opts.kind === 'image') {
     // Over-fetch a bit — caller dedupes near-identical media/captions.
@@ -1342,8 +1335,6 @@ async function fetchHomeLaneRows(opts: {
       and lower(coalesce(p.media_type, '')) in ('image', 'photo', 'gif')
       and p.media_url is not null
       and length(trim(p.media_url)) > 4
-      and coalesce(p.body, '') not ilike '%__spark__%'
-      and coalesce(p.body, '') not ilike '%__hub_origin__%'
     `;
   } else {
     // Pure text / status posts — never video or image cards.
@@ -1371,26 +1362,78 @@ async function fetchHomeLaneRows(opts: {
     where += ` and (p.created_at, p.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
   }
   params.push(want);
-  // Sparks: prefer YouTube ShortForm ahead of TikTok country packs so variety weave has SF stock.
-  const orderBy =
-    opts.kind === 'spark'
-      ? `
-    order by
-      case
-        when coalesce(p.media_path, '') like '%/ShortForm/%' then 0
-        when p.media_url::text ilike '%/ShortForm/%' then 0
-        else 1
-      end asc,
-      p.created_at desc,
-      p.id desc
-  `
-      : `order by p.created_at desc, p.id desc`;
+  // Sparks: two index-friendly queries (ShortForm first). Avoid media_url JSON ILIKE.
+  if (opts.kind === 'spark') {
+    const sfWant = Math.ceil(want * 0.65);
+    const otherWant = want;
+    const cursorSql = opts.cursor
+      ? ` and (p.created_at, p.id) < ($1::timestamptz, $2::uuid)`
+      : '';
+    const adult = adultContentSqlFilter(opts.under18, 'p');
+    const email = opts.viewerEmail ?? null;
+    const baseFast = `
+      p.visibility = 'public'
+      and coalesce(p.moderation_status, 'active') not in ('hidden', 'deleted')
+      and p.media_type in ('video', 'reel', 'spark')
+      and p.media_url is not null
+      ${adult}
+      ${seedAuthorSqlFilter('pr', email)}
+      ${seedHubCatalogSqlFilter('p', email)}
+      ${cursorSql}
+    `;
+    const orderBy = `order by p.created_at desc, p.id desc`;
+    const sfParams = opts.cursor
+      ? [opts.cursor.createdAt, opts.cursor.id, sfWant]
+      : [sfWant];
+    const otherParams = opts.cursor
+      ? [opts.cursor.createdAt, opts.cursor.id, otherWant]
+      : [otherWant];
+    const limSf = `$${sfParams.length}`;
+    const limOther = `$${otherParams.length}`;
+    const [sf, other] = await Promise.all([
+      pool.query<RawPostRow>(
+        `select ${HOME_FEED_SELECT(opts.slugSelect)}
+         from public.posts p
+         left join public.profiles pr on pr.user_id = p.author_id
+         where ${baseFast}
+           and p.media_path like '%/ShortForm/%'
+         ${orderBy}
+         limit ${limSf}`,
+        sfParams
+      ),
+      pool.query<RawPostRow>(
+        `select ${HOME_FEED_SELECT(opts.slugSelect)}
+         from public.posts p
+         left join public.profiles pr on pr.user_id = p.author_id
+         where ${baseFast}
+           and coalesce(p.media_path, '') not like '%/ShortForm/%'
+           and coalesce(p.media_path, '') not like '%/LongForm/%'
+           and (
+             p.media_type in ('reel', 'spark')
+             or coalesce(p.body, '') like '%__spark__%'
+           )
+         ${orderBy}
+         limit ${limOther}`,
+        otherParams
+      ),
+    ]);
+    const seen = new Set<string>();
+    const out: RawPostRow[] = [];
+    for (const row of [...sf.rows, ...other.rows]) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      out.push(row);
+      if (out.length >= want) break;
+    }
+    return out;
+  }
+
   const sql = `
     select ${HOME_FEED_SELECT(opts.slugSelect)}
     from public.posts p
     left join public.profiles pr on pr.user_id = p.author_id
     where ${where}
-    ${orderBy}
+    order by p.created_at desc, p.id desc
     limit $${params.length}
   `;
   const { rows } = await pool.query<RawPostRow>(sql, params);
@@ -1548,15 +1591,19 @@ export async function fetchHomeFeedPage(input: {
   // Over-fetch sparks so ShortForm stock survives after TikTok split + dedupe.
   const perLane = Math.max(
     4,
-    Math.ceil(want / 3) + (viewerId ? 4 : 2)
+    Math.ceil(want / 3) + (viewerId ? 2 : 1)
   );
-  // Pull enough ShortForm (ordered first in spark SQL) so TikTok cannot fill every spark slot.
-  const sparkLaneWant = Math.max(perLane + 10, Math.ceil(want * 0.55) + (viewerId ? 6 : 4));
-  const imageLaneWant = perLane + 6;
+  // Modest over-fetch — large sparkLaneWant was wasting DB time on every page.
+  const sparkLaneWant = Math.max(perLane + 4, Math.ceil(want * 0.5) + (viewerId ? 4 : 2));
+  const imageLaneWant = perLane + 4;
   const homeCur = decodeHomeFeedCursor(input.cursor);
-  const hasCol = await hasHubSlugColumn();
+  const __tp = Date.now();
+  const [hasCol, under18] = await Promise.all([
+    hasHubSlugColumn(),
+    viewerIsUnder18(input.viewerUserId),
+  ]);
   const slugSelect = hasCol ? 'p.hub_slug' : 'null::text as hub_slug';
-  const under18 = await viewerIsUnder18(input.viewerUserId);
+  if (process.env.FEED_PROFILE === '1') console.log('[feed-prof] meta', Date.now()-__tp);
 
   let sparkRows: RawPostRow[] = [];
   let hubRows: RawPostRow[] = [];
@@ -1594,6 +1641,7 @@ export async function fetchHomeFeedPage(input: {
       ]),
       new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 7000)),
     ]);
+    if (process.env.FEED_PROFILE === '1') console.log('[feed-prof] lanes', Date.now()-__tp);
     if (timed === 'timeout') {
       console.error('[feed] three-lane query timed out after 7s');
       return {
@@ -1735,12 +1783,14 @@ export async function fetchHomeFeedPage(input: {
 
   const items = servedRows.map((row) => rowToCard(row, classifyRow(row)));
   let liveItems: ThinShelfCard[];
+  const __tf = Date.now();
   try {
     liveItems = await freshenCardMedia(items);
   } catch (err: any) {
     console.error('[feed] freshenCardMedia failed', err?.message ?? err);
     liveItems = items;
   }
+  if (process.env.FEED_PROFILE === '1') console.log('[feed-prof] freshen', Date.now()-__tf, 'n='+items.length);
   // Instagram-class: never return a video without a still (black enter-frame).
   liveItems = requireHomeFeedPosters(liveItems);
   // If poster filter wiped the page, refill from image lane + any poster-ready weave.
@@ -1791,6 +1841,7 @@ export async function fetchHomeFeedPage(input: {
 
   // Feed-ahead Stream: ingest this page + the next woven videos *before* the finger
   // gets there (first paint can still be R2; next users / twin shares get HLS).
+  const __te = Date.now();
   try {
     const { enqueueHotStreamFromCards } = await import('../media/stream-hot-queue.js');
     const aheadRaw = wovenUnwatched
@@ -1810,6 +1861,7 @@ export async function fetchHomeFeedPage(input: {
   } catch (err: any) {
     console.warn('[feed] stream-ahead enqueue', err?.message ?? err);
   }
+  if (process.env.FEED_PROFILE === '1') console.log('[feed-prof] enqueue', Date.now()-__te, 'total', Date.now()-__tp);
 
   return {
     surface: 'home_for_you',
